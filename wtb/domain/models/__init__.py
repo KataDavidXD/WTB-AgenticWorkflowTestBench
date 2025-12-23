@@ -8,6 +8,7 @@ from .workflow import (
     Execution,
     ExecutionStatus,
     NodeVariant,
+    InvalidStateTransition,
 )
 
 from .node_boundary import NodeBoundary
@@ -23,6 +24,18 @@ from .evaluation import (
     MetricValue,
     ComparisonResult,
 )
+from .outbox import (
+    OutboxEvent,
+    OutboxEventType,
+    OutboxStatus,
+)
+from .integrity import (
+    IntegrityIssue,
+    IntegrityIssueType,
+    IntegritySeverity,
+    IntegrityReport,
+    RepairAction,
+)
 
 __all__ = [
     # Workflow models
@@ -33,6 +46,7 @@ __all__ = [
     "Execution",
     "ExecutionStatus",
     "NodeVariant",
+    "InvalidStateTransition",
     # Node boundary
     "NodeBoundary",
     # Checkpoint-file link
@@ -46,4 +60,14 @@ __all__ = [
     "EvaluationResult",
     "MetricValue",
     "ComparisonResult",
+    # Outbox Pattern
+    "OutboxEvent",
+    "OutboxEventType",
+    "OutboxStatus",
+    # Integrity Check
+    "IntegrityIssue",
+    "IntegrityIssueType",
+    "IntegritySeverity",
+    "IntegrityReport",
+    "RepairAction",
 ]

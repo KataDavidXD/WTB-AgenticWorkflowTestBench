@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         IEvaluationResultRepository,
         INodeBoundaryRepository,
         ICheckpointFileRepository,
+        IOutboxRepository,
     )
 
 
@@ -51,6 +52,9 @@ class IUnitOfWork(ABC):
     # WTB-Specific Repositories (Anti-Corruption Layer)
     node_boundaries: "INodeBoundaryRepository"
     checkpoint_files: "ICheckpointFileRepository"
+    
+    # Outbox Pattern (for cross-database consistency)
+    outbox: "IOutboxRepository"
     
     @abstractmethod
     def __enter__(self) -> "IUnitOfWork":

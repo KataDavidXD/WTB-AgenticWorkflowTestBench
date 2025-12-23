@@ -11,6 +11,8 @@ from .models import (
     CheckpointFileORM,
 )
 from .unit_of_work import SQLAlchemyUnitOfWork
+from .inmemory_unit_of_work import InMemoryUnitOfWork
+from .factory import UnitOfWorkFactory
 from .config import (
     DatabaseConfig,
     get_database_config,
@@ -38,6 +40,8 @@ __all__ = [
     "CheckpointFileORM",
     # UoW
     "SQLAlchemyUnitOfWork",
+    "InMemoryUnitOfWork",
+    "UnitOfWorkFactory",
     # Config
     "DatabaseConfig",
     "get_database_config",

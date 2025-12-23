@@ -305,3 +305,51 @@ class CheckpointFileORM(Base):
         Index('idx_wtb_checkpoint_files_commit', 'file_commit_id'),
     )
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Outbox Pattern Model
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class OutboxEventORM(Base):
+    """
+    ORM model for wtb_outbox table.
+    
+    Implements the Outbox Pattern for cross-database transaction consistency.
+    Events are written atomically with business data in the same transaction,
+    then processed asynchronously by OutboxProcessor.
+    """
+    
+    __tablename__ = 'wtb_outbox'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # Event identification
+    event_id = Column(String(64), nullable=False, unique=True)  # UUID for idempotency
+    event_type = Column(String(50), nullable=False)
+    aggregate_type = Column(String(50), nullable=False)
+    aggregate_id = Column(String(64), nullable=False)
+    
+    # Event payload (JSON)
+    payload = Column(Text, nullable=False)
+    
+    # Processing status
+    status = Column(String(20), nullable=False, default='pending')
+    retry_count = Column(Integer, nullable=False, default=0)
+    max_retries = Column(Integer, nullable=False, default=5)
+    
+    # Timestamps
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+    
+    # Error tracking
+    last_error = Column(Text, nullable=True)
+    
+    __table_args__ = (
+        Index('idx_wtb_outbox_status_created', 'status', 'created_at'),
+        Index('idx_wtb_outbox_event_id', 'event_id'),
+        Index('idx_wtb_outbox_aggregate', 'aggregate_type', 'aggregate_id'),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'processed', 'failed')",
+            name='ck_outbox_status'
+        ),
+    )

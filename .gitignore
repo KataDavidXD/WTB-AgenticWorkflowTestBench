@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# database files / directories
+data/
+
+.cursor/
+
+.env

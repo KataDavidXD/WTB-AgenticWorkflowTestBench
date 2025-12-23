@@ -6,6 +6,7 @@ Follows Interface Segregation Principle with separate read/write interfaces.
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import TypeVar, Generic, Optional, List
 
 T = TypeVar('T')
@@ -360,3 +361,117 @@ class ICheckpointFileRepository(IRepository["CheckpointFile"]):
         """
         pass
 
+
+class IOutboxRepository(ABC):
+    """
+    Repository for Outbox Pattern events.
+    
+    Supports the Outbox Pattern for cross-database consistency.
+    Events are written in the same transaction as business data,
+    then processed asynchronously by OutboxProcessor.
+    """
+    
+    @abstractmethod
+    def add(self, event: "OutboxEvent") -> "OutboxEvent":
+        """
+        Add a new outbox event.
+        
+        Args:
+            event: Outbox event to add
+            
+        Returns:
+            Added event with ID assigned
+        """
+        pass
+    
+    @abstractmethod
+    def get_by_id(self, event_id: str) -> Optional["OutboxEvent"]:
+        """
+        Get event by event_id (UUID).
+        
+        Args:
+            event_id: Event UUID for idempotency
+            
+        Returns:
+            OutboxEvent if found, None otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_by_pk(self, id: int) -> Optional["OutboxEvent"]:
+        """
+        Get event by database primary key.
+        
+        Args:
+            id: Database ID
+            
+        Returns:
+            OutboxEvent if found, None otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_pending(self, limit: int = 100) -> List["OutboxEvent"]:
+        """
+        Get pending events for processing, ordered by created_at.
+        
+        Args:
+            limit: Maximum events to return
+            
+        Returns:
+            List of pending events
+        """
+        pass
+    
+    @abstractmethod
+    def get_failed_for_retry(self, limit: int = 50) -> List["OutboxEvent"]:
+        """
+        Get failed events that can be retried.
+        
+        Args:
+            limit: Maximum events to return
+            
+        Returns:
+            List of retryable failed events
+        """
+        pass
+    
+    @abstractmethod
+    def update(self, event: "OutboxEvent") -> "OutboxEvent":
+        """
+        Update event status.
+        
+        Args:
+            event: Event with updated status
+            
+        Returns:
+            Updated event
+        """
+        pass
+    
+    @abstractmethod
+    def delete_processed(self, before: "datetime", limit: int = 1000) -> int:
+        """
+        Delete processed events older than a given time.
+        
+        Args:
+            before: Delete events processed before this time
+            limit: Maximum events to delete
+            
+        Returns:
+            Number of deleted events
+        """
+        pass
+    
+    @abstractmethod
+    def list_all(self, limit: int = 100) -> List["OutboxEvent"]:
+        """
+        List all events (for admin/debugging).
+        
+        Args:
+            limit: Maximum events to return
+            
+        Returns:
+            List of all events
+        """
+        pass

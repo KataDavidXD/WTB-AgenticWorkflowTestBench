@@ -19,6 +19,7 @@ from .repositories import (
     IEvaluationResultRepository,
     INodeBoundaryRepository,
     ICheckpointFileRepository,
+    IOutboxRepository,
 )
 from .unit_of_work import IUnitOfWork
 from .node_executor import (
@@ -57,6 +58,7 @@ __all__ = [
     "IEvaluationResultRepository",
     "INodeBoundaryRepository",
     "ICheckpointFileRepository",
+    "IOutboxRepository",
     # Unit of Work
     "IUnitOfWork",
     # Node Executor

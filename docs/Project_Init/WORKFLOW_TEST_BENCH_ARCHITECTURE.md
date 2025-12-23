@@ -2397,30 +2397,46 @@ class PostgreSQLAdapter(IDbAdapter):
 
 ---
 
-### 13.2 Dual Granularity Checkpoints in AgentGit v2
+### 13.2 Checkpoint Granularity Decision: Single Type + Node Boundary Pointers
 
-#### Current Design Analysis
+#### Final Design Decision
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────┐
-│                   DUAL GRANULARITY CHECKPOINT SYSTEM                                │
+│               CHECKPOINT GRANULARITY: SINGLE TYPE + NODE BOUNDARY POINTERS          │
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                    │
-│  Node Checkpoint (Coarse Granularity)                                             │
-│  ══════════════════════════════════════                                           │
-│  • Created at workflow node boundaries                                            │
-│  • Contains: current_node_id, workflow_variables, execution_path                  │
-│  • Used for: Node-level rollback, branch points, WTB integration                  │
-│  • metadata.checkpoint_type = "node"                                              │
-│  • metadata.child_checkpoint_ids = [tool_msg_cp_ids...]                           │
+│  DECISION: All checkpoints are EQUAL (atomic at tool/message level)               │
+│  ═══════════════════════════════════════════════════════════════════              │
 │                                                                                    │
-│  Tool/Message Checkpoint (Fine Granularity)                                       │
-│  ══════════════════════════════════════════                                       │
-│  • Created for each tool call or message within a node                            │
-│  • Contains: Same state + parent_checkpoint_id link                               │
-│  • Used for: Fine-grained rollback, debugging, tool reversal                      │
-│  • metadata.checkpoint_type = "tool_message"                                      │
-│  • metadata.parent_checkpoint_id = node_cp_id                                     │
+│  • No checkpoint_type field needed                                                │
+│  • No parent_checkpoint_id / child_checkpoint_ids hierarchy                       │
+│  • Each checkpoint tagged with metadata.node_id only                              │
+│  • Node boundaries are POINTERS in WTB's wtb_node_boundaries table                │
+│                                                                                    │
+│  WHY NOT DUAL CHECKPOINT TYPES?                                                    │
+│  ────────────────────────────────                                                  │
+│  • State duplication: Node checkpoint = copy of last tool checkpoint (wasteful)   │
+│  • Complex hierarchy management in adapter                                         │
+│  • More checkpoints = more storage overhead                                        │
+│                                                                                    │
+│  HOW GRANULARITY WORKS:                                                            │
+│  ──────────────────────                                                            │
+│                                                                                    │
+│  AgentGit checkpoints (all equal):     WTB wtb_node_boundaries:                   │
+│  ───────────────────────────────────   ─────────────────────────────              │
+│  [CP #1] node_id="data_load"      ─┐   Node: data_load                            │
+│  [CP #2] node_id="data_load"       ├──► entry_checkpoint_id = 1                   │
+│  [CP #3] node_id="data_load"      ─┘    exit_checkpoint_id  = 3                   │
+│  [CP #4] node_id="preprocess"     ─┐   Node: preprocess                           │
+│  [CP #5] node_id="preprocess"     ─┘    entry_checkpoint_id = 4                   │
+│                                         exit_checkpoint_id  = 5                   │
+│                                                                                    │
+│  GRANULARITY = FILTERING, NOT SEPARATE STORAGE:                                   │
+│  ──────────────────────────────────────────────                                    │
+│  • get_node_rollback_targets() → returns exit_checkpoint for each completed node  │
+│  • get_checkpoints_in_node() → filters by metadata.node_id                        │
+│  • Unified rollback() → same method for node-level and tool-level                 │
 │                                                                                    │
 │  HIERARCHY VISUALIZATION:                                                          │
 │  ════════════════════════                                                          │
@@ -2592,6 +2608,65 @@ class IStateAdapter(ABC):
 │       ✅ Single source of truth for all events                                     │
 │       ✅ Easy correlation (execution_id links all events)                          │
 │       ✅ Unified history and replay                                                │
+
+---
+
+### 13.4 WTB Storage Abstraction: Dual Implementation Pattern
+
+#### Decision: Interface + Multiple Implementations
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                      WTB STORAGE ABSTRACTION DECISION                               │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                    │
+│  PRINCIPLE: "Interface → Multiple Implementations"                                │
+│                                                                                    │
+│  Application Layer (ExecutionController, NodeReplacer, etc.)                      │
+│         │                                                                          │
+│         │ depends on abstractions only (Dependency Inversion Principle)           │
+│         ▼                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────────────────┐ │
+│  │                        IUnitOfWork (interface)                                │ │
+│  │  ├── workflows: IWorkflowRepository                                           │ │
+│  │  ├── executions: IExecutionRepository                                         │ │
+│  │  ├── node_boundaries: INodeBoundaryRepository                                 │ │
+│  │  ├── checkpoint_files: ICheckpointFileRepository                              │ │
+│  │  ├── node_variants: INodeVariantRepository                                    │ │
+│  │  └── evaluation_results: IEvaluationResultRepository                          │ │
+│  └──────────────────────────────────────────────────────────────────────────────┘ │
+│                             │                                                      │
+│         ┌───────────────────┼───────────────────┐                                 │
+│         │                   │                   │                                 │
+│         ▼                   ▼                   ▼                                 │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐                      │
+│  │   InMemory     │  │  SQLAlchemy    │  │   Future:      │                      │
+│  │   UnitOfWork   │  │  UnitOfWork    │  │  PostgreSQL    │                      │
+│  │                │  │                │  │  UnitOfWork    │                      │
+│  │  ─────────────│  │  ─────────────│  │  ─────────────│                      │
+│  │  • Dict-based  │  │  • SQLite file │  │  • PostgreSQL  │                      │
+│  │  • No I/O      │  │  • ORM models  │  │  • Connection  │                      │
+│  │  • Fast tests  │  │  • Transactions│  │    pooling     │                      │
+│  └────────────────┘  └────────────────┘  └────────────────┘                      │
+│                                                                                    │
+│  SELECTION:                                                                        │
+│  ──────────                                                                        │
+│  uow = UnitOfWorkFactory.create(mode="inmemory")       # For unit tests           │
+│  uow = UnitOfWorkFactory.create(mode="sqlalchemy",     # For production           │
+│                                 db_url="sqlite:///wtb.db")                        │
+│                                                                                    │
+│  BENEFITS:                                                                         │
+│  ─────────                                                                         │
+│  ✅ Tests run extremely fast (no I/O)                                             │
+│  ✅ Production uses persistent storage with transactions                          │
+│  ✅ Easy to switch via dependency injection                                       │
+│  ✅ Same interface, different implementations (LSP compliant)                     │
+│  ✅ No code changes needed when switching modes                                   │
+│                                                                                    │
+│  See: docs/Adapter_and_WTB-Storage/WTB_PERSISTENCE_DESIGN.md for full details    │
+│                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
 │       ✅ AuditTrail becomes a subscriber/consumer                                  │
 │                                                                                    │
 └────────────────────────────────────────────────────────────────────────────────────┘
@@ -3075,10 +3150,20 @@ class AuditEventSubscriber:
 | Question                                 | Decision                           | Rationale                                                                                                              | Validated? |
 | ---------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------- |
 | **Replace all SQLite?**            | ❌ No, Hybrid approach             | SQLite for embedded/dev (AgentGit), PostgreSQL for production (FileTracker, WTB audit), SQLAlchemy abstraction for WTB | ✅ Tests confirm SQLite works |
-| **Dual granularity checkpoints?**  | Node by default, Tool/Msg optional | WTB operates at workflow node level; fine-grained only for debugging                                                   | ✅ 94 tests verify both |
+| **Dual granularity checkpoints?**  | Single Type + Node Boundary Pointers | All checkpoints are atomic at tool/message level. Node boundaries are POINTERS (entry_cp, exit_cp), NOT separate checkpoints. Granularity = filtering. | ✅ Design validated |
+| **WTB Storage Pattern?**           | Dual Implementation (InMemory + SQLAlchemy) | IUnitOfWork interface with InMemoryUnitOfWork for tests, SQLAlchemyUnitOfWork for production. Factory pattern for switching. | ✅ Designed |
 | **Event Bus for WTB?**             | ✅ Yes                             | Decouples components, enables async audit, metrics, and real-time UI updates                                           | ✅ EventBus verified |
 | **Extend AgentGit Event Bus?**     | ✅ Yes, Unified                    | Single EventBus with WTB-specific events extending DomainEvent base                                                    | ✅ Pub/sub works |
 | **Audit + Event Bus integration?** | ✅ AuditSubscriber pattern         | AuditTrail becomes an event consumer; enables persistence and correlation                                              | ✅ AuditTrail verified |
+
+### Key Design Principles
+
+| Principle | Description |
+|-----------|-------------|
+| **Dual Database Pattern** | AgentGit repositories (raw SQLite) for checkpoint state; SQLAlchemy UoW for WTB domain data. Never mix - adapters bridge the boundary. |
+| **Single Checkpoint Type** | All checkpoints atomic at tool/message level. Node boundaries are POINTERS in wtb_node_boundaries, NOT separate checkpoints. |
+| **Interface Abstraction** | IStateAdapter, IUnitOfWork, IRepository enable swappable implementations (InMemory for tests, SQLAlchemy for production). |
+| **Dependency Injection** | UnitOfWorkFactory.create(mode) enables test/production switching. No hard-coded database dependencies. |
 
 ---
 
@@ -3114,6 +3199,10 @@ class AuditEventSubscriber:
 | **IStateAdapter** | P0 | All session/checkpoint repos | Anti-corruption layer |
 | **AgentGitStateAdapter** | P1 | IStateAdapter | Production adapter |
 | **InMemoryStateAdapter** | P1 | IStateAdapter | For testing |
+| **IUnitOfWork** | P0 | - | WTB storage abstraction |
+| **InMemoryUnitOfWork** | P0 | IUnitOfWork | For unit tests |
+| **SQLAlchemyUnitOfWork** | P1 | IUnitOfWork | For production |
+| **UnitOfWorkFactory** | P0 | Both UoW implementations | DI factory |
 | **IEvaluator** | P2 | Execution results | Scoring interface |
 | **BatchTestRunner** | P2 | ExecutionController | Parallel testing |
 | **WTB Event Types** | P1 | EventBus | ExecutionStarted, NodeExecuted, etc. |
@@ -3122,23 +3211,32 @@ class AuditEventSubscriber:
 ### Database Schema Status
 
 ```
-AgentGit Schema (Verified):
+AgentGit Schema (Verified - UNCHANGED):
 ├── users              ✅ Tested
 ├── external_sessions  ✅ Tested
 ├── internal_sessions  ✅ Tested (includes MDP fields)
 └── checkpoints        ✅ Tested (includes metadata JSON)
 
-FileTracker Schema (Verified):
+FileTracker Schema (Verified - UNCHANGED):
 ├── commits            ✅ Tested
 ├── file_blobs         ✅ Tested
 └── file_mementos      ✅ Tested
 
-WTB Schema (To Implement):
-├── wtb_workflows      ⏳ Pending
-├── wtb_executions     ⏳ Pending
-├── wtb_node_variants  ⏳ Pending
-├── wtb_batch_tests    ⏳ Pending
-└── wtb_evaluation_results ⏳ Pending
+WTB Schema (Dual Implementation):
+├── wtb_workflows          ✅ Designed (InMemory + SQLAlchemy)
+├── wtb_executions         ✅ Designed (InMemory + SQLAlchemy)
+├── wtb_node_boundaries    ✅ Designed (pointers to AgentGit checkpoints)
+├── wtb_checkpoint_files   ✅ Designed (links to FileTracker commits)
+├── wtb_node_variants      ✅ Designed (InMemory + SQLAlchemy)
+└── wtb_evaluation_results ✅ Designed (InMemory + SQLAlchemy)
+
+WTB Storage Abstraction:
+├── IUnitOfWork            ✅ Designed (interface)
+├── InMemoryUnitOfWork     ✅ Designed (for tests)
+├── SQLAlchemyUnitOfWork   ✅ Designed (for production)
+├── IRepository<T>         ✅ Designed (generic interface)
+├── InMemory*Repository    ✅ Designed (6 repos)
+└── SQLAlchemy*Repository  ⏳ Pending implementation
 ```
 
 ### Key Test Files
@@ -3148,4 +3246,436 @@ tests/
 ├── test_agentgit_v2.py     # 94 tests - Core infrastructure
 ├── test_file_processing.py # 40+ tests - FileTracker
 └── TEST_SUMMARY.md         # Quick reference for integration patterns
+```
+
+---
+
+## 16. Parallel Internal Session Design (Batch Testing)
+
+### 16.1 Problem Statement
+
+BatchTestRunner needs to execute multiple variant combinations **in parallel**, each with its own independent execution context including:
+- InternalSession (checkpoint chain)
+- StateAdapter (session tracking)
+- ExecutionController (orchestration)
+
+### 16.2 Current Architecture Concerns
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                    CURRENT DESIGN - SINGLE-THREADED LIMITATION                       │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                    │
+│  AgentGitStateAdapter                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────────┐  │
+│  │  _current_session: Optional[InternalSession_mdp] = None  ← 单例状态!         │  │
+│  │  _current_execution_id: Optional[str] = None             ← 单例状态!         │  │
+│  │  _tool_track_position: int = 0                           ← 单例状态!         │  │
+│  └─────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                    │
+│  问题:                                                                             │
+│  • 一个 Adapter 实例只能跟踪一个 InternalSession                                   │
+│  • 并行执行时，多个执行会覆盖 _current_session                                     │
+│  • 导致状态混乱和数据损坏                                                          │
+│                                                                                    │
+│  SQLite 并发问题:                                                                  │
+│  • SQLite 默认模式下写锁是排他的                                                   │
+│  • parallel_count > 1 时可能导致 "database is locked" 错误                         │
+│                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 16.3 Recommended Solution: ParallelExecutionContext
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                    PARALLEL EXECUTION CONTEXT PATTERN                               │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                    │
+│  BatchTestRunner                                                                   │
+│       │                                                                            │
+│       ├── create_parallel_context(variant_combination) ──────────────────────────┐│
+│       │       │                                                                   ││
+│       │       │  创建独立的执行上下文:                                              ││
+│       │       ├── ExecutionController instance (独立)                             ││
+│       │       ├── AgentGitStateAdapter instance (独立)                            ││
+│       │       ├── UnitOfWork instance (独立 DB session)                           ││
+│       │       └── InternalSession (独立 checkpoint chain)                         ││
+│       │                                                                           ││
+│       └── ThreadPoolExecutor / asyncio.gather() ──────────────────────────────────┘│
+│               │                                                                    │
+│       ┌───────┼───────────────────────────────────────────────────┐               │
+│       │       │                                                   │               │
+│       ▼       ▼                                                   ▼               │
+│  ┌────────────────┐  ┌────────────────┐              ┌────────────────┐           │
+│  │   Context A    │  │   Context B    │     ...      │   Context N    │           │
+│  │   ──────────   │  │   ──────────   │              │   ──────────   │           │
+│  │                │  │                │              │                │           │
+│  │  Adapter A     │  │  Adapter B     │              │  Adapter N     │           │
+│  │  Session A     │  │  Session B     │              │  Session N     │           │
+│  │  Controller A  │  │  Controller B  │              │  Controller N  │           │
+│  │                │  │                │              │                │           │
+│  │  独立 checkpoint │  │  独立 checkpoint │              │  独立 checkpoint │           │
+│  │  chain         │  │  chain         │              │  chain         │           │
+│  └────────────────┘  └────────────────┘              └────────────────┘           │
+│         │                   │                              │                      │
+│         │                   │                              │                      │
+│         └───────────────────┴──────────────────────────────┘                      │
+│                              │                                                     │
+│                              ▼                                                     │
+│                   ┌────────────────────────┐                                      │
+│                   │    AgentGit Database   │                                      │
+│                   │    (WAL Mode 启用)      │                                      │
+│                   │                        │                                      │
+│                   │  internal_sessions:    │                                      │
+│                   │  ├── Session A (id=1)  │                                      │
+│                   │  ├── Session B (id=2)  │                                      │
+│                   │  └── Session N (id=N)  │                                      │
+│                   └────────────────────────┘                                      │
+│                                                                                    │
+└────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 16.4 Implementation Design
+
+#### ParallelExecutionContext
+
+```python
+# wtb/application/services/parallel_context.py
+
+from dataclasses import dataclass
+from typing import Optional
+from contextlib import contextmanager
+
+@dataclass
+class ParallelExecutionContext:
+    """
+    Isolated execution context for parallel batch testing.
+    
+    Each parallel execution gets its own:
+    - StateAdapter (with its own current_session tracking)
+    - ExecutionController
+    - UnitOfWork (with its own DB session)
+    """
+    execution_controller: 'ExecutionController'
+    state_adapter: 'IStateAdapter'
+    unit_of_work: 'IUnitOfWork'
+    variant_combination: 'VariantCombination'
+    
+    def __enter__(self) -> 'ParallelExecutionContext':
+        self.unit_of_work.__enter__()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.unit_of_work.__exit__(exc_type, exc_val, exc_tb)
+
+
+class ParallelContextFactory:
+    """
+    Factory for creating isolated parallel execution contexts.
+    """
+    
+    def __init__(
+        self,
+        config: 'WTBConfig',
+        workflow_repository: 'IWorkflowRepository',
+    ):
+        self._config = config
+        self._workflow_repo = workflow_repository
+    
+    def create_context(
+        self,
+        variant_combination: 'VariantCombination',
+    ) -> ParallelExecutionContext:
+        """
+        Create an isolated execution context.
+        
+        Each context has its own:
+        - UnitOfWork (独立 DB session)
+        - StateAdapter (独立 current_session)
+        - ExecutionController
+        """
+        # Create independent UoW
+        uow = UnitOfWorkFactory.create(
+            mode=self._config.wtb_storage_mode,
+            db_url=self._config.wtb_db_url,
+        )
+        
+        # Create independent StateAdapter
+        # 关键: 每个 parallel context 有自己的 adapter 实例!
+        state_adapter = self._create_state_adapter()
+        
+        # Create independent ExecutionController
+        controller = ExecutionController(
+            execution_repository=uow.executions,
+            workflow_repository=self._workflow_repo,
+            state_adapter=state_adapter,
+        )
+        
+        return ParallelExecutionContext(
+            execution_controller=controller,
+            state_adapter=state_adapter,
+            unit_of_work=uow,
+            variant_combination=variant_combination,
+        )
+    
+    def _create_state_adapter(self) -> 'IStateAdapter':
+        """Create a new state adapter instance."""
+        if self._config.state_adapter_mode == "inmemory":
+            return InMemoryStateAdapter()
+        else:
+            return AgentGitStateAdapter(
+                agentgit_db_path=self._config.agentgit_db_path,
+                wtb_db_url=self._config.wtb_db_url,
+            )
+```
+
+#### BatchTestRunner with Parallel Execution
+
+```python
+# wtb/application/services/batch_test_runner.py
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List
+
+class BatchTestRunner:
+    """
+    Orchestrates parallel execution of batch A/B tests.
+    
+    Key Design:
+    - Each variant combination runs in its own ParallelExecutionContext
+    - Contexts are fully isolated (no shared state)
+    - SQLite uses WAL mode for concurrent writes
+    """
+    
+    def __init__(
+        self,
+        context_factory: ParallelContextFactory,
+        max_workers: Optional[int] = None,
+    ):
+        self._context_factory = context_factory
+        self._max_workers = max_workers
+    
+    def run_batch_test(self, batch_test: BatchTest) -> BatchTest:
+        """Run all variant combinations in parallel."""
+        batch_test.start()
+        
+        try:
+            # Determine parallelism
+            workers = min(
+                batch_test.parallel_count,
+                len(batch_test.variant_combinations),
+                self._max_workers or 4,
+            )
+            
+            # Execute in parallel
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._run_single_variant,
+                        batch_test.workflow_id,
+                        combination,
+                        batch_test.initial_state,
+                    ): combination
+                    for combination in batch_test.variant_combinations
+                }
+                
+                for future in as_completed(futures):
+                    combination = futures[future]
+                    try:
+                        result = future.result()
+                        batch_test.add_result(result)
+                    except Exception as e:
+                        batch_test.add_result(BatchTestResult(
+                            combination_name=combination.name,
+                            execution_id="",
+                            success=False,
+                            error_message=str(e),
+                        ))
+            
+            batch_test.complete()
+            batch_test.build_comparison_matrix()
+            
+        except Exception as e:
+            batch_test.fail(str(e))
+        
+        return batch_test
+    
+    def _run_single_variant(
+        self,
+        workflow_id: str,
+        combination: VariantCombination,
+        initial_state: Dict[str, Any],
+    ) -> BatchTestResult:
+        """
+        Run a single variant combination in isolated context.
+        
+        关键: 每个 variant 在独立的 context 中运行!
+        """
+        # Create isolated context
+        context = self._context_factory.create_context(combination)
+        
+        with context:
+            # Get workflow
+            workflow = context.unit_of_work.workflows.get_by_id(workflow_id)
+            if not workflow:
+                raise ValueError(f"Workflow {workflow_id} not found")
+            
+            # Apply variants
+            modified_workflow = self._apply_variants(workflow, combination)
+            
+            # Create and run execution
+            execution = context.execution_controller.create_execution(
+                workflow=modified_workflow,
+                initial_state=initial_state,
+            )
+            
+            start_time = datetime.now()
+            result_execution = context.execution_controller.run(execution.id)
+            duration = (datetime.now() - start_time).total_seconds() * 1000
+            
+            context.unit_of_work.commit()
+            
+            return BatchTestResult(
+                combination_name=combination.name,
+                execution_id=execution.id,
+                success=result_execution.status == ExecutionStatus.COMPLETED,
+                duration_ms=int(duration),
+                error_message=result_execution.error_message,
+            )
+```
+
+### 16.5 SQLite WAL Mode Configuration
+
+```python
+# wtb/infrastructure/database/config.py
+
+def configure_sqlite_for_concurrent_access(db_path: str) -> Engine:
+    """
+    Configure SQLite with WAL mode for better concurrent access.
+    
+    WAL (Write-Ahead Logging) allows:
+    - Multiple readers simultaneously
+    - One writer while readers are active
+    - Better performance for concurrent workloads
+    """
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={
+            "check_same_thread": False,  # Allow multi-threaded access
+            "timeout": 30,  # Wait up to 30s for lock
+        },
+        pool_pre_ping=True,
+    )
+    
+    # Enable WAL mode
+    with engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.execute(text("PRAGMA synchronous=NORMAL"))
+        conn.execute(text("PRAGMA busy_timeout=30000"))  # 30 seconds
+    
+    return engine
+```
+
+### 16.6 Session Lifecycle Management
+
+```python
+# wtb/infrastructure/adapters/session_manager.py
+
+class SessionLifecycleManager:
+    """
+    Manages cleanup and timeout for parallel sessions.
+    """
+    
+    def __init__(
+        self,
+        session_repo: InternalSessionRepository,
+        timeout_seconds: int = 3600,  # 1 hour default
+    ):
+        self._session_repo = session_repo
+        self._timeout_seconds = timeout_seconds
+    
+    def cleanup_abandoned_sessions(self) -> int:
+        """
+        Clean up sessions that have been abandoned.
+        
+        A session is considered abandoned if:
+        - Status is "running" but last activity > timeout
+        - Has no checkpoints created in timeout period
+        """
+        cutoff = datetime.now() - timedelta(seconds=self._timeout_seconds)
+        
+        abandoned = self._session_repo.get_inactive_since(cutoff)
+        
+        for session in abandoned:
+            session.is_current = False
+            session.metadata["abandoned_at"] = datetime.now().isoformat()
+            session.metadata["abandon_reason"] = "timeout"
+            self._session_repo.update(session)
+        
+        return len(abandoned)
+    
+    def get_active_session_count(self) -> int:
+        """Get count of currently active sessions."""
+        return self._session_repo.count_active()
+```
+
+### 16.7 Design Decision Summary
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Context Isolation** | Each parallel execution gets own StateAdapter, Controller, UoW | Prevents state corruption from shared mutable state |
+| **Thread Safety** | ThreadPoolExecutor with isolated contexts | Python GIL + isolated contexts ensures safety |
+| **SQLite Concurrency** | WAL mode + busy_timeout | Allows concurrent reads, serialized writes with retry |
+| **Session Tracking** | No shared _current_session | Each adapter tracks its own session independently |
+| **Resource Cleanup** | SessionLifecycleManager with timeout | Prevents resource leaks from abandoned sessions |
+
+### 16.8 Test Strategy for Parallel Sessions
+
+```python
+# tests/test_wtb/test_parallel_sessions.py
+
+class TestParallelSessionIsolation:
+    """Tests for parallel session isolation."""
+    
+    def test_parallel_sessions_do_not_share_state(self):
+        """Verify parallel sessions are fully isolated."""
+        factory = ParallelContextFactory(config, workflow_repo)
+        
+        context_a = factory.create_context(variant_a)
+        context_b = factory.create_context(variant_b)
+        
+        # Different adapter instances
+        assert context_a.state_adapter is not context_b.state_adapter
+        
+        # Initialize sessions
+        session_a = context_a.state_adapter.initialize_session("exec_a", state)
+        session_b = context_b.state_adapter.initialize_session("exec_b", state)
+        
+        # Different session IDs
+        assert session_a != session_b
+        
+        # Each adapter tracks its own session
+        assert context_a.state_adapter._current_session.id == session_a
+        assert context_b.state_adapter._current_session.id == session_b
+    
+    def test_parallel_checkpoints_are_independent(self):
+        """Verify checkpoints from parallel sessions don't interfere."""
+        # Run two sessions in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_a = executor.submit(run_workflow_in_context, context_a)
+            future_b = executor.submit(run_workflow_in_context, context_b)
+            
+            result_a = future_a.result()
+            result_b = future_b.result()
+        
+        # Each execution has its own checkpoint chain
+        checkpoints_a = checkpoint_repo.get_by_session(result_a.session_id)
+        checkpoints_b = checkpoint_repo.get_by_session(result_b.session_id)
+        
+        # No overlap in checkpoint IDs
+        ids_a = {cp.id for cp in checkpoints_a}
+        ids_b = {cp.id for cp in checkpoints_b}
+        assert ids_a.isdisjoint(ids_b)
 ```

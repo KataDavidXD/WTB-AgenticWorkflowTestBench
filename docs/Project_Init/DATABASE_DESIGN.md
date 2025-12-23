@@ -6,6 +6,52 @@
 > 
 > **"Use Anti-Corruption Layer - WTB owns its semantic layer, AgentGit remains unchanged."**
 
+> **"WTB uses dual database patterns: AgentGit repositories for checkpoint state; SQLAlchemy UoW for WTB domain data. Never mix - adapters bridge the boundary."**
+
+> **"Single Checkpoint Type + Node Boundary Pointers: All checkpoints are atomic at tool/message level. Node boundaries are POINTERS in WTB's wtb_node_boundaries table, NOT separate checkpoints."**
+
+### WTB Storage Strategy: Dual Implementation Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                     WTB STORAGE ABSTRACTION                                      │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                  │
+│  PRINCIPLE: "Interface → Multiple Implementations"                              │
+│                                                                                  │
+│  Application Layer (ExecutionController, NodeReplacer, etc.)                    │
+│         │                                                                        │
+│         │ depends on abstractions only                                          │
+│         ▼                                                                        │
+│  ┌──────────────────────────────────────────────────────────────────────────┐   │
+│  │                        IUnitOfWork (interface)                            │   │
+│  │  ├── workflows: IWorkflowRepository                                       │   │
+│  │  ├── executions: IExecutionRepository                                     │   │
+│  │  ├── node_boundaries: INodeBoundaryRepository                             │   │
+│  │  └── checkpoint_files: ICheckpointFileRepository                          │   │
+│  └──────────────────────────────────────────────────────────────────────────┘   │
+│                             │                                                    │
+│         ┌───────────────────┼───────────────────┐                               │
+│         │                   │                   │                               │
+│         ▼                   ▼                   ▼                               │
+│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐                    │
+│  │   InMemory     │  │  SQLAlchemy    │  │   Future:      │                    │
+│  │   UnitOfWork   │  │  UnitOfWork    │  │  PostgreSQL    │                    │
+│  │                │  │                │  │  UnitOfWork    │                    │
+│  │  For testing,  │  │  For production│  │                │                    │
+│  │  dev, and fast │  │  with SQLite   │  │  For scaled    │                    │
+│  │  iteration     │  │  persistence   │  │  deployments   │                    │
+│  └────────────────┘  └────────────────┘  └────────────────┘                    │
+│                                                                                  │
+│  BENEFITS:                                                                       │
+│  ├── Tests run fast with in-memory (no I/O)                                     │
+│  ├── Production uses persistent storage                                          │
+│  ├── Easy to switch via dependency injection                                     │
+│  └── Same interface, different implementations                                   │
+│                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
 ### Architecture Decision: Option B
 
 ```
@@ -869,6 +915,251 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
         self._session.rollback()
 ```
 
+### In-Memory Implementation (For Testing)
+
+```python
+# ═══════════════════════════════════════════════════════════════════════════════
+# wtb/infrastructure/database/inmemory_unit_of_work.py
+# In-memory implementation for testing - no database I/O
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from typing import Dict, Optional, List
+from wtb.domain.models import Workflow, Execution, NodeBoundary, CheckpointFile
+from ..interfaces.unit_of_work import IUnitOfWork
+from ..interfaces.repository import (
+    IWorkflowRepository, IExecutionRepository,
+    INodeBoundaryRepository, ICheckpointFileRepository
+)
+
+
+class InMemoryWorkflowRepository(IWorkflowRepository):
+    """In-memory workflow repository for testing."""
+    
+    def __init__(self):
+        self._store: Dict[str, Workflow] = {}
+    
+    def get_by_id(self, id: str) -> Optional[Workflow]:
+        return self._store.get(id)
+    
+    def add(self, entity: Workflow) -> Workflow:
+        self._store[entity.id] = entity
+        return entity
+    
+    def update(self, entity: Workflow) -> Workflow:
+        self._store[entity.id] = entity
+        return entity
+    
+    def delete(self, id: str) -> bool:
+        if id in self._store:
+            del self._store[id]
+            return True
+        return False
+    
+    def list_all(self) -> List[Workflow]:
+        return list(self._store.values())
+
+
+class InMemoryExecutionRepository(IExecutionRepository):
+    """In-memory execution repository for testing."""
+    
+    def __init__(self):
+        self._store: Dict[str, Execution] = {}
+    
+    def get_by_id(self, id: str) -> Optional[Execution]:
+        return self._store.get(id)
+    
+    def add(self, entity: Execution) -> Execution:
+        self._store[entity.id] = entity
+        return entity
+    
+    def update(self, entity: Execution) -> Execution:
+        self._store[entity.id] = entity
+        return entity
+    
+    def delete(self, id: str) -> bool:
+        if id in self._store:
+            del self._store[id]
+            return True
+        return False
+    
+    def get_by_workflow(self, workflow_id: str) -> List[Execution]:
+        return [e for e in self._store.values() if e.workflow_id == workflow_id]
+    
+    def get_by_status(self, status: str) -> List[Execution]:
+        return [e for e in self._store.values() if e.status == status]
+
+
+class InMemoryNodeBoundaryRepository(INodeBoundaryRepository):
+    """In-memory node boundary repository for testing."""
+    
+    def __init__(self):
+        self._store: Dict[int, NodeBoundary] = {}
+        self._next_id: int = 1
+    
+    def get_by_id(self, id: int) -> Optional[NodeBoundary]:
+        return self._store.get(id)
+    
+    def add(self, entity: NodeBoundary) -> NodeBoundary:
+        entity.id = self._next_id
+        self._next_id += 1
+        self._store[entity.id] = entity
+        return entity
+    
+    def update(self, entity: NodeBoundary) -> NodeBoundary:
+        self._store[entity.id] = entity
+        return entity
+    
+    def delete(self, id: int) -> bool:
+        if id in self._store:
+            del self._store[id]
+            return True
+        return False
+    
+    def get_by_session(self, internal_session_id: int) -> List[NodeBoundary]:
+        return [b for b in self._store.values() 
+                if b.internal_session_id == internal_session_id]
+    
+    def get_by_node(self, internal_session_id: int, node_id: str) -> Optional[NodeBoundary]:
+        for b in self._store.values():
+            if b.internal_session_id == internal_session_id and b.node_id == node_id:
+                return b
+        return None
+    
+    def get_completed(self, internal_session_id: int) -> List[NodeBoundary]:
+        return [b for b in self._store.values()
+                if b.internal_session_id == internal_session_id 
+                and b.node_status == 'completed']
+
+
+class InMemoryCheckpointFileRepository(ICheckpointFileRepository):
+    """In-memory checkpoint file repository for testing."""
+    
+    def __init__(self):
+        self._store: Dict[int, CheckpointFile] = {}
+        self._next_id: int = 1
+    
+    def get_by_id(self, id: int) -> Optional[CheckpointFile]:
+        return self._store.get(id)
+    
+    def add(self, entity: CheckpointFile) -> CheckpointFile:
+        entity.id = self._next_id
+        self._next_id += 1
+        self._store[entity.id] = entity
+        return entity
+    
+    def update(self, entity: CheckpointFile) -> CheckpointFile:
+        self._store[entity.id] = entity
+        return entity
+    
+    def delete(self, id: int) -> bool:
+        if id in self._store:
+            del self._store[id]
+            return True
+        return False
+    
+    def get_by_checkpoint(self, checkpoint_id: int) -> Optional[CheckpointFile]:
+        for cf in self._store.values():
+            if cf.checkpoint_id == checkpoint_id:
+                return cf
+        return None
+    
+    def get_by_file_commit(self, file_commit_id: str) -> List[CheckpointFile]:
+        return [cf for cf in self._store.values() 
+                if cf.file_commit_id == file_commit_id]
+
+
+class InMemoryUnitOfWork(IUnitOfWork):
+    """
+    In-memory Unit of Work for testing.
+    
+    Benefits:
+    - No database I/O (fast tests)
+    - Isolated per test (no cleanup needed)
+    - Same interface as SQLAlchemyUnitOfWork
+    
+    Usage:
+        uow = InMemoryUnitOfWork()
+        with uow:
+            uow.workflows.add(workflow)
+            uow.executions.add(execution)
+            uow.commit()  # No-op for in-memory, but keeps interface consistent
+    """
+    
+    def __init__(self):
+        # Initialize repositories
+        self.workflows = InMemoryWorkflowRepository()
+        self.executions = InMemoryExecutionRepository()
+        self.node_boundaries = InMemoryNodeBoundaryRepository()
+        self.checkpoint_files = InMemoryCheckpointFileRepository()
+        
+        # Track pending changes for commit/rollback simulation
+        self._committed = False
+    
+    def __enter__(self) -> 'InMemoryUnitOfWork':
+        self._committed = False
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type and not self._committed:
+            self.rollback()
+    
+    def commit(self):
+        """Mark as committed (no-op for in-memory, data is already in place)."""
+        self._committed = True
+    
+    def rollback(self):
+        """
+        For in-memory, rollback is a no-op since we don't have transactions.
+        In real tests, you typically create a fresh UoW per test.
+        """
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Factory for creating UnitOfWork instances
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class UnitOfWorkFactory:
+    """
+    Factory for creating the appropriate UnitOfWork implementation.
+    
+    Usage:
+        # For testing
+        uow = UnitOfWorkFactory.create_inmemory()
+        
+        # For production
+        uow = UnitOfWorkFactory.create_sqlalchemy("sqlite:///wtb.db")
+    """
+    
+    @staticmethod
+    def create_inmemory() -> InMemoryUnitOfWork:
+        """Create in-memory UoW for testing."""
+        return InMemoryUnitOfWork()
+    
+    @staticmethod
+    def create_sqlalchemy(db_url: str = "sqlite:///wtb.db") -> SQLAlchemyUnitOfWork:
+        """Create SQLAlchemy UoW for production."""
+        return SQLAlchemyUnitOfWork(db_url)
+    
+    @staticmethod
+    def create(mode: str = "inmemory", db_url: str = None) -> IUnitOfWork:
+        """
+        Create UoW based on mode configuration.
+        
+        Args:
+            mode: "inmemory" or "sqlalchemy"
+            db_url: Database URL (required for sqlalchemy mode)
+        """
+        if mode == "inmemory":
+            return UnitOfWorkFactory.create_inmemory()
+        elif mode == "sqlalchemy":
+            if not db_url:
+                raise ValueError("db_url required for sqlalchemy mode")
+            return UnitOfWorkFactory.create_sqlalchemy(db_url)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+```
+
 ---
 
 ## State Adapter Implementation
@@ -1239,13 +1530,23 @@ class AgentGitStateAdapter(IStateAdapter):
 
 ## Summary
 
+### Data Storage Distribution
+
 | Component | Database | Owner | Purpose |
 |-----------|----------|-------|---------|
 | users, external_sessions, internal_sessions, checkpoints | agentgit.db | AgentGit | Core state management |
-| wtb_node_boundaries | wtb.db | WTB | Node completion markers |
+| wtb_node_boundaries | wtb.db | WTB | Node completion markers (pointers to checkpoints) |
 | wtb_checkpoint_files | wtb.db | WTB | FileTracker links |
 | wtb_workflows, wtb_executions | wtb.db | WTB | Workflow management |
 | commits, file_blobs, file_mementos | filetracker.db | FileTracker | File versioning |
+
+### WTB Storage Implementations
+
+| Implementation | Use Case | Persistence | Performance |
+|----------------|----------|-------------|-------------|
+| `InMemoryUnitOfWork` | Unit tests, fast iteration | No (RAM only) | Fastest |
+| `SQLAlchemyUnitOfWork` (SQLite) | Development, single-user production | Yes (file) | Fast |
+| `SQLAlchemyUnitOfWork` (PostgreSQL) | Scaled production | Yes (server) | Scalable |
 
 ### Key Benefits of Option B
 
@@ -1253,5 +1554,15 @@ class AgentGitStateAdapter(IStateAdapter):
 2. **Clean separation** - WTB owns its semantic concepts
 3. **Proper abstraction** - IStateAdapter hides all database complexity
 4. **Repository + UoW** - Proper patterns for testability and transactions
-5. **SQLAlchemy for WTB** - Modern ORM for new tables
-6. **Cross-database references** - Logical FKs via stored IDs
+5. **Dual implementation** - InMemory for tests, SQLAlchemy for production
+6. **SQLAlchemy for WTB** - Modern ORM for new tables
+7. **Cross-database references** - Logical FKs via stored IDs
+
+### Design Principles
+
+| Principle | Description |
+|-----------|-------------|
+| **Dual Database Pattern** | AgentGit repos for checkpoint state; SQLAlchemy UoW for WTB domain data |
+| **Single Checkpoint Type** | All checkpoints atomic at tool/message level; node boundaries are pointers |
+| **Interface Abstraction** | IUnitOfWork, IRepository enable swappable implementations |
+| **Dependency Injection** | UnitOfWorkFactory enables test/production switching |

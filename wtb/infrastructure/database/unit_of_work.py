@@ -19,6 +19,7 @@ from .repositories import (
     NodeBoundaryRepository,
     CheckpointFileRepository,
 )
+from .repositories.outbox_repository import SQLAlchemyOutboxRepository
 
 
 class SQLAlchemyUnitOfWork(IUnitOfWork):
@@ -63,6 +64,9 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
         # Initialize WTB Anti-Corruption Layer repositories
         self.node_boundaries = NodeBoundaryRepository(self._session)
         self.checkpoint_files = CheckpointFileRepository(self._session)
+        
+        # Initialize Outbox Pattern repository
+        self.outbox = SQLAlchemyOutboxRepository(self._session)
         
         return self
     

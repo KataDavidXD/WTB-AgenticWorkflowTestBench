@@ -357,12 +357,14 @@ class TestExecution:
     
     def test_cannot_start_from_running(self):
         """Test that we cannot start from RUNNING state."""
+        from wtb.domain.models import InvalidStateTransition
+        
         execution = Execution(workflow_id="wf1")
         execution.start()
         
         assert not execution.can_run()
         
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidStateTransition):
             execution.start()
     
     def test_can_rollback(self):
