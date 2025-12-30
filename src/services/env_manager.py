@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.exceptions import EnvAlreadyExists, EnvNotFound, ExecutionTimeout
+from src.services.project_info import ProjectInfo
 from src.services.uv_executor import UVCommandExecutor, UVResult
 
 
@@ -90,7 +91,8 @@ class EnvManager:
         self._touch_last_used(node_id)
 
         if packages:
-            await self.executor.add_packages(node_id, packages)
+            mapped_packages = ProjectInfo.get_instance().get_dependency_mapping(packages)
+            await self.executor.add_packages(node_id, mapped_packages)
             self._touch_last_used(node_id)
 
         return project_path, version

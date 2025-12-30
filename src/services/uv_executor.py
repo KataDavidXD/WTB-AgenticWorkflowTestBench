@@ -37,6 +37,7 @@ class UVCommandExecutor:
         env["UV_CACHE_DIR"] = str(self.uv_cache_dir)
 
         self._logger.info("uv_exec cmd=%s", cmd)
+        # Spawn subprocess with isolated env and piped streams
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -71,7 +72,7 @@ class UVCommandExecutor:
         """Initialize a new UV project with a specific Python version."""
         project_path = self._get_project_path(node_id)
         project_path.mkdir(parents=True, exist_ok=True)
-        cmd = ["uv", "init", str(project_path), "--python", python_version]
+        cmd = ["uv", "init", str(project_path), "--python", python_version, "--no-workspace"]
         result = await self._run(cmd)
         if result.exit_code != 0:
             self._raise_for_failure(result, "uv init failed")
@@ -86,7 +87,7 @@ class UVCommandExecutor:
     ) -> UVResult:
         """Install new packages into the project environment."""
         project_path = self._get_project_path(node_id)
-        cmd = ["uv", "add", "--project", str(project_path)]
+        cmd = ["uv", "add", "--project", str(project_path), "--no-workspace"]
         if upgrade:
             cmd.append("--upgrade")
         cmd.extend(packages)
@@ -98,7 +99,7 @@ class UVCommandExecutor:
     async def remove_packages(self, node_id: str, packages: list[str]) -> UVResult:
         """Remove specified packages from the project."""
         project_path = self._get_project_path(node_id)
-        cmd = ["uv", "remove", "--project", str(project_path), *packages]
+        cmd = ["uv", "remove", "--project", str(project_path), "--no-sync", *packages]
         result = await self._run(cmd)
         if result.exit_code != 0:
             self._raise_for_failure(result, "uv remove failed")

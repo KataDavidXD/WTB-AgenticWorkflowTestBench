@@ -4,6 +4,7 @@ import tomllib
 from pathlib import Path
 
 from src.exceptions import EnvNotFound
+from src.services.project_info import ProjectInfo
 from src.services.uv_executor import UVCommandExecutor, UVResult
 
 
@@ -55,7 +56,8 @@ class DependencyManager:
 
     async def add(self, node_id: str, packages: list[str]) -> UVResult:
         """Add new packages to the environment."""
-        return await self.executor.add_packages(node_id, packages)
+        mapped_packages = ProjectInfo.get_instance().get_dependency_mapping(packages)
+        return await self.executor.add_packages(node_id, mapped_packages)
 
     async def update(self, node_id: str, packages: list[str]) -> UVResult:
         """Upgrade existing packages."""

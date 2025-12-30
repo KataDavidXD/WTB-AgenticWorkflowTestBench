@@ -200,6 +200,7 @@ stateDiagram-v2
 | **EnvManager** | 环境生命周期管理（创建/删除/查询/清理） |
 | **DependencyManager** | 依赖 CRUD 操作（uv add/remove/sync） |
 | **UVCommandExecutor** | UV CLI 命令封装与执行（跨平台路径处理） |
+| **ProjectInfo** | 主项目依赖版本映射（确保子环境兼容性） |
 
 ### 2.4 UV 命令映射（使用 uv add 而非 uv pip install）
 
@@ -245,6 +246,17 @@ class LockManager:
         """环境删除后清理锁"""
         self._locks.pop(node_id, None)
 ```
+
+### 2.6 依赖版本继承机制
+
+> [!TIP]
+> **主项目版本一致性保证**
+
+为了确保节点环境与主项目（Host）的依赖版本兼容，系统引入了依赖映射机制：
+
+1. **自动探测**: 系统启动时读取主项目的 `pyproject.toml`。
+2. **版本注入**: 当用户请求安装依赖（如 `fastapi`）未指定版本时，系统会自动注入主项目的版本约束（如 `>=0.127.0`）。
+3. **一致性**: 保证所有节点环境的基础依赖版本不低于主项目要求，避免版本冲突。
 
 ---
 
@@ -450,6 +462,7 @@ design_document/
 │   │   ├── lock_manager.py    # 并发锁管理器
 │   │   ├── env_manager.py     # 环境生命周期管理
 │   │   ├── dep_manager.py     # 依赖 CRUD 管理
+│   │   ├── project_info.py    # 主项目依赖映射服务
 │   │   └── uv_executor.py     # UV CLI 命令执行器
 │   └── exceptions.py          # 自定义异常
 ├── envs/                      # 虚拟环境存储目录
