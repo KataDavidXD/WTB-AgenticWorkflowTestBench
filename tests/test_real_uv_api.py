@@ -108,7 +108,7 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
         assert "pyproject_toml" in created
 
         # 2. Get Status
-        resp = await client.get(f"/envs/{node_id}?workflow_id={workflow_id}")
+        resp = await client.get(f"/envs/{workflow_id}/{node_id}")
         assert resp.status_code == 200, resp.text
         status = resp.json()
         assert status["workflow_id"] == workflow_id
@@ -119,14 +119,14 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
         assert status["has_venv"] is True
 
         # 3. List Dependencies
-        resp = await client.get(f"/envs/{node_id}/deps?workflow_id={workflow_id}")
+        resp = await client.get(f"/envs/{workflow_id}/{node_id}/deps")
         assert resp.status_code == 200, resp.text
         deps = resp.json()
         assert deps["node_id"] == node_id
         assert any("toml" in d for d in deps["dependencies"])
 
         # 4. Export
-        resp = await client.get(f"/envs/{node_id}/export?workflow_id={workflow_id}")
+        resp = await client.get(f"/envs/{workflow_id}/{node_id}/export")
         assert resp.status_code == 200, resp.text
         exported = resp.json()
         assert exported["node_id"] == node_id
@@ -134,9 +134,8 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
 
         # 5. Run Code
         resp = await client.post(
-            f"/envs/{node_id}/run",
+            f"/envs/{workflow_id}/{node_id}/run",
             json={
-                "workflow_id": workflow_id,
                 "code": "import toml; print('toml version:', toml.__version__)",
             },
         )
@@ -151,9 +150,8 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
         req_file.write_text("pyyaml\n", encoding="utf-8")
         
         resp = await client.post(
-            f"/envs/{node_id}/deps",
+            f"/envs/{workflow_id}/{node_id}/deps",
             json={
-                "workflow_id": workflow_id,
                 "requirements_file": str(req_file),
             },
         )
@@ -161,14 +159,14 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
         assert resp.json()["status"] == "added"
 
         # Verify added
-        resp = await client.get(f"/envs/{node_id}/deps?workflow_id={workflow_id}")
+        resp = await client.get(f"/envs/{workflow_id}/{node_id}/deps")
         deps = resp.json()
         assert any("pyyaml" in d for d in deps["dependencies"])
 
         # 7. Update Deps
         resp = await client.put(
-            f"/envs/{node_id}/deps",
-            json={"workflow_id": workflow_id, "packages": ["pyyaml"]},
+            f"/envs/{workflow_id}/{node_id}/deps",
+            json={"packages": ["pyyaml"]},
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "updated"
@@ -176,14 +174,14 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
         # 8. Delete Deps
         resp = await client.request(
             "DELETE",
-            f"/envs/{node_id}/deps",
-            json={"workflow_id": workflow_id, "packages": ["pyyaml"]},
+            f"/envs/{workflow_id}/{node_id}/deps",
+            json={"packages": ["pyyaml"]},
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "removed"
 
         # 9. Sync
-        resp = await client.post(f"/envs/{node_id}/sync?workflow_id={workflow_id}")
+        resp = await client.post(f"/envs/{workflow_id}/{node_id}/sync")
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "synced"
 
@@ -203,7 +201,7 @@ async def test_full_api_flow_with_real_uv(server_url: str, tmp_path: Path) -> No
         assert env_id in cleanup["deleted"]
 
         # 11. Final status check (should be NOT_EXISTS)
-        resp = await client.get(f"/envs/{node_id}?workflow_id={workflow_id}")
+        resp = await client.get(f"/envs/{workflow_id}/{node_id}")
         assert resp.status_code == 200
         assert resp.json()["status"] == "NOT_EXISTS"
 

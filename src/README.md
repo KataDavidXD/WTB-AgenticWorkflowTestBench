@@ -28,9 +28,10 @@ src/
   - **依赖注入**: 使用 `Depends` 注入 `EnvManager` 等服务。
   - **路由组**:
     - `POST /envs`: 环境创建。
-    - `GET /envs/{node_id}`: 状态查询。
-    - `POST /envs/{node_id}/run`: **代码执行核心**。
-    - `POST /envs/{node_id}/deps`: 动态扩展依赖。
+    - `GET /envs/{workflow_id}/{node_id}`: 状态查询。
+    - `POST /envs/{workflow_id}/{node_id}/run`: **代码执行核心**。
+    - `POST /envs/{workflow_id}/{node_id}/deps`: 动态扩展依赖。
+    - **注意**: 采用 `/envs/{workflow_id}/{node_id}` 的层次结构，使 API 符合 RESTful 规范，并显式区分不同工作流下的节点环境。
   - **异常捕获**: 全局集成 `ServiceError` 捕获器，将业务异常自动转换为标准的 HTTP 响应。
 
 ### 2. `config.py` (配置层)

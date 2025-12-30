@@ -8,21 +8,21 @@
 **职责**: 管理虚拟环境的完整生命周期。
 - **核心类**: `EnvManager`
 - **主要功能**:
-  - `create_env(node_id, packages)`: 初始化新环境。
-    - **特性**: 在创建环境安装初始依赖时，会自动通过 `ProjectInfo` 获取主项目依赖版本进行约束，确保环境兼容性。
-  - `get_status(node_id)`: 检查环境状态（是否存在、是否包含 `pyproject.toml` 和 `uv.lock`）。
+  - `create_env(workflow_id, node_id, packages)`: 初始化新环境。
+    - **特性**: 环境标识符由 `workflow_id` 和 `node_id` 组合而成，确保多租户/多工作流下的环境隔离。创建时会自动通过 `ProjectInfo` 获取主项目依赖版本进行约束。
+  - `get_status(env_id)`: 检查环境状态（是否存在、是否包含 `pyproject.toml` 和 `uv.lock`）。
   - `cleanup()`: 自动清理长期（默认 72 小时）未使用的闲置环境，释放磁盘空间。
-  - `run(node_id, code)`: 在指定环境中执行 Python 代码，支持超时控制。
-  - `touch(node_id)`: 更新环境的“最后使用时间”元数据。
+  - `run(env_id, code)`: 在指定环境中执行 Python 代码，支持超时控制。
+  - `touch(env_id)`: 更新环境的“最后使用时间”元数据。
 
 ### 2. `dep_manager.py` (依赖管理器)
 **职责**: 处理依赖包的增删改查操作。
 - **核心类**: `DependencyManager`
 - **主要功能**:
-  - `add(node_id, packages)`: 添加依赖。
+  - `add(env_id, packages)`: 添加依赖。
     - **特性**: 调用 `ProjectInfo` 自动应用主项目版本映射。
-  - `remove(node_id, packages)`: 移除依赖。
-  - `list_dependencies(node_id)`: 解析 `pyproject.toml` 和 `uv.lock`，返回当前声明的依赖及实际锁定的版本。
+  - `remove(env_id, packages)`: 移除依赖。
+  - `list_dependencies(env_id)`: 解析 `pyproject.toml` 和 `uv.lock`，返回当前声明的依赖及实际锁定的版本。
 
 ### 3. `uv_executor.py` (UV 执行器)
 **职责**: 封装底层的 `uv` CLI 命令调用，屏蔽操作系统差异。

@@ -49,23 +49,23 @@ async def test_create_env_and_list_export_run_sync(tmp_path: Path) -> None:
         metadata = json.loads(meta_path.read_text(encoding="utf-8"))
         assert metadata["node_id"] == "wf1_node_1"
 
-        resp = await client.get("/envs/node_1/deps?workflow_id=wf1")
+        resp = await client.get("/envs/wf1/node_1/deps")
         assert resp.status_code == 200
         deps = resp.json()
         assert "requests" in deps["dependencies"]
         assert deps["locked_versions"]["requests"] == "0.0.0"
 
-        resp = await client.get("/envs/node_1/export?workflow_id=wf1")
+        resp = await client.get("/envs/wf1/node_1/export")
         assert resp.status_code == 200
         exported = resp.json()
         assert "[project]" in exported["pyproject_toml"]
         assert "uv_lock" in exported
 
-        resp = await client.post("/envs/node_1/sync?workflow_id=wf1", json={})
+        resp = await client.post("/envs/wf1/node_1/sync", json={})
         assert resp.status_code == 200
         assert (settings.envs_base_path / "wf1_node_1" / ".venv").exists()
 
-        resp = await client.post("/envs/node_1/run", json={"workflow_id": "wf1", "code": "print('x')", "timeout": 5})
+        resp = await client.post("/envs/wf1/node_1/run", json={"code": "print('x')", "timeout": 5})
         assert resp.status_code == 200
         out = resp.json()
         assert out["stdout"] == "ok\n"
@@ -80,16 +80,16 @@ async def test_update_and_delete_deps(tmp_path: Path) -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         await client.post("/envs", json={"workflow_id": "wf2", "node_id": "node_2", "packages": ["requests"]})
 
-        resp = await client.put("/envs/node_2/deps", json={"workflow_id": "wf2", "packages": ["pandas>=2.0.0"]})
+        resp = await client.put("/envs/wf2/node_2/deps", json={"packages": ["pandas>=2.0.0"]})
         assert resp.status_code == 200
 
-        resp = await client.get("/envs/node_2/deps?workflow_id=wf2")
+        resp = await client.get("/envs/wf2/node_2/deps")
         assert "pandas>=2.0.0" in resp.json()["dependencies"]
 
-        resp = await client.request("DELETE", "/envs/node_2/deps", json={"workflow_id": "wf2", "packages": ["pandas"]})
+        resp = await client.request("DELETE", "/envs/wf2/node_2/deps", json={"packages": ["pandas"]})
         assert resp.status_code == 200
 
-        resp = await client.get("/envs/node_2/deps?workflow_id=wf2")
+        resp = await client.get("/envs/wf2/node_2/deps")
         assert all("pandas" not in d for d in resp.json()["dependencies"])
 
 
@@ -100,7 +100,7 @@ async def test_env_not_found_error(tmp_path: Path) -> None:
     app = create_app(settings, executor=executor)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/envs/missing/deps?workflow_id=wf3")
+        resp = await client.get("/envs/wf3/missing/deps")
         assert resp.status_code == 404
         assert resp.json()["code"] == "ENV_NOT_FOUND"
 

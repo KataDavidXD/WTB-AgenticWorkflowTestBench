@@ -47,7 +47,6 @@ class EnvStatusResponse(BaseModel):
 
 
 class PackagesRequest(BaseModel):
-    workflow_id: str = Field(min_length=1)
     packages: list[str] = Field(default_factory=list)
     requirements_file: str | None = None
 
@@ -81,7 +80,6 @@ class SyncResponse(BaseModel):
 
 
 class RunRequest(BaseModel):
-    workflow_id: str = Field(min_length=1)
     code: str = Field(min_length=1)
     timeout: int | None = Field(default=None, ge=1)
 
