@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.exceptions import EnvAlreadyExists, EnvNotFound, ExecutionTimeout
+from src.exceptions import EnvNotFound, ExecutionTimeout
 from src.services.project_info import ProjectInfo
 from src.services.uv_executor import UVCommandExecutor, UVResult
 
@@ -83,11 +83,18 @@ class EnvManager:
     ) -> tuple[Path, str]:
         """Create a new UV project and optionally install initial packages."""
         project_path = self._project_path(node_id)
-        if project_path.exists():
-            raise EnvAlreadyExists()
-
         version = python_version or self.default_python
-        await self.executor.init_project(node_id, version)
+
+        try:
+            if not project_path.exists():
+                await self.executor.init_project(node_id, version)
+        except Exception:
+            # If environment creation failed, check if it was created concurrently
+            if project_path.exists():
+                pass
+            else:
+                raise
+
         self._touch_last_used(node_id)
 
         if packages:
