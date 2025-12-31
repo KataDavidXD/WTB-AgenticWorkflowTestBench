@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 from contextlib import contextmanager
 
-from fastapi import FastAPI, Query, Path as APIPath
+from fastapi import FastAPI, Query, Path as APIPath, File, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pathlib import Path
@@ -127,21 +127,25 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
             metadata=status.metadata,
         )
 
-    def _resolve_packages(packages: list[str], requirements_file: str | None) -> list[str]:
+    async def _resolve_packages(packages: list[str], requirements_file: UploadFile | None) -> list[str]:
         final_packages = list(packages)
         if requirements_file:
-            path = Path(requirements_file)
-            if not path.exists():
-                raise InvalidPackages(f"Requirements file not found: {requirements_file}")
-            content = path.read_text(encoding="utf-8")
-            for line in content.splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    final_packages.append(line)
+            try:
+                content = await requirements_file.read()
+                content_str = content.decode("utf-8")
+                for line in content_str.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        final_packages.append(line)
+            except Exception as e:
+                raise InvalidPackages(f"Failed to read requirements file: {e}") from e
         return final_packages
 
     @app.post("/envs", response_model=CreateEnvResponse)
-    async def create_env(req: CreateEnvRequest) -> CreateEnvResponse:
+    async def create_env(
+        req: CreateEnvRequest,
+        requirements_file: UploadFile | None = File(None, description="Requirements file (requirements.txt)")
+    ) -> CreateEnvResponse:
         """Create a new environment and optionally install initial dependencies."""
         env_id = f"{req.workflow_id}_{req.node_id}"
         lock = lock_manager.get_lock(env_id)
@@ -158,7 +162,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                         req.python_version,
                     )
 
-                    resolved_packages = _resolve_packages(req.packages, req.requirements_file)
+                    resolved_packages = await _resolve_packages(req.packages, requirements_file)
 
                     # Perform UV initialization and package installation
                     env_path, version = await env_manager.create_env(
@@ -173,7 +177,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             metadata={
                                 "python_version": req.python_version or version,
                                 "packages": resolved_packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as e:
@@ -195,7 +199,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             metadata={
                                 "python_version": req.python_version,
                                 "packages": req.packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as audit_exc:
@@ -236,7 +240,8 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
     async def add_deps(
         workflow_id: str = APIPath(min_length=1),
         node_id: str = APIPath(min_length=1),
-        req: PackagesRequest = ...
+        req: PackagesRequest = ...,
+        requirements_file: UploadFile | None = File(None, description="Requirements file (requirements.txt)")
     ) -> dict[str, str]:
         """Add new dependencies to the environment using 'uv add'."""
         env_id = f"{workflow_id}_{node_id}"
@@ -250,7 +255,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                     if not (resolved_settings.envs_base_path / env_id).exists():
                         raise EnvNotFound()
 
-                    resolved_packages = _resolve_packages(req.packages, req.requirements_file)
+                    resolved_packages = await _resolve_packages(req.packages, requirements_file)
                     if not resolved_packages:
                         raise InvalidPackages("No packages specified")
                     logger.info(
@@ -272,7 +277,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             exit_code=uv_result.exit_code,
                             metadata={
                                 "packages": resolved_packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as e:
@@ -285,7 +290,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             error=str(e),
                             metadata={
                                 "packages": req.packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as audit_exc:
@@ -297,7 +302,8 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
     async def update_deps(
         workflow_id: str = APIPath(min_length=1),
         node_id: str = APIPath(min_length=1),
-        req: PackagesRequest = ...
+        req: PackagesRequest = ...,
+        requirements_file: UploadFile | None = File(None, description="Requirements file (requirements.txt)")
     ) -> dict[str, str]:
         """Upgrade existing dependencies using 'uv add --upgrade'."""
         env_id = f"{workflow_id}_{node_id}"
@@ -311,7 +317,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                     if not (resolved_settings.envs_base_path / env_id).exists():
                         raise EnvNotFound()
 
-                    resolved_packages = _resolve_packages(req.packages, req.requirements_file)
+                    resolved_packages = await _resolve_packages(req.packages, requirements_file)
                     if not resolved_packages:
                         raise InvalidPackages("No packages specified")
                     logger.info(
@@ -332,7 +338,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             exit_code=uv_result.exit_code,
                             metadata={
                                 "packages": resolved_packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as e:
@@ -345,7 +351,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             error=str(e),
                             metadata={
                                 "packages": req.packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as audit_exc:
@@ -357,7 +363,8 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
     async def delete_deps(
         workflow_id: str = APIPath(min_length=1),
         node_id: str = APIPath(min_length=1),
-        req: PackagesRequest = ...
+        req: PackagesRequest = ...,
+        requirements_file: UploadFile | None = File(None, description="Requirements file (requirements.txt)")
     ) -> dict[str, str]:
         """Remove dependencies from the environment using 'uv remove'."""
         env_id = f"{workflow_id}_{node_id}"
@@ -371,7 +378,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                     if not (resolved_settings.envs_base_path / env_id).exists():
                         raise EnvNotFound()
 
-                    resolved_packages = _resolve_packages(req.packages, req.requirements_file)
+                    resolved_packages = await _resolve_packages(req.packages, requirements_file)
                     if not resolved_packages:
                         raise InvalidPackages("No packages specified")
                     logger.info(
@@ -392,7 +399,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             exit_code=uv_result.exit_code,
                             metadata={
                                 "packages": resolved_packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as e:
@@ -405,7 +412,7 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                             error=str(e),
                             metadata={
                                 "packages": req.packages,
-                                "requirements_file": req.requirements_file,
+                                "requirements_file": requirements_file.filename if requirements_file else None,
                             },
                         )
                     except Exception as audit_exc:

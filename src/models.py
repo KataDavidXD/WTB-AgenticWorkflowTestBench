@@ -16,7 +16,6 @@ class CreateEnvRequest(BaseModel):
     node_id: str = Field(min_length=1)
     python_version: str | None = None
     packages: list[str] = Field(default_factory=list)
-    requirements_file: str | None = None
 
     @field_validator("packages")
     @classmethod
@@ -48,7 +47,6 @@ class EnvStatusResponse(BaseModel):
 
 class PackagesRequest(BaseModel):
     packages: list[str] = Field(default_factory=list)
-    requirements_file: str | None = None
 
     @field_validator("packages")
     @classmethod
