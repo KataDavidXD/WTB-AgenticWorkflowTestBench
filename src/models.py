@@ -106,3 +106,25 @@ class CleanupResponse(BaseModel):
     deleted: list[str]
     checked_at: datetime
 
+class EnvOperationResponse(BaseModel):
+    """单条环境操作记录响应"""
+    id: int
+    workflow_id: str
+    node_id: str
+    operation: str
+    status: str
+    stdout: str | None = None
+    stderr: str | None = None
+    exit_code: int | None = None
+    duration_ms: float | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class EnvOperationListResponse(BaseModel):
+    """环境操作列表响应"""
+    total: int
+    items: list[EnvOperationResponse]

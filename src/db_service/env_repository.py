@@ -1,6 +1,4 @@
-"""
-Repository for environment operation records.
-"""
+"""Repository for environment operation records."""
 
 from typing import Any
 from sqlalchemy.orm import Session
@@ -8,7 +6,7 @@ from src.db_service.models import EnvOperation
 
 
 class EnvOperationRepository:
-    def __init__(self, db: Session) -> None:  # 修复：__init__ 而不是 init
+    def __init__(self, db: Session) -> None:
         self.db = db
 
     def create(
@@ -41,9 +39,6 @@ class EnvOperationRepository:
         self.db.commit()
         self.db.refresh(record)
         return record
-
-    def get_by_id(self, record_id: int) -> EnvOperation | None:
-        return self.db.query(EnvOperation).filter(EnvOperation.id == record_id).first()
 
     def get_by_workflow_id(self, workflow_id: str) -> list[EnvOperation]:
         return (
@@ -87,6 +82,18 @@ class EnvOperationRepository:
         count = (
             self.db.query(EnvOperation)
             .filter(EnvOperation.workflow_id == workflow_id)
+            .delete()
+        )
+        self.db.commit()
+        return count
+
+    def delete_by_workflow_and_node(self, workflow_id: str, node_id: str) -> int:
+        count = (
+            self.db.query(EnvOperation)
+            .filter(
+                EnvOperation.workflow_id == workflow_id,
+                EnvOperation.node_id == node_id,
+            )
             .delete()
         )
         self.db.commit()

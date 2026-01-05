@@ -5,32 +5,22 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 from contextlib import contextmanager
 
-from fastapi import FastAPI, Query, Path as APIPath, File, UploadFile, Form, Depends
+from fastapi import FastAPI,Depends, Query, Path as APIPath, File, UploadFile, Form
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pathlib import Path
 
 from src.config import Settings, get_settings
 from src.exceptions import DBAuditError, EnvLocked, EnvNotFound, InvalidPackages, ServiceError
-from src.models import (
-    CleanupRequest,
-    CleanupResponse,
-    CreateEnvRequest,
-    CreateEnvResponse,
-    DepsResponse,
-    EnvStatusResponse,
-    ErrorResponse,
-    ExportResponse,
-    PackagesRequest,
-    RunRequest,
-    RunResponse,
-    SyncResponse,
-)
+from src.models import *
 from src.services.dep_manager import DependencyManager
 from src.services.env_manager import EnvManager
 from src.services.lock_manager import LockManager
 from src.services.uv_executor import UVCommandExecutor
 
+from src.db_service.models import EnvOperation
+from src.db_service.env_audit import EnvAudit
+from src.db_service.connection import get_db
 
 def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor | None = None) -> FastAPI:
     """Create a FastAPI application instance."""
@@ -674,6 +664,61 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
                     raise DBAuditError(f"Failed to audit cleanup failure: {audit_exc}") from audit_exc
                 raise
 
+    @app.get("/envs-history/{workflow_id}", response_model=EnvOperationListResponse, tags=["Env Audit"])
+    async def get_operations(
+            workflow_id: str = APIPath(min_length=1),
+            node_id: str | None = None,
+            status: str | None = Query(None, description="Status: success/failed"),
+            limit: int = Query(100, ge=1, le=1000),
+            offset: int = Query(0, ge=0),
+            db: Session = Depends(get_db),
+    ) -> EnvOperationListResponse:
+        """查询指定工作流的操作历史"""
+        logger.info(
+            "get_operations workflow_id=%s node_id=%s status=%s limit=%s offset=%s",
+            workflow_id, node_id, status, limit, offset
+        )
+
+        audit = EnvAudit(db=db)
+        try:
+            return audit.query(
+                workflow_id=workflow_id,
+                node_id=node_id,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+        except Exception as e:
+            logger.exception("Failed to query env operations: %s", e)
+            raise DBAuditError(f"Failed querying audit: {e}") from e
+
+    @app.delete("/envs-history/{workflow_id}", tags=["Env Audit"])
+    async def delete_operations(
+            workflow_id: str = APIPath(min_length=1),
+            node_id: str | None = None,
+            db: Session = Depends(get_db),
+    ) -> dict:
+        """删除指定工作流的操作记录"""
+        logger.info("delete_operations workflow_id=%s node_id=%s", workflow_id, node_id)
+
+        audit = EnvAudit(db=db)
+        try:
+            result = audit.delete(workflow_id=workflow_id, node_id=node_id)
+            if node_id:
+                return {
+                    "workflow_id": workflow_id,
+                    "deleted_count": result["deleted_count"],
+                    "node_id": node_id,
+                }
+            else:
+                return {
+                    "workflow_id": workflow_id,
+                    "deleted_count": result["deleted_count"],
+                    "deleted_node_ids": result["deleted_node_ids"],
+                }
+        except Exception as e:
+            logger.exception("Failed to delete env operations: %s", e)
+            raise DBAuditError(f"Failed deleting audit records: {e}") from e
     return app
 
 
