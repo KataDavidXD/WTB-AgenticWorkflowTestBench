@@ -5,7 +5,8 @@ services:
     # 使用非 root 用户运行
     user: "appuser"
     ports:
-      - "8435:8435"
+      - "8435:8435"    # REST API
+      - "50051:50051"  # gRPC
     volumes:
       # 挂载源码实现热重载
       - ./src:/app/src

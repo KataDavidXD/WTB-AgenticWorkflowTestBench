@@ -30,7 +30,7 @@ RUN uv sync --frozen --no-install-project --no-cache --link-mode copy
 COPY --chown=appuser:appuser src ./src
 
 # 暴露端口
-EXPOSE 8435
+EXPOSE 8435 50051
 
 # 生产环境启动命令
 CMD ["uv", "run", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8435"]

@@ -73,6 +73,16 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
         finally:
             db.close()
 
+    # ========== 将服务实例存储到 app.state，供 gRPC 共享 ==========
+    app.state.settings = resolved_settings
+    app.state.executor = resolved_executor
+    app.state.lock_manager = lock_manager
+    app.state.env_manager = env_manager
+    app.state.dep_manager = dep_manager
+    app.state.logger = logger
+    app.state.audit_factory = _maybe_env_audit
+
+    # ========== 异常处理 ==========
     @app.exception_handler(ServiceError)
     async def _service_error_handler(_, exc: ServiceError) -> JSONResponse:
         """Handle custom service errors."""
@@ -720,6 +730,24 @@ def create_app(settings: Settings | None = None, *, executor: UVCommandExecutor 
         except Exception as e:
             logger.exception("Failed to delete env operations: %s", e)
             raise DBAuditError(f"Failed deleting audit records: {e}") from e
+
+    # ========== gRPC 生命周期 ==========
+    @app.on_event("startup")
+    async def start_grpc():
+        """启动 gRPC 服务器"""
+        from src.grpc_server import start_grpc_server
+
+        grpc_port = 50051
+        app.state.grpc_server = await start_grpc_server(app=app, port=grpc_port)
+        logger.info("gRPC server started on port %s", grpc_port)
+
+    @app.on_event("shutdown")
+    async def stop_grpc():
+        """停止 gRPC 服务器"""
+        if hasattr(app.state, "grpc_server") and app.state.grpc_server:
+            await app.state.grpc_server.stop(grace=3)
+            logger.info("gRPC server stopped")
+
     return app
 
 
