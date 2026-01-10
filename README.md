@@ -1,606 +1,298 @@
-# LangGraph 节点虚拟环境管理系统
+# Environment Fabric
 
-> 基于 UV 的节点级 Python 虚拟环境隔离与依赖管理服务
-
----
-
-# 第一部分：产品需求文档 (PRD)
-
-## 1. 产品概述
-
-### 1.1 背景与问题
-
-LangGraph 工作流中的每个节点可能需要执行不同的 Python 代码，这些代码依赖的第三方库版本可能存在冲突：
-
-| 场景 | 问题示例 |
-|------|----------|
-| Node A | 需要 `numpy==1.24.0` |
-| Node B | 需要 `numpy==2.0.0` |
-| 冲突 | 共享环境下无法同时满足 |
-
-### 1.2 产品目标
-
-构建一个**节点级虚拟环境管理服务**，为每个 LangGraph 节点提供：
-
-1. **独立的 Python 虚拟环境**
-2. **依赖包的完整 CRUD 操作**
-3. **通过 `pyproject.toml` + `uv.lock` 实现环境复现**
-4. **环境生命周期管理**
-
-### 1.3 范围声明
-
-> [!CAUTION]
-> **本系统仅解决依赖冲突问题，不提供安全沙箱功能**
-> 
-> - ✅ 解决：不同节点间的依赖版本冲突
-> - ✅ 解决：环境可复现性（通过 lock 文件）
-> - ❌ 不解决：恶意代码执行、资源限制、系统调用隔离
-> 
-> 如需安全沙箱，请使用 Docker、gVisor 或 Firecracker 等容器技术。
-
-### 1.4 功能范围
-
-| 功能 | 优先级 | 描述 |
-|------|--------|------|
-| 创建环境 | P0 | 为节点创建独立 UV 项目 |
-| 安装依赖 | P0 | 使用 `uv add` 添加依赖 |
-| 添加依赖 | P0 | 动态添加单个/多个包 |
-| 删除依赖 | P0 | 使用 `uv remove` 移除包 |
-| 更新依赖 | P0 | 升级/降级包版本 |
-| 查询依赖 | P0 | 从 `pyproject.toml` 读取依赖列表 |
-| 删除环境 | P0 | 清理节点环境 |
-| **导出环境** | P0 | 导出 `pyproject.toml` + `uv.lock` |
-| **复现环境** | P0 | 从 lock 文件重建环境 |
-| 环境状态 | P1 | 查询环境健康状态 |
-| 执行代码 | P1 | 在环境中运行 Python 代码 |
-| 自动清理 | P1 | 清理长期未使用的环境 |
+> **Ray 的环境供应插件** — 基于 UV + NAS + Hardlink 的 AOT 预构建虚拟环境管理服务
 
 ---
 
-# 第二部分：架构需求文档 (ARD)
+## 🎯 项目定位
 
-## 2. 系统架构
-
-### 2.1 架构概览
+**Environment Fabric 不是 Ray 的替代品，而是 Ray 的「环境供应插件」。**
 
 ```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           系统架构定位                                           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  ┌──────────────────────────────┐         ┌───────────────────────────────────┐ │
+│  │     Environment Fabric       │   API   │      Execution Engine             │ │
+│  │     ────────────────────     │ ──────► │      ───────────────────          │ │
+│  │     • AOT 预构建环境          │         │      • Ray                        │ │
+│  │     • NAS 共享存储 + Hardlink │   输出   │      • Celery                     │ │
+│  │     • pyproject.toml + uv.lock│  路径   │      • Kubernetes Job             │ │
+│  │     • 环境生命周期管理         │         │      • Docker / subprocess        │ │
+│  └──────────────────────────────┘         └───────────────────────────────────┘ │
+│                                                                                 │
+│  产出：标准的 .venv 路径（如 /mnt/nas/envs/wf-001/node-A/.venv/bin/python）      │
+│  消费者：任何能使用 Python 解释器路径的执行引擎                                    │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔌 与 Ray 的融合方案：`py_executable`
+
+利用 Ray 的 `py_executable` 参数（实验性功能），可以让 Ray Worker 直接使用 Environment Fabric 预构建的 Python 环境：
+
+```python
+import ray
+
+# 1. Environment Fabric 预先构建的环境路径（位于 NAS 共享存储）
+#    所有 Ray Worker 节点通过 NFS 挂载同一路径
+PREBUILT_PYTHON = "/mnt/nas/envs/workflow-001/node-A/.venv/bin/python"
+
+# 2. 定义 runtime_env，告诉 Ray："别自己装包了，直接用我给你的这个 Python"
+runtime_env = {
+    "py_executable": PREBUILT_PYTHON,  # 关键：指定 Worker 启动时使用的解释器
+    "working_dir": "./my_project_code"  # 仍可挂载代码目录
+}
+
+@ray.remote(runtime_env=runtime_env)
+def heavy_computing_task():
+    import sys
+    import torch
+    # 这里使用的是 Environment Fabric 预构建的环境
+    return f"Running on {sys.executable} with torch {torch.__version__}"
+
+# 3. 执行
+ray.init()
+print(ray.get(heavy_computing_task.remote()))
+```
+
+> [!TIP]
+> **融合架构的核心思想**
+> 
+> - **Environment Fabric**：负责 AOT 预构建环境，产出 `.venv` 路径
+> - **Ray**：负责 JIT 任务调度，通过 `py_executable` 使用预构建环境
+> - **结果**：环境构建与任务执行解耦，两者各司其职
+
+---
+
+## 🚀 为什么需要 Environment Fabric？
+
+Ray 的 `runtime_env` 虽然强大，但它本质上是 **"分布式的、节点本地的、JIT 的"**。
+而 Environment Fabric 是 **"中心化的、全局共享的、AOT 的"**。
+
+以下 4 个生产级场景，Ray 原生方案解决不了，而 Environment Fabric 是完美解法：
+
+### 场景一：大规模 SaaS 平台（10000+ 环境）
+
+> **问题**：磁盘成本爆炸
+
+| 架构 | 10 台机器 × 安装 torch (2GB) | 总磁盘占用 |
+|------|------------------------------|-----------|
+| Ray Runtime Env (Node-local) | 每台机器独立安装 | **20 GB** |
+| Environment Fabric (NAS + Hardlink) | 共享存储 + 硬链接 | **2 GB** |
+
+**Environment Fabric 方案**：
+- 所有环境构建在 NAS 共享存储上
+- 利用 `uv` 的 Hardlink 机制，相同包只占用一份物理空间
+- **节省 90% 以上存储成本**
+
+```
+NAS 共享存储架构：
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         LangGraph Workflow                          │
-│    ┌────────┐     ┌────────┐     ┌────────┐     ┌────────┐         │
-│    │ Node A │ ──▶ │ Node B │ ──▶ │ Node C │ ──▶ │ Node D │         │
-│    └───┬────┘     └───┬────┘     └───┬────┘     └───┬────┘         │
-└────────┼──────────────┼──────────────┼──────────────┼───────────────┘
-         │              │              │              │
-         ▼              ▼              ▼              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Environment Manager API Layer                     │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                      FastAPI Application                        │ │
-│  │  POST /envs                       - 创建环境 (uv init)                   │ │
-│  │  GET  /envs/{workflow_id}/{node_id} - 查询环境状态 (可选 version_id)             │ │
-│  │  DELETE /envs/{workflow_id}/{node_id} - 删除环境 (可选 version_id)               │ │
-│  │  POST /envs/{workflow_id}/{node_id}/deps - 添加依赖 (uv add) (可选 version_id)   │ │
-│  │  GET  /envs/{workflow_id}/{node_id}/deps - 列出依赖 (可选 version_id)           │ │
-│  │  PUT  /envs/{workflow_id}/{node_id}/deps - 更新依赖 (可选 version_id)           │ │
-│  │  DELETE /envs/{workflow_id}/{node_id}/deps - 删除依赖 (可选 version_id)         │ │
-│  │  POST /envs/{workflow_id}/{node_id}/sync - 同步环境 (uv sync) (可选 version_id)  │ │
-│  │  GET  /envs/{workflow_id}/{node_id}/export - 导出 lock 文件 (可选 version_id)   │ │
-│  │  POST /envs/{workflow_id}/{node_id}/run - 执行代码 (uv run) (可选 version_id)    │ │
-│  │  POST /envs/cleanup               - 清理过期环境                          │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     File System Layer (同一物理分区)                 │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │  /data/                       <- 挂载的磁盘卷/物理分区根目录      │ │
-│  │    │                                                            │ │
-│  │    ├── envs/                  <- ENVS_BASE_PATH                 │ │
-│  │    │   ├── workflow123_node123_v1/ <- 独立 UV 项目 (含 version_id)      │ │
-│  │    │   │   ├── .venv/         <- 虚拟环境                        │ │
-│  │    │   │   ├── pyproject.toml <- 项目配置 + 依赖声明             │ │
-│  │    │   │   ├── uv.lock        <- 精确版本锁定                    │ │
-│  │    │   │   └── metadata.json  <- 环境元数据                      │ │
-│  │    │   ├── workflow123_node123/  <- 独立 UV 项目 (无 version_id)        │ │
-│  │    │   │   ├── .venv/                                           │ │
-│  │    │   │   └── ...                                              │ │
-│  │    │   └── ...  (命名格式: workflow_id_node_id[_version_id])        │ │
-│  │    │                                                            │ │
-│  │    └── uv_cache/              <- UV_CACHE_DIR (平级目录!)        │ │
-│  │        ├── wheels/            <- 下载的 whl 包                   │ │
-│  │        ├── archives/          <- 源码包                          │ │
-│  │        └── ...                <- Hardlink 共享包文件             │ │
-│  └────────────────────────────────────────────────────────────────┘ │
+│  /mnt/nas/                        <- NFS/EFS 挂载点                 │
+│    │                                                                │
+│    ├── envs/                      <- 所有环境                       │
+│    │   ├── wf-001_node-A/.venv/   <- 环境A (torch)                 │
+│    │   ├── wf-001_node-B/.venv/   <- 环境B (torch)  ──┐            │
+│    │   └── wf-002_node-C/.venv/   <- 环境C (torch)  ──┼─ Hardlink  │
+│    │                                                  │             │
+│    └── uv_cache/                  <- 全局缓存 ────────┘             │
+│        └── torch-2.0.0.whl        <- 物理文件只存一份               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-```mermaid
-flowchart TB
-    subgraph LG["LangGraph Workflow"]
-        A[Node A] --> B[Node B] --> C[Node C]
-    end
-    
-    subgraph API["Environment Manager API"]
-        Router[FastAPI Router]
-        LockMgr["Lock Manager<br/>(per node_id)"]
-        EnvMgr[Environment Manager]
-        DepMgr[Dependency Manager]
-        UVExec[UV Executor]
-    end
-    
-    subgraph FS["File System (同一物理分区)"]
-        direction TB
-        ROOT["/data/ (分区根)"]
-        ENVS["envs/<br/>ENVS_BASE_PATH"]
-        CACHE["uv_cache/<br/>UV_CACHE_DIR"]
-        ROOT --- ENVS
-        ROOT --- CACHE
-    end
-    
-    A & B & C -.-> Router
-    Router --> LockMgr
-    LockMgr --> EnvMgr
-    EnvMgr --> DepMgr
-    DepMgr --> UVExec
-    UVExec --> ENVS
-    UVExec -.->|Hardlink| CACHE
-    
-    style LG fill:#e3f2fd,stroke:#2196f3
-    style API fill:#f3e5f5,stroke:#9c27b0
-    style FS fill:#e8f5e9,stroke:#4caf50
-```
-
-### 2.2 环境生命周期状态机
-
-```mermaid
-stateDiagram-v2
-    [*] --> NOT_EXISTS: 初始状态
-    
-    NOT_EXISTS --> CREATING: POST /envs (uv init)
-    CREATING --> ACTIVE: 创建成功
-    CREATING --> ERROR: 创建失败
-    
-    ACTIVE --> INSTALLING: POST/PUT /deps (uv add)
-    INSTALLING --> ACTIVE: 安装完成
-    INSTALLING --> ERROR: 安装失败
-    
-    ACTIVE --> SYNCING: POST /sync (uv sync)
-    SYNCING --> ACTIVE: 同步完成
-    
-    ACTIVE --> RUNNING: POST /run (uv run)
-    RUNNING --> ACTIVE: 执行完成
-    RUNNING --> ERROR: 执行失败/超时
-    
-    ACTIVE --> IDLE: 长时间无访问
-    IDLE --> ACTIVE: 任意操作
-    IDLE --> DELETED: 自动清理
-    
-    ACTIVE --> DELETING: DELETE /envs
-    DELETING --> [*]: 删除成功
-    
-    ERROR --> ACTIVE: 重试成功
-    ERROR --> DELETING: 手动删除
-    
-    note right of ACTIVE
-        每个节点都有:
-        - pyproject.toml
-        - uv.lock
-        可随时导出复现
-    end note
-```
-
-### 2.3 核心组件
-
-| 组件 | 职责 |
-|------|------|
-| **LockManager** | 并发控制：每个 node_id 对应一把 asyncio.Lock |
-| **EnvManager** | 环境生命周期管理（创建/删除/查询/清理） |
-| **DependencyManager** | 依赖 CRUD 操作（uv add/remove/sync） |
-| **UVCommandExecutor** | UV CLI 命令封装与执行（跨平台路径处理） |
-| **ProjectInfo** | 主项目依赖版本映射（确保子环境兼容性） |
-
-### 2.4 UV 命令映射（使用 uv add 而非 uv pip install）
-
-| 操作 | UV CLI 命令 | 说明 |
-|------|-------------|------|
-| **初始化项目** | `uv init {env_path}` | 创建 pyproject.toml |
-| **添加依赖** | `uv add {packages} --project {env_path}` | 更新 pyproject.toml + uv.lock |
-| **删除依赖** | `uv remove {package} --project {env_path}` | 从项目移除依赖 |
-| **同步环境** | `uv sync --project {env_path}` | 从 uv.lock 重建 .venv |
-| **列出依赖** | `uv tree --project {env_path}` | 查看依赖树 |
-| **运行代码** | `uv run --project {env_path} python -c {code}` | 在项目环境中执行 |
-| **锁定依赖** | `uv lock --project {env_path}` | 仅更新 uv.lock |
-
-> [!TIP]
-> **为什么使用 `uv add` 而非 `uv pip install`？**
-> 
-> | 特性 | `uv pip install` | `uv add` |
-> |------|-----------------|----------|
-> | 生成 pyproject.toml | ❌ | ✅ |
-> | 生成 uv.lock | ❌ | ✅ |
-> | 环境可复现 | ❌ | ✅ |
-> | 依赖解析一致性 | 弱 | 强 |
-
-### 2.5 并发控制设计
-
-> [!IMPORTANT]
-> **必须实现的并发安全机制**
-
-```python
-import asyncio
-from collections import defaultdict
-
-class LockManager:
-    """每个 node_id 对应一把 asyncio.Lock"""
-    
-    def __init__(self):
-        self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-    
-    def get_lock(self, node_id: str) -> asyncio.Lock:
-        return self._locks[node_id]
-    
-    async def cleanup_lock(self, node_id: str):
-        """环境删除后清理锁"""
-        self._locks.pop(node_id, None)
-```
-
-### 2.6 依赖版本继承机制
-
-> [!TIP]
-> **主项目版本一致性保证**
-
-为了确保节点环境与主项目（Host）的依赖版本兼容，系统引入了依赖映射机制：
-
-1. **自动探测**: 系统启动时读取主项目的 `pyproject.toml`。
-2. **版本注入**: 当用户请求安装依赖（如 `fastapi`）未指定版本时，系统会自动注入主项目的版本约束（如 `>=0.127.0`）。
-3. **一致性**: 保证所有节点环境的基础依赖版本不低于主项目要求，避免版本冲突。
-
 ---
 
-## 3. 存储策略
+### 场景二：生产环境零冷启动
 
-### 3.1 每个节点的目录结构
-
-```
-envs/workflow123_node123_v1/  # 格式: {workflow_id}_{node_id}_{version_id}
-├── .venv/                  # UV 自动管理的虚拟环境
-├── pyproject.toml          # 项目配置 + 依赖声明
-├── uv.lock                 # 精确版本锁定（可复现）
-└── metadata.json           # 环境元数据
-```
-
-> [!NOTE]
-> 文件夹命名格式：`{workflow_id}_{node_id}[_{version_id}]`。`version_id` 为可选参数，若提供则包含在目录名中，并存入数据库审计表。
-
-### 3.2 pyproject.toml 示例
-
-```toml
-[project]
-name = "node-abc"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "numpy>=1.24.0",
-    "pandas>=2.0.0",
-    "requests",
-]
-
-[tool.uv]
-# UV 特定配置
-```
-
-### 3.3 为什么依赖信息从 pyproject.toml 读取
-
-| 方案 | 优点 | 缺点 |
-|------|------|------|
-| SQLite | 查询快 | 与实际环境不同步风险 |
-| **pyproject.toml** | 始终与环境一致 | 需要解析 TOML |
-
----
-
-## 4. 磁盘优化：Hardlink 机制
-
-> [!IMPORTANT]
-> **硬性物理条件：UV_CACHE_DIR 必须与 ENVS_BASE_PATH 在同一物理分区/卷，且为平级目录**
-
-### 4.1 目录结构规范
-
-```
-/data/                            <- 挂载的磁盘卷或物理分区根目录
-│
-├── envs/                         <- ENVS_BASE_PATH
-│   ├── workflow123_node123/      <- 命名格式: workflow_id_node_id
-│   │   ├── .venv/
-│   │   ├── pyproject.toml
-│   │   └── uv.lock
-│   └── workflow345_node345/
-│       ├── .venv/
-│       ├── pyproject.toml
-│       └── uv.lock
-│
-└── uv_cache/                     <- UV_CACHE_DIR (全局共享缓存)
-    ├── wheels/
-    └── archives/
-```
-
-### 4.2 磁盘空间节省示例
-
-| 场景 | 无 Hardlink | 有 Hardlink |
-|------|-------------|-------------|
-| 10 个节点都安装 numpy (50MB) | 500 MB | **50 MB** |
-| 10 个节点都安装 torch (2GB) | 20 GB | **2 GB** |
-
----
-
-# 第三部分：技术需求文档 (TRD)
-
-## 5. API 接口规范
-
-### 5.1 环境管理
-
-#### POST /envs — 创建环境
-
-**请求体** (Form 数据):
-```
-workflow_id: "workflow123"
-node_id: "node123"
-version_id: "v1" (可选)
-python_version: "3.11" (可选)
-packages: ["numpy>=1.24.0", "pandas>=2.0.0"] (可选)
-requirements_file: <file> (可选)
-```
-
-**响应**:
-```json
-{
-    "workflow_id": "workflow123",
-    "node_id": "node123",
-    "version_id": "v1",
-    "env_path": "/data/envs/workflow123_node123_v1",
-    "python_version": "3.11",
-    "status": "created",
-    "pyproject_toml": "[project]\nname = \"workflow123-node123\"..."
-}
-```
-
----
-
-#### GET /envs/{workflow_id}/{node_id}/export — 导出环境配置
-
-**查询参数**:
-- `version_id`: "v1" (可选)
-
-**响应**:
-```json
-{
-    "workflow_id": "workflow123",
-    "node_id": "node123",
-    "version_id": "v1",
-    "pyproject_toml": "...",
-    "uv_lock": "..."
-}
-``````
-
----
-
-#### POST /envs/{workflow_id}/{node_id}/sync — 从 lock 文件同步环境
-
-用于从 `uv.lock` 重建 `.venv`，实现环境复现。
-
-**响应**:
-```json
-{
-    "workflow_id": "workflow123",
-    "node_id": "node123",
-    "status": "synced",
-    "packages_installed": 15
-}
-```
-
----
-
-### 5.2 依赖管理 (CRUD)
-
-#### POST /envs/{workflow_id}/{node_id}/deps — 添加依赖 (uv add)
-
-**请求体**:
-```json
-{
-    "packages": ["scikit-learn>=1.0", "torch==2.0.0"]
-}
-```
-
----
-
-#### DELETE /envs/{workflow_id}/{node_id}/deps — 删除依赖 (uv remove)
-
-**请求体**:
-```json
-{
-    "packages": ["torch", "scikit-learn"]
-}
-```
-
----
-
-#### GET /envs/{workflow_id}/{node_id}/deps — 列出依赖
-
-从 `pyproject.toml` 读取依赖列表。
-
-**响应**:
-```json
-{
-    "workflow_id": "workflow123",
-    "node_id": "node123",
-    "dependencies": [
-        "numpy>=1.24.0",
-        "pandas>=2.0.0"
-    ],
-    "locked_versions": {
-        "numpy": "1.24.3",
-        "pandas": "2.1.0"
-    }
-}
-```
-
----
-
-### 5.3 代码执行
-
-#### POST /envs/{workflow_id}/{node_id}/run — 执行代码 (uv run)
-
-```json
-{
-    "code": "import numpy as np; print(np.__version__)",
-    "timeout": 30
-}
-```
-
----
-
-## 6. 项目结构
-
-```
-design_document/
-├── src/
-│   ├── __init__.py
-│   ├── api.py                 # FastAPI 路由定义
-│   ├── config.py              # 配置管理
-│   ├── models.py              # Pydantic 数据模型
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── lock_manager.py    # 并发锁管理器
-│   │   ├── env_manager.py     # 环境生命周期管理
-│   │   ├── dep_manager.py     # 依赖 CRUD 管理
-│   │   ├── project_info.py    # 主项目依赖映射服务
-│   │   └── uv_executor.py     # UV CLI 命令执行器
-│   └── exceptions.py          # 自定义异常
-├── envs/                      # 虚拟环境存储目录
-├── uv_cache/                  # UV 缓存目录 (同一分区!)
-└── pyproject.toml
-```
-
----
-
-## 7. 跨平台 UV 执行器设计
-
-```python
-import sys
-import asyncio
-from pathlib import Path
-
-class UVCommandExecutor:
-    """跨平台 UV CLI 封装器 - 使用 uv add 而非 uv pip install"""
-    
-    def __init__(self, envs_base_path: Path):
-        self.envs_base_path = envs_base_path
-        self.is_windows = sys.platform == "win32"
-    
-    def _get_project_path(self, node_id: str) -> Path:
-        return self.envs_base_path / node_id
-    
-    async def init_project(self, node_id: str, python_version: str) -> bool:
-        """初始化 UV 项目"""
-        project_path = self._get_project_path(node_id)
-        project_path.mkdir(parents=True, exist_ok=True)
-        cmd = ["uv", "init", str(project_path), "--python", python_version]
-        # ... subprocess 执行
-    
-    async def add_packages(self, node_id: str, packages: list[str]) -> bool:
-        """添加依赖 (uv add)"""
-        project_path = self._get_project_path(node_id)
-        cmd = ["uv", "add", "--project", str(project_path)] + packages
-        # ... subprocess 执行
-    
-    async def remove_packages(self, node_id: str, packages: list[str]) -> bool:
-        """删除依赖 (uv remove)"""
-        project_path = self._get_project_path(node_id)
-        cmd = ["uv", "remove", "--project", str(project_path)] + packages
-        # ... subprocess 执行
-    
-    async def sync_env(self, node_id: str) -> bool:
-        """从 uv.lock 同步环境"""
-        project_path = self._get_project_path(node_id)
-        cmd = ["uv", "sync", "--project", str(project_path)]
-        # ... subprocess 执行
-    
-    async def run_code(self, node_id: str, code: str) -> tuple[str, str, int]:
-        """在项目环境中执行代码"""
-        project_path = self._get_project_path(node_id)
-        cmd = ["uv", "run", "--project", str(project_path), "python", "-c", code]
-        # ... subprocess 执行
-```
-
----
-
-## 8. 环境复现流程
+> **问题**：Ray JIT 导致任务冷启动不可控
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant API
-    participant NodeA as workflow123_node123
-    participant NodeB as workflow345_node345 (新建)
-    
-    Note over NodeA: 已有环境
-    User->>API: GET /envs/workflow123/node123/export
-    API->>NodeA: 读取 pyproject.toml + uv.lock
-    NodeA-->>API: 返回配置文件
-    API-->>User: { pyproject_toml, uv_lock }
-    
-    Note over User: 保存配置用于复现
-    
-    User->>API: POST /envs { workflow_id: "workflow345", node_id: "node345" }
-    API->>NodeB: uv init (创建 workflow345_node345/)
-    NodeB-->>API: 项目初始化完成
-    
-    User->>API: 写入 pyproject.toml + uv.lock
-    
-    User->>API: POST /envs/workflow345/node345/sync
-    API->>NodeB: uv sync (从 lock 重建)
-    NodeB-->>API: 环境完全复现
-    API-->>User: { status: "synced" }
+    participant Ray as Ray (JIT 模式)
+    participant EnvFabric as Environment Fabric (AOT 模式)
+    participant Task
+
+    Note over Ray: Ray 原生方案 - 冷启动
+    User->>Ray: 提交任务
+    Ray->>Ray: 发现没环境
+    Ray->>Ray: 开始构建环境（可能耗时数分钟）
+    Ray->>Task: 等待... 执行任务
+
+    Note over EnvFabric: Environment Fabric 方案 - 预热
+    User->>EnvFabric: 保存工作流配置
+    EnvFabric->>EnvFabric: 后台静默构建环境 ✅
+    Note over User: 稍后...
+    User->>EnvFabric: 点击运行
+    EnvFabric->>Task: 环境已就绪 → 毫秒级启动 🚀
+```
+
+**Environment Fabric 方案**：
+- **AOT 预构建**：用户编辑完工作流 → 保存 → 后台静默构建环境
+- **毫秒级启动**：运行时环境已就绪，Ray 直接使用 `py_executable`
+- **解耦构建与执行**：环境构建作为独立环节，不阻塞任务调度
+
+---
+
+### 场景三：可调试的白盒环境
+
+> **问题**：Ray 环境是黑盒，故障难排查
+
+| 维度 | Ray Runtime Env | Environment Fabric |
+|------|-----------------|-------------------|
+| 环境位置 | 临时目录，被 GC 后消失 | 持久化物理路径 |
+| 故障排查 | 只能看 Ray 日志 | 可 SSH 进去 `source .venv/bin/activate` |
+| 环境回滚 | 不支持 | 可对环境做 Snapshot |
+| 确定性 | pip list 松散 | `uv.lock` 字节级锁定 |
+
+**Environment Fabric 方案**：
+- 环境是物理存在的文件夹，可随时进入排查
+- `pyproject.toml` + `uv.lock` 保证环境字节级一致
+- 支持环境版本管理和回滚
+
+---
+
+### 场景四：Vendor Agnostic（不锁定执行引擎）
+
+> **问题**：Ray `runtime_env` 与 Ray 强绑定
+
+**Environment Fabric 方案**：
+- 产出标准的 `.venv` 路径
+- 可被任何执行引擎消费
+
+```python
+# 被 Ray 消费
+@ray.remote(runtime_env={"py_executable": venv_python_path})
+def ray_task(): ...
+
+# 被 Docker 挂载
+# docker run -v /mnt/nas/envs:/envs python:3.11 /envs/wf-001/.venv/bin/python script.py
+
+# 被 Kubernetes Job 使用
+# command: ["/mnt/nas/envs/wf-001/node-A/.venv/bin/python", "main.py"]
+
+# 被 subprocess 调用
+subprocess.run([venv_python_path, "script.py"])
 ```
 
 ---
 
-## 9. 环境变量配置
+## 📊 技术对比总结
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DATA_ROOT` | `/data` | 物理分区挂载点 |
-| `ENVS_BASE_PATH` | `${DATA_ROOT}/envs` | 虚拟环境存储目录 |
-| `UV_CACHE_DIR` | `${DATA_ROOT}/uv_cache` | **必须与 ENVS_BASE_PATH 同一分区且平级** |
-| `DATABASE_URL` | `postgresql://...` | 审计数据库连接串（记录 env 副作用操作），服务启动时会自动建表并校验连接 |
-| `DEFAULT_PYTHON` | `3.11` | 默认 Python 版本 |
-| `EXECUTION_TIMEOUT` | `30` | 代码执行默认超时（秒） |
-| `CLEANUP_IDLE_HOURS` | `72` | 自动清理闲置环境阈值（小时） |
-
-> [!WARNING]
-> **硬性物理条件**
-> 
-> `UV_CACHE_DIR` 必须配置在与 `ENVS_BASE_PATH` **相同的物理分区**上，且为平级目录，否则无法使用 Hardlink 节省磁盘空间。
-
-> [!IMPORTANT]
-> **审计数据库为强制依赖**
->
-> - ✅ 所有会对 env 产生副作用的操作（create/delete/add/update/remove/sync/run/cleanup）都会写入 `env_operations` 审计表
-> - ✅ 服务启动时会执行 `init_db()` 自动建表并做一次 `SELECT 1` 连接校验
-> - ❌ 若数据库不可连接或审计写入失败，相关请求会返回 `DB_AUDIT_ERROR` (500)
-> - 📋 审计表当前记录 `workflow_id` 和 `node_id`，后续计划支持可选的 `version_id` 参数，用于环境版本管理
+| 维度 | Environment Fabric | Ray Runtime Env |
+|------|-------------------|-----------------|
+| **构建时机** | ⏱️ AOT (提前构建) | ⏳ JIT (运行时构建) |
+| **存储模型** | 💾 NAS 共享 + Hardlink | 📦 Node-local 缓存 |
+| **环境确定性** | 🔒 `uv.lock` 字节级锁定 | 🎲 `pip list` 松散声明 |
+| **冷启动时间** | 🚀 毫秒级 | 🐢 分钟级（大依赖） |
+| **可调试性** | ✅ 持久化白盒 | ❌ 临时黑盒 |
+| **耦合度** | 🔌 Vendor Agnostic | 🔗 Ray 强绑定 |
+| **磁盘效率** | 💰 节省 90%+ | 📈 线性增长 |
 
 ---
 
-## 10. 错误码定义
+## 🏗️ NAS 共享存储架构
 
-| HTTP | 错误码 | 说明 |
-|------|--------|------|
-| 400 | `INVALID_PACKAGES` | packages 格式无效 |
-| 404 | `ENV_NOT_FOUND` | 环境不存在 |
-| 409 | `ENV_ALREADY_EXISTS` | 环境已存在 |
-| 422 | `PACKAGE_RESOLUTION_FAILED` | 依赖解析失败 |
-| 423 | `ENV_LOCKED` | 环境正在被其他操作使用 |
-| 500 | `DB_AUDIT_ERROR` | 审计数据库初始化/连接失败或审计写入失败 |
-| 500 | `UV_EXECUTION_ERROR` | UV 命令执行失败 |
-| 504 | `EXECUTION_TIMEOUT` | 代码执行超时 |
+> [!IMPORTANT]
+> **硬性部署条件**
+> 
+> `UV_CACHE_DIR` 必须与 `ENVS_BASE_PATH` 在同一物理分区（NAS 挂载点），才能使用 Hardlink 机制。
+
+```
+/mnt/nas/                           <- NFS/EFS 挂载点（所有节点共享）
+│
+├── envs/                           <- ENVS_BASE_PATH
+│   ├── workflow123_node123/        <- 独立 UV 项目
+│   │   ├── .venv/                  <- 虚拟环境
+│   │   │   └── bin/python          <- Ray py_executable 指向这里
+│   │   ├── pyproject.toml          <- 依赖声明
+│   │   ├── uv.lock                 <- 版本锁定
+│   │   └── metadata.json           <- 环境元数据
+│   └── ...
+│
+└── uv_cache/                       <- UV_CACHE_DIR（全局共享缓存）
+    ├── wheels/                     <- .whl 包文件
+    └── archives/                   <- 源码包
+            ↑
+            └── Hardlink 指向各环境的 .venv/lib/
+```
+
+---
+
+## 📁 详细技术文档
+
+技术细节已拆分到独立文档：
+
+| 文档 | 描述 |
+|------|------|
+| [📋 PRD - 产品需求文档](docs/PRD.md) | 背景、目标、功能范围 |
+| [🏛️ ARD - 架构需求文档](docs/ARD.md) | 系统架构、组件设计、存储策略 |
+| [⚙️ TRD - 技术需求文档](docs/TRD.md) | API 规范、项目结构、配置说明 |
+
+---
+
+## 🚀 快速开始
+
+### 1. 环境要求
+
+- Python 3.11+
+- [uv](https://github.com/astral-sh/uv) 包管理器
+- NAS/共享存储（生产环境）
+- PostgreSQL（审计数据库）
+
+### 2. 安装与运行
+
+```bash
+# 克隆项目
+git clone <repo-url>
+cd env_manager
+
+# 安装依赖
+uv sync
+
+# 配置环境变量
+cp .env.template .env
+# 编辑 .env 文件配置 DATA_ROOT、DATABASE_URL 等
+
+# 启动服务
+uv run uvicorn src.api:app --host 0.0.0.0 --port 8000
+```
+
+### 3. 创建环境
+
+```bash
+# 创建一个新环境
+curl -X POST http://localhost:8000/envs \
+  -F "workflow_id=wf-001" \
+  -F "node_id=node-A" \
+  -F "packages=numpy>=1.24.0" \
+  -F "packages=pandas>=2.0.0"
+```
+
+### 4. 与 Ray 集成
+
+```python
+import ray
+import httpx
+
+# 1. 从 Environment Fabric 获取预构建环境路径
+resp = httpx.get("http://localhost:8000/envs/wf-001/node-A")
+env_path = resp.json()["env_path"]
+python_path = f"{env_path}/.venv/bin/python"
+
+# 2. 配置 Ray 使用该环境
+runtime_env = {"py_executable": python_path}
+
+@ray.remote(runtime_env=runtime_env)
+def my_task():
+    import numpy as np
+    return np.__version__
+
+ray.init()
+print(ray.get(my_task.remote()))
+```
+

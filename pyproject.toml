@@ -13,6 +13,7 @@ dependencies = [
     "psycopg2-binary>=2.9.11",
     "uvicorn>=0.40.0",
     "python-multipart>=0.0.21",
+    "ray>=2.53.0",
 ]
 
 [dependency-groups]
