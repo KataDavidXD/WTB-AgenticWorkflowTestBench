@@ -314,6 +314,9 @@ class OutboxEventORM(Base):
     # Event payload (JSON)
     payload = Column(Text, nullable=False)
     
+    # Idempotency key for ensuring exactly-once processing
+    idempotency_key = Column(String(128), nullable=True, index=True)
+    
     # Processing status
     status = Column(String(20), nullable=False, default='pending')
     retry_count = Column(Integer, nullable=False, default=0)

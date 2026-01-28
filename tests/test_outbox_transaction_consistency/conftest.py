@@ -450,6 +450,67 @@ def batch_test_variants():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Real Integration Setup (NO MOCKS - Real Services Only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def real_full_integration_setup(
+    unit_of_work,
+    temp_data_dir,
+):
+    """
+    Full integration setup using REAL services - NO MOCKS.
+    
+    Uses:
+    - Real SQLite database via Unit of Work
+    - Real outbox repository from UoW
+    - Real checkpoint repository from UoW
+    - Real file commit repository from UoW
+    - Real blob repository from UoW
+    - Real temporary file storage
+    
+    For true integration testing with actual persistence.
+    """
+    # Create real blob storage directory
+    blob_dir = temp_data_dir / "blobs"
+    blob_dir.mkdir(parents=True, exist_ok=True)
+    
+    return {
+        "outbox_repository": unit_of_work.outbox,
+        "checkpoint_repository": unit_of_work.checkpoints,
+        "commit_repository": unit_of_work.file_commits,
+        "blob_repository": unit_of_work.blobs,
+        "unit_of_work": unit_of_work,
+        "temp_data_dir": temp_data_dir,
+        "blob_dir": blob_dir,
+    }
+
+
+@pytest.fixture
+def real_services_setup(
+    wtb_bench_development,
+    outbox_processor,
+    temp_data_dir,
+):
+    """
+    Setup with real running services for end-to-end testing.
+    
+    Uses:
+    - Real WTBTestBench with SQLite backend
+    - Real OutboxProcessor (not started by default)
+    - Real temporary file storage
+    
+    Start the outbox processor with: setup["outbox_processor"].start()
+    """
+    return {
+        "test_bench": wtb_bench_development,
+        "outbox_processor": outbox_processor,
+        "temp_data_dir": temp_data_dir,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # LangGraph Graph Definition Fixtures (Same as before)
 # ═══════════════════════════════════════════════════════════════════════════════
 

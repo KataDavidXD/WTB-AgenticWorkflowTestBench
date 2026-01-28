@@ -8,6 +8,9 @@ Design Principles:
 - Repository Pattern: Encapsulates data access
 - Dependency Inversion: Implements domain interfaces
 - ACID: Uses SQLAlchemy session transactions
+- DRY: Uses shared mappers from wtb.infrastructure.database.mappers
+
+Updated: 2026-01-28 - Refactored to use BlobStorageCore for shared logic (ISSUE-FS-001)
 
 Usage:
     from wtb.infrastructure.database.repositories.file_processing_repository import (
@@ -22,9 +25,8 @@ Usage:
         uow.commit()
 """
 
-import hashlib
-import os
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -51,6 +53,11 @@ from wtb.infrastructure.database.file_processing_orm import (
     FileMementoORM,
     CheckpointFileLinkORM,
 )
+from wtb.infrastructure.database.mappers import (
+    BlobStorageCore,
+    FileCommitMapper,
+    CheckpointFileLinkMapper,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +81,9 @@ class SQLAlchemyBlobRepository(IBlobRepository):
     ACID:
     - Database operations within session transaction
     - File writes are atomic (write to temp, rename)
+    
+    DRY:
+    - Uses BlobStorageCore for shared logic with async repository
     """
     
     def __init__(self, session: Session, storage_path: str):
@@ -85,11 +95,9 @@ class SQLAlchemyBlobRepository(IBlobRepository):
             storage_path: Base path for blob file storage
         """
         self._session = session
-        self._storage_path = Path(storage_path)
-        self._objects_path = self._storage_path / "objects"
-        
-        # Ensure storage directories exist
-        self._objects_path.mkdir(parents=True, exist_ok=True)
+        self._storage_path, self._objects_path = BlobStorageCore.setup_storage_structure(
+            Path(storage_path)
+        )
     
     def save(self, content: bytes) -> BlobId:
         """
@@ -113,20 +121,19 @@ class SQLAlchemyBlobRepository(IBlobRepository):
             existing.reference_count += 1
             return blob_id
         
-        # Write content to filesystem
+        # Write content to filesystem using shared logic
         storage_location = self._write_content(blob_id, content)
         
-        # Create database record
-        blob_orm = FileBlobORM(
-            content_hash=blob_id.value,
+        # Create database record using shared mapper
+        orm_dict = BlobStorageCore.create_orm_dict(
+            blob_id=blob_id.value,
             storage_location=str(storage_location),
-            size=len(content),
-            created_at=datetime.now(),
-            reference_count=1,
+            content_size=len(content),
         )
+        blob_orm = FileBlobORM(**orm_dict)
         self._session.add(blob_orm)
         
-        logger.debug(f"Saved blob {blob_id.short}... ({len(content)} bytes)")
+        logger.debug(f"Saved blob {BlobStorageCore.get_short_id(blob_id.value)}... ({len(content)} bytes)")
         return blob_id
     
     def get(self, blob_id: BlobId) -> Optional[bytes]:
@@ -219,7 +226,7 @@ class SQLAlchemyBlobRepository(IBlobRepository):
         # Atomic write: write to temp, then rename
         temp_path = output.with_suffix(".tmp")
         temp_path.write_bytes(content)
-        temp_path.rename(output)
+        os.replace(str(temp_path), str(output))  # Cross-platform atomic move
         
         logger.debug(f"Restored blob {blob_id.short}... to {output_path}")
     
@@ -235,28 +242,26 @@ class SQLAlchemyBlobRepository(IBlobRepository):
         count = result[0] or 0
         total_size = result[1] or 0
         
-        return {
-            "blob_count": count,
-            "total_size_bytes": total_size,
-            "total_size_mb": total_size / (1024 * 1024) if total_size else 0,
-        }
+        return BlobStorageCore.compute_stats(count, total_size)
     
     def _write_content(self, blob_id: BlobId, content: bytes) -> Path:
         """
         Write content to content-addressable storage.
         
         Uses Git-like path structure: objects/{hash[:2]}/{hash[2:]}
+        Computed by BlobStorageCore for consistency with async repository.
         """
-        # Create directory for hash prefix
-        dir_path = self._objects_path / blob_id.value[:2]
+        # Compute paths using shared logic
+        dir_path = BlobStorageCore.compute_directory_path(blob_id.value, self._objects_path)
         dir_path.mkdir(exist_ok=True)
         
-        file_path = dir_path / blob_id.value[2:]
+        file_path = BlobStorageCore.compute_storage_path(blob_id.value, self._objects_path)
         
-        # Atomic write
-        temp_path = file_path.with_suffix(".tmp")
+        # Atomic write using shared temp path logic
+        # Use os.replace() for cross-platform atomic move (works on Windows even if target exists)
+        temp_path = BlobStorageCore.compute_temp_path(file_path)
         temp_path.write_bytes(content)
-        temp_path.rename(file_path)
+        os.replace(str(temp_path), str(file_path))
         
         return file_path
     
@@ -439,28 +444,8 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         return result or 0
     
     def _orm_to_domain(self, orm: FileCommitORM, load_mementos: bool) -> FileCommit:
-        """Convert ORM model to domain entity."""
-        mementos = []
-        if load_mementos:
-            mementos = [
-                FileMemento(
-                    file_path=m.file_path,
-                    file_hash=BlobId(m.file_hash),
-                    file_size=m.file_size,
-                )
-                for m in orm.mementos
-            ]
-        
-        return FileCommit.reconstitute(
-            commit_id=orm.commit_id,
-            message=orm.message,
-            timestamp=orm.timestamp,
-            status=orm.status,
-            mementos=mementos,
-            created_by=orm.created_by,
-            execution_id=orm.execution_id,
-            checkpoint_id=orm.checkpoint_id,
-        )
+        """Convert ORM model to domain entity using shared mapper."""
+        return FileCommitMapper.orm_to_domain(orm, load_mementos)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -558,14 +543,8 @@ class SQLAlchemyCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         return [self._orm_to_domain(orm) for orm in results]
     
     def _orm_to_domain(self, orm: CheckpointFileLinkORM) -> CheckpointFileLink:
-        """Convert ORM to domain model."""
-        return CheckpointFileLink(
-            checkpoint_id=orm.checkpoint_id,
-            commit_id=CommitId(orm.commit_id),
-            linked_at=orm.linked_at,
-            file_count=orm.file_count,
-            total_size_bytes=orm.total_size_bytes,
-        )
+        """Convert ORM to domain model using shared mapper."""
+        return CheckpointFileLinkMapper.orm_to_domain(orm)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

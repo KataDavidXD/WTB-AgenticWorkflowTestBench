@@ -23,12 +23,14 @@ class OutboxEventType(Enum):
     # AgentGit related
     CHECKPOINT_CREATE = "checkpoint_create"
     CHECKPOINT_VERIFY = "checkpoint_verify"
+    CHECKPOINT_SAVED = "checkpoint_saved"  # v2.0 async
     NODE_BOUNDARY_SYNC = "node_boundary_sync"
     
     # FileTracker related - Basic
     FILE_COMMIT_LINK = "file_commit_link"
     FILE_COMMIT_VERIFY = "file_commit_verify"
     FILE_BLOB_VERIFY = "file_blob_verify"
+    FILE_TRACKED = "file_tracked"  # v2.0 async
     
     # FileTracker related - Batch operations (2026-01-15)
     FILE_BATCH_VERIFY = "file_batch_verify"
@@ -41,9 +43,19 @@ class OutboxEventType(Enum):
     # Rollback/Recovery operations
     ROLLBACK_FILE_RESTORE = "rollback_file_restore"
     ROLLBACK_VERIFY = "rollback_verify"
+    ROLLBACK_PERFORMED = "rollback_performed"  # v2.0 API
     
     # Ray batch test events (2026-01-15)
     RAY_EVENT = "ray_event"
+    
+    # API/SDK events (2026-01-28)
+    EXECUTION_PAUSED = "execution_paused"
+    EXECUTION_RESUMED = "execution_resumed"
+    EXECUTION_STOPPED = "execution_stopped"
+    STATE_MODIFIED = "state_modified"
+    WORKFLOW_CREATED = "workflow_created"
+    BATCH_TEST_CREATED = "batch_test_created"
+    BATCH_TEST_CANCELLED = "batch_test_cancelled"
 
 
 class OutboxStatus(Enum):
@@ -64,22 +76,28 @@ class OutboxEvent:
     
     Design Philosophy:
     - Written in the same transaction as business data
-    - Guarantees idempotency via event_id
+    - Guarantees idempotency via event_id AND idempotency_key
     - Supports retry and error tracking
     
     Attributes:
         id: Database primary key (auto-generated)
-        event_id: UUID for idempotency
+        event_id: UUID for event identity
         event_type: Type of cross-database operation
         aggregate_type: Entity type (e.g., 'Execution', 'NodeBoundary')
         aggregate_id: Entity ID
         payload: JSON data for the operation
+        idempotency_key: Optional client-provided key for duplicate detection
         status: Current processing status
         retry_count: Number of processing attempts
         max_retries: Maximum retry attempts
         created_at: When the event was created
         processed_at: When the event was successfully processed
         last_error: Last error message if failed
+        
+    Idempotency (ISSUE-OB-002):
+        The idempotency_key enables clients to safely retry requests without
+        creating duplicate events. If provided, the system will reject events
+        with duplicate idempotency keys within the deduplication window.
     """
     
     id: Optional[int] = None
@@ -88,6 +106,9 @@ class OutboxEvent:
     aggregate_type: str = ""
     aggregate_id: str = ""
     payload: Dict[str, Any] = field(default_factory=dict)
+    
+    # Idempotency key for duplicate detection (ISSUE-OB-002)
+    idempotency_key: Optional[str] = None
     
     status: OutboxStatus = OutboxStatus.PENDING
     retry_count: int = 0
@@ -141,6 +162,7 @@ class OutboxEvent:
             "aggregate_type": self.aggregate_type,
             "aggregate_id": self.aggregate_id,
             "payload": self.payload,
+            "idempotency_key": self.idempotency_key,
             "status": self.status.value,
             "retry_count": self.retry_count,
             "max_retries": self.max_retries,
@@ -159,12 +181,45 @@ class OutboxEvent:
             aggregate_type=data.get("aggregate_type", ""),
             aggregate_id=data.get("aggregate_id", ""),
             payload=data.get("payload", {}),
+            idempotency_key=data.get("idempotency_key"),
             status=OutboxStatus(data.get("status", "pending")),
             retry_count=data.get("retry_count", 0),
             max_retries=data.get("max_retries", 5),
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
             processed_at=datetime.fromisoformat(data["processed_at"]) if data.get("processed_at") else None,
             last_error=data.get("last_error"),
+        )
+    
+    @classmethod
+    def create(
+        cls,
+        event_type: OutboxEventType,
+        aggregate_id: str,
+        payload: Dict[str, Any],
+        aggregate_type: str = "",
+        idempotency_key: Optional[str] = None,
+    ) -> "OutboxEvent":
+        """
+        Generic factory method for creating outbox events.
+        
+        Args:
+            event_type: Type of event
+            aggregate_id: ID of the aggregate (entity) this event relates to
+            payload: Event payload data
+            aggregate_type: Optional aggregate type name
+            idempotency_key: Optional client-provided key for duplicate detection
+            
+        Returns:
+            New OutboxEvent instance
+            
+        ISSUE-OB-002: Now supports idempotency keys for safe retries.
+        """
+        return cls(
+            event_type=event_type,
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            payload=payload,
+            idempotency_key=idempotency_key,
         )
     
     @classmethod
