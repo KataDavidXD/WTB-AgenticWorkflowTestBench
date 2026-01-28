@@ -15,3 +15,11 @@ data/
 .cursor/
 
 .env
+
+
+# Project directories (no longer tracked)
+infra_tests/
+docs_archive/
+file_processing/
+docs/
+tests/
