@@ -1,2 +1,0 @@
-"""WTB Test Suite."""
-
