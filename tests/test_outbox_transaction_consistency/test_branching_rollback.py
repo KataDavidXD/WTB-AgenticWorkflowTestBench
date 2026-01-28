@@ -29,24 +29,112 @@ from unittest.mock import Mock, MagicMock
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+
+# Import test helpers
 from tests.test_outbox_transaction_consistency.helpers import (
     BranchState,
     RollbackState,
     create_branch_state,
     create_rollback_state,
-    MockOutboxEvent,
-    MockCommit,
-    MockMemento,
-    MockCheckpoint,
-    verify_outbox_consistency,
-    verify_checkpoint_file_link,
-    verify_transaction_atomicity,
     branch_node_a,
     branch_node_b,
     branch_node_c,
     branch_node_d,
     route_by_switch,
 )
+
+# Import centralized mocks
+from tests.mocks import MockMemento
+from tests.mocks.services import (
+    verify_outbox_consistency,
+    verify_transaction_atomicity,
+    VerificationResult,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helper Functions for Test Events
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def create_branch_rollback_event(
+    event_id: str,
+    event_type_name: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    payload: Dict[str, Any] = None,
+) -> OutboxEvent:
+    """
+    Create an OutboxEvent for branching/rollback testing.
+    
+    Maps string event type names to proper OutboxEventType enums.
+    """
+    type_mapping = {
+        "BRANCH_CREATED": OutboxEventType.CHECKPOINT_CREATE,
+        "BRANCH_MERGED": OutboxEventType.CHECKPOINT_VERIFY,
+        "MERGE_CONFLICT_DETECTED": OutboxEventType.CHECKPOINT_VERIFY,
+        "ROLLBACK_EXECUTED": OutboxEventType.ROLLBACK_VERIFY,
+        "ROLLBACK_FILE_RESTORE": OutboxEventType.ROLLBACK_FILE_RESTORE,
+        "ROLLBACK_COMPLETED": OutboxEventType.ROLLBACK_PERFORMED,
+        "VENV_ROLLBACK": OutboxEventType.ROLLBACK_VERIFY,
+        "ROLLBACK_INITIATED": OutboxEventType.ROLLBACK_VERIFY,
+        "STATE_SNAPSHOT_SAVED": OutboxEventType.CHECKPOINT_SAVED,
+        "FILES_RESTORING": OutboxEventType.FILE_RESTORE_VERIFY,
+        "FILES_RESTORED": OutboxEventType.FILE_RESTORE_VERIFY,
+        "VENV_RESTORING": OutboxEventType.ROLLBACK_VERIFY,
+        "VENV_RESTORED": OutboxEventType.ROLLBACK_VERIFY,
+        "ROLLBACK_FAILED": OutboxEventType.ROLLBACK_VERIFY,
+    }
+    
+    event_type = type_mapping.get(event_type_name, OutboxEventType.CHECKPOINT_CREATE)
+    
+    event = OutboxEvent(
+        event_id=event_id,
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        payload=payload or {},
+    )
+    event.payload["_event_type_name"] = event_type_name
+    return event
+
+
+def event_type_matches(event: OutboxEvent, type_name: str) -> bool:
+    """Check if event matches a given type name."""
+    if "_event_type_name" in event.payload:
+        return event.payload["_event_type_name"] == type_name
+    return event.event_type.value == type_name.lower()
+
+
+def verify_checkpoint_file_link(
+    checkpoint_id: int,
+    commit_id: str,
+    checkpoint_repo,
+    commit_repo,
+) -> VerificationResult:
+    """Verify checkpoint-file link consistency."""
+    checkpoint = checkpoint_repo.get_by_id(checkpoint_id)
+    commit = commit_repo.get_by_id(commit_id)
+    
+    if not checkpoint:
+        return VerificationResult(
+            success=False,
+            message=f"Checkpoint {checkpoint_id} not found",
+        )
+    
+    if not commit:
+        return VerificationResult(
+            success=False,
+            message=f"Commit {commit_id} not found",
+        )
+    
+    return VerificationResult(
+        success=True,
+        message="Checkpoint-file link verified",
+        details={"checkpoint_id": checkpoint_id, "commit_id": commit_id},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -98,9 +186,9 @@ class TestBranchCreationConsistency:
             )
             
             # Create branch event
-            branch_event = MockOutboxEvent(
+            branch_event = create_branch_rollback_event(
                 event_id=f"branch-event-{branch_id}",
-                event_type="BRANCH_CREATED",
+                event_type_name="BRANCH_CREATED",
                 aggregate_type="Branch",
                 aggregate_id=branch_id,
                 payload={
@@ -189,9 +277,9 @@ class TestBranchCreationConsistency:
                 state={"branch_id": branch_id, "parent": "multi-branch-parent"},
             )
             
-            branch_event = MockOutboxEvent(
+            branch_event = create_branch_rollback_event(
                 event_id=f"multi-branch-event-{i}",
-                event_type="BRANCH_CREATED",
+                event_type_name="BRANCH_CREATED",
                 aggregate_type="Branch",
                 aggregate_id=branch_id,
             )
@@ -249,9 +337,9 @@ class TestRollbackConsistency:
             )
             
             # Create rollback event
-            rollback_event = MockOutboxEvent(
+            rollback_event = create_branch_rollback_event(
                 event_id="rollback-event-1",
-                event_type="ROLLBACK_EXECUTED",
+                event_type_name="ROLLBACK_EXECUTED",
                 aggregate_type="Execution",
                 aggregate_id="rollback-test-1",
                 payload={
@@ -292,9 +380,9 @@ class TestRollbackConsistency:
             )
         
         # Rollback from step 3 to step 1
-        rollback_event = MockOutboxEvent(
+        rollback_event = create_branch_rollback_event(
             event_id="file-rollback-event-1",
-            event_type="ROLLBACK_FILE_RESTORE",
+            event_type_name="ROLLBACK_FILE_RESTORE",
             aggregate_type="Execution",
             aggregate_id="file-rollback-1",
             payload={
@@ -339,9 +427,9 @@ class TestRollbackConsistency:
             operations.append(("file_restore", True))
             
             # Step 3: Create rollback event
-            event = MockOutboxEvent(
+            event = create_branch_rollback_event(
                 event_id="atomic-rollback-event-1",
-                event_type="ROLLBACK_COMPLETED",
+                event_type_name="ROLLBACK_COMPLETED",
                 aggregate_type="Execution",
                 aggregate_id="atomic-rollback-1",
             )
@@ -371,9 +459,9 @@ class TestRollbackConsistency:
         venv_manager.install_packages("venv-rollback-v1", ["numpy==2.0", "pandas"])
         
         # Create rollback event (restore to step 1 packages)
-        rollback_event = MockOutboxEvent(
+        rollback_event = create_branch_rollback_event(
             event_id="venv-rollback-event-1",
-            event_type="VENV_ROLLBACK",
+            event_type_name="VENV_ROLLBACK",
             aggregate_type="Venv",
             aggregate_id="venv-rollback-v1",
             payload={
@@ -421,9 +509,9 @@ class TestBranchMergeConsistency:
         )
         
         # Create merge event
-        merge_event = MockOutboxEvent(
+        merge_event = create_branch_rollback_event(
             event_id="merge-event-1",
-            event_type="BRANCH_MERGED",
+            event_type_name="BRANCH_MERGED",
             aggregate_type="Branch",
             aggregate_id="feature-1",
             payload={
@@ -464,9 +552,9 @@ class TestBranchMergeConsistency:
         )
         
         # Create conflict event
-        conflict_event = MockOutboxEvent(
+        conflict_event = create_branch_rollback_event(
             event_id="conflict-event-1",
-            event_type="MERGE_CONFLICT_DETECTED",
+            event_type_name="MERGE_CONFLICT_DETECTED",
             aggregate_type="Branch",
             aggregate_id="feature-conflict",
             payload={
@@ -480,7 +568,7 @@ class TestBranchMergeConsistency:
         
         # Verify conflict detected
         saved = outbox_repository.get_by_id("conflict-event-1")
-        assert saved.event_type == "MERGE_CONFLICT_DETECTED"
+        assert event_type_matches(saved, "MERGE_CONFLICT_DETECTED")
         assert "file1.txt" in saved.payload["conflicting_files"]
 
 
@@ -585,7 +673,7 @@ class TestRollbackEventOrdering:
         events = []
         
         # Rollback sequence
-        for i, event_type in enumerate([
+        for i, event_type_str in enumerate([
             "ROLLBACK_INITIATED",
             "STATE_SNAPSHOT_SAVED",
             "FILES_RESTORING",
@@ -594,9 +682,9 @@ class TestRollbackEventOrdering:
             "VENV_RESTORED",
             "ROLLBACK_COMPLETED",
         ]):
-            event = MockOutboxEvent(
+            event = create_branch_rollback_event(
                 event_id=f"rollback-order-{i}",
-                event_type=event_type,
+                event_type_name=event_type_str,
                 aggregate_type="Execution",
                 aggregate_id="exec-1",
                 payload={"step": i},
@@ -607,8 +695,8 @@ class TestRollbackEventOrdering:
         
         # Verify ordering
         saved = sorted(outbox_repository.list_all(), key=lambda e: e.created_at)
-        assert saved[0].event_type == "ROLLBACK_INITIATED"
-        assert saved[-1].event_type == "ROLLBACK_COMPLETED"
+        assert event_type_matches(saved[0], "ROLLBACK_INITIATED")
+        assert event_type_matches(saved[-1], "ROLLBACK_COMPLETED")
     
     def test_failed_rollback_creates_error_event(
         self,
@@ -616,18 +704,18 @@ class TestRollbackEventOrdering:
     ):
         """Failed rollback should create error event."""
         # Initiate rollback
-        init_event = MockOutboxEvent(
+        init_event = create_branch_rollback_event(
             event_id="failed-rollback-init",
-            event_type="ROLLBACK_INITIATED",
+            event_type_name="ROLLBACK_INITIATED",
             aggregate_type="Execution",
             aggregate_id="failed-exec-1",
         )
         outbox_repository.add(init_event)
         
         # Simulate failure
-        error_event = MockOutboxEvent(
+        error_event = create_branch_rollback_event(
             event_id="failed-rollback-error",
-            event_type="ROLLBACK_FAILED",
+            event_type_name="ROLLBACK_FAILED",
             aggregate_type="Execution",
             aggregate_id="failed-exec-1",
             payload={
@@ -640,7 +728,7 @@ class TestRollbackEventOrdering:
         
         # Verify error event
         saved = outbox_repository.get_by_id("failed-rollback-error")
-        assert saved.event_type == "ROLLBACK_FAILED"
+        assert event_type_matches(saved, "ROLLBACK_FAILED")
         assert "FileRestoreError" in saved.payload["error_type"]
 
 
@@ -670,9 +758,9 @@ class TestBranchRollbackACIDCompliance:
             operations.append(("checkpoint", True))
             
             # Step 2: Create branch event
-            event = MockOutboxEvent(
+            event = create_branch_rollback_event(
                 event_id="atomic-branch-event-1",
-                event_type="BRANCH_CREATED",
+                event_type_name="BRANCH_CREATED",
                 aggregate_type="Branch",
                 aggregate_id="atomic-branch-1",
             )
@@ -755,9 +843,9 @@ class TestBranchRollbackACIDCompliance:
         )
         
         # Create rollback event
-        event = MockOutboxEvent(
+        event = create_branch_rollback_event(
             event_id="durable-rollback-event-1",
-            event_type="ROLLBACK_COMPLETED",
+            event_type_name="ROLLBACK_COMPLETED",
             aggregate_type="Execution",
             aggregate_id="durable-rollback-1",
             payload={"to_step": 1},
@@ -772,4 +860,4 @@ class TestBranchRollbackACIDCompliance:
         
         assert retrieved_cp is not None
         assert retrieved_event is not None
-        assert retrieved_event.status == "processed"
+        assert retrieved_event.status.value == "processed"

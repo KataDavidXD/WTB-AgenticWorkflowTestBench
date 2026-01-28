@@ -261,6 +261,195 @@ def unit_of_work(wtb_db_url) -> Generator[SQLAlchemyUnitOfWork, None, None]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Real Repository Fixtures (for Integration Tests)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def real_outbox_repository(unit_of_work):
+    """
+    Provide REAL outbox repository from the Unit of Work.
+    
+    Use this for integration tests that need actual database persistence.
+    """
+    return unit_of_work.outbox
+
+
+@pytest.fixture
+def real_checkpoint_repository(unit_of_work):
+    """
+    Provide REAL checkpoint repository from the Unit of Work.
+    
+    Use this for integration tests that need actual database persistence.
+    """
+    return unit_of_work.checkpoints
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Mock Repository Fixtures (for Unit Tests)
+# 
+# ARCHITECTURE NOTE (2026-01-28):
+# Refactored to use centralized mock infrastructure from tests.mocks.
+# Mocks now implement REAL interfaces and accept REAL domain types.
+# See: CONSOLIDATED_ISSUES.md - ISSUE-TEST-001 (RESOLVED)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def outbox_repository():
+    """
+    Mock outbox repository for unit tests.
+    
+    Uses centralized MockOutboxRepository which:
+    - Implements IOutboxRepository interface
+    - Accepts REAL OutboxEvent domain objects
+    - Thread-safe for parallel tests
+    
+    For integration tests with real database, use real_outbox_repository.
+    """
+    from tests.mocks import MockOutboxRepository
+    return MockOutboxRepository()
+
+
+@pytest.fixture
+def checkpoint_repository():
+    """
+    Mock checkpoint repository for unit tests.
+    
+    Uses centralized MockCheckpointRepository.
+    For integration tests, use real_checkpoint_repository.
+    """
+    from tests.mocks import MockCheckpointRepository
+    return MockCheckpointRepository()
+
+
+@pytest.fixture
+def commit_repository():
+    """
+    Mock file commit repository for unit tests.
+    
+    Uses centralized MockCommitRepository.
+    """
+    from tests.mocks import MockCommitRepository
+    return MockCommitRepository()
+
+
+@pytest.fixture
+def blob_repository():
+    """
+    Mock blob repository for unit tests.
+    
+    Uses centralized MockBlobRepository.
+    """
+    from tests.mocks import MockBlobRepository
+    return MockBlobRepository()
+
+
+@pytest.fixture
+def ray_event_bridge(outbox_repository):
+    """
+    Mock Ray event bridge for unit tests.
+    
+    Uses centralized MockRayEventBridge which:
+    - Creates REAL OutboxEvent instances
+    - Properly integrates with outbox repository
+    
+    See: CONSOLIDATED_ISSUES.md - ISSUE-RAY-002 (RESOLVED)
+    """
+    from tests.mocks import MockRayEventBridge
+    return MockRayEventBridge(outbox_repository)
+
+
+@pytest.fixture
+def mock_actor_pool():
+    """
+    Mock Ray actor pool for unit tests.
+    
+    Uses centralized MockActorPool.
+    """
+    from tests.mocks import MockActorPool
+    return MockActorPool(pool_size=4)
+
+
+# Fixture alias for tests that use 'actor_pool' name
+# Resolves ISSUE-MOCK-002: Fixture Name Misalignment
+@pytest.fixture
+def actor_pool(mock_actor_pool):
+    """
+    Alias for mock_actor_pool fixture.
+    
+    Provides compatibility for tests that use 'actor_pool' name.
+    """
+    return mock_actor_pool
+
+
+@pytest.fixture
+def mock_venv_manager():
+    """
+    Mock virtual environment manager for unit tests.
+    
+    Uses centralized MockVenvManager.
+    """
+    from tests.mocks import MockVenvManager
+    return MockVenvManager()
+
+
+# Fixture alias for tests that use 'venv_manager' name
+# Resolves ISSUE-MOCK-002: Fixture Name Misalignment
+@pytest.fixture
+def venv_manager(mock_venv_manager):
+    """
+    Alias for mock_venv_manager fixture.
+    
+    Provides compatibility for tests that use 'venv_manager' name.
+    """
+    return mock_venv_manager
+
+
+@pytest.fixture
+def full_integration_setup(
+    outbox_repository,
+    checkpoint_repository,
+    commit_repository,
+    blob_repository,
+    mock_actor_pool,
+    mock_venv_manager,
+):
+    """
+    Full integration setup providing all mock repositories.
+    
+    This fixture provides a complete mock environment for
+    cross-system integration tests. Each repository is independent
+    and properly isolated.
+    
+    Note: All repositories now use centralized mocks that accept
+    REAL domain types, ensuring test-production compatibility.
+    
+    Returns:
+        dict: Dictionary with all repository fixtures
+    """
+    return {
+        "outbox_repository": outbox_repository,
+        "checkpoint_repository": checkpoint_repository,
+        "commit_repository": commit_repository,
+        "blob_repository": blob_repository,
+        "actor_pool": mock_actor_pool,
+        "venv_manager": mock_venv_manager,
+    }
+
+
+@pytest.fixture
+def batch_test_variants():
+    """
+    Generate batch test variants for testing.
+    
+    Uses centralized test data generator.
+    """
+    from tests.mocks import generate_batch_test_variants
+    return generate_batch_test_variants(count=5)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # LangGraph Graph Definition Fixtures (Same as before)
 # ═══════════════════════════════════════════════════════════════════════════════
 

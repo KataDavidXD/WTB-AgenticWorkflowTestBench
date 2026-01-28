@@ -30,21 +30,121 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List
 from unittest.mock import Mock, MagicMock
 
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+
+# Import test helpers
 from tests.test_outbox_transaction_consistency.helpers import (
     FullIntegrationState,
     create_full_integration_state,
-    MockOutboxEvent,
-    MockCommit,
-    MockMemento,
-    MockCheckpoint,
-    MockActor,
-    MockVenv,
-    verify_outbox_consistency,
-    verify_checkpoint_file_link,
-    verify_transaction_atomicity,
-    verify_state_consistency,
-    generate_test_commits,
 )
+
+# Import centralized mocks and utilities
+from tests.mocks import MockMemento
+from tests.mocks.services import (
+    verify_outbox_consistency,
+    verify_transaction_atomicity,
+    VerificationResult,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helper Functions for Test Events
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def create_cross_system_event(
+    event_id: str,
+    event_type_name: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    payload: Dict[str, Any] = None,
+) -> OutboxEvent:
+    """
+    Create an OutboxEvent for cross-system testing.
+    
+    Maps string event type names to proper OutboxEventType enums.
+    """
+    type_mapping = {
+        "EXECUTION_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "CHECKPOINT_FILE_LINK_VERIFY": OutboxEventType.CHECKPOINT_FILE_LINK_VERIFY,
+        "CROSS_DB_VERIFY": OutboxEventType.CHECKPOINT_VERIFY,
+        "CROSS_DB_TRANSACTION": OutboxEventType.CHECKPOINT_CREATE,
+        "STEP_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "DISTRIBUTED_ROLLBACK": OutboxEventType.ROLLBACK_VERIFY,
+        "PIPELINE_STEP_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "VARIANT_EXECUTION_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "BATCH_TEST_STARTED": OutboxEventType.BATCH_TEST_CREATED,
+        "VARIANT_ROLLBACK": OutboxEventType.ROLLBACK_VERIFY,
+        "CROSS_SYSTEM_COMPLETE": OutboxEventType.CHECKPOINT_VERIFY,
+        "DURABLE_TEST": OutboxEventType.CHECKPOINT_VERIFY,
+        "EXECUTION_FAILED": OutboxEventType.CHECKPOINT_VERIFY,
+        "EXECUTION_RECOVERED": OutboxEventType.CHECKPOINT_VERIFY,
+    }
+    
+    event_type = type_mapping.get(event_type_name, OutboxEventType.CHECKPOINT_CREATE)
+    
+    event = OutboxEvent(
+        event_id=event_id,
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        payload=payload or {},
+    )
+    event.payload["_event_type_name"] = event_type_name
+    return event
+
+
+def verify_checkpoint_file_link(
+    checkpoint_id: int,
+    commit_id: str,
+    checkpoint_repo,
+    commit_repo,
+) -> VerificationResult:
+    """Verify checkpoint-file link consistency."""
+    checkpoint = checkpoint_repo.get_by_id(checkpoint_id)
+    commit = commit_repo.get_by_id(commit_id)
+    
+    if not checkpoint:
+        return VerificationResult(
+            success=False,
+            message=f"Checkpoint {checkpoint_id} not found",
+        )
+    
+    if not commit:
+        return VerificationResult(
+            success=False,
+            message=f"Commit {commit_id} not found",
+        )
+    
+    return VerificationResult(
+        success=True,
+        message="Checkpoint-file link verified",
+        details={"checkpoint_id": checkpoint_id, "commit_id": commit_id},
+    )
+
+
+def verify_state_consistency(
+    states: List[Dict[str, Any]],
+    invariant,
+) -> VerificationResult:
+    """Verify state invariant holds for all states."""
+    violations = []
+    for i, state in enumerate(states):
+        if not invariant(state):
+            violations.append(i)
+    
+    if violations:
+        return VerificationResult(
+            success=False,
+            message=f"State invariant violated at indices: {violations}",
+            details={"violation_indices": violations},
+        )
+    
+    return VerificationResult(
+        success=True,
+        message="State consistency verified",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -103,9 +203,9 @@ class TestFullStackIntegration:
         )
         
         # 5. Outbox events
-        setup["outbox_repository"].add(MockOutboxEvent(
+        setup["outbox_repository"].add(create_cross_system_event(
             event_id=f"exec-complete-{exec_id}",
-            event_type="EXECUTION_COMPLETED",
+            event_type_name="EXECUTION_COMPLETED",
             aggregate_type="Execution",
             aggregate_id=exec_id,
         ))
@@ -169,9 +269,9 @@ class TestFullStackIntegration:
         batch_test_id = f"bt-full-{uuid.uuid4().hex[:8]}"
         
         # Create batch start event
-        setup["outbox_repository"].add(MockOutboxEvent(
+        setup["outbox_repository"].add(create_cross_system_event(
             event_id=f"start-{batch_test_id}",
-            event_type="BATCH_TEST_STARTED",
+            event_type_name="BATCH_TEST_STARTED",
             aggregate_type="BatchTest",
             aggregate_id=batch_test_id,
             payload={"variant_count": len(batch_test_variants)},
@@ -205,9 +305,9 @@ class TestFullStackIntegration:
             )
             
             # Create variant completion event
-            setup["outbox_repository"].add(MockOutboxEvent(
+            setup["outbox_repository"].add(create_cross_system_event(
                 event_id=f"var-complete-{batch_test_id}-{i}",
-                event_type="VARIANT_EXECUTION_COMPLETED",
+                event_type_name="VARIANT_EXECUTION_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
                 payload={"variant_index": i, "success": True},
@@ -254,9 +354,9 @@ class TestCrossDBConsistency:
         )
         
         # Create link verification event in outbox
-        link_event = outbox_repository.add(MockOutboxEvent(
+        link_event = outbox_repository.add(create_cross_system_event(
             event_id="link-verify-1",
-            event_type="CHECKPOINT_FILE_LINK_VERIFY",
+            event_type_name="CHECKPOINT_FILE_LINK_VERIFY",
             aggregate_type="CheckpointFile",
             aggregate_id=f"{checkpoint.checkpoint_id}_{commit.commit_id}",
             payload={
@@ -296,9 +396,9 @@ class TestCrossDBConsistency:
         )
         
         # Create outbox event that references both
-        event = MockOutboxEvent(
+        event = create_cross_system_event(
             event_id="cross-link-1",
-            event_type="CROSS_DB_VERIFY",
+            event_type_name="CROSS_DB_VERIFY",
             aggregate_type="Execution",
             aggregate_id=exec_id,
             payload={
@@ -345,9 +445,9 @@ class TestCrossDBConsistency:
             operations.append(("filetracker_commit", True))
             
             # Outbox: Create link event
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_cross_system_event(
                 event_id=f"atomic-event-{exec_id}",
-                event_type="CROSS_DB_TRANSACTION",
+                event_type_name="CROSS_DB_TRANSACTION",
                 aggregate_type="Execution",
                 aggregate_id=exec_id,
             ))
@@ -405,9 +505,9 @@ class TestDistributedTransaction:
             )
             
             # Create outbox event
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_cross_system_event(
                 event_id=f"step-{exec_id}-{step}",
-                event_type="STEP_COMPLETED",
+                event_type_name="STEP_COMPLETED",
                 aggregate_type="Execution",
                 aggregate_id=exec_id,
                 payload={
@@ -457,9 +557,9 @@ class TestDistributedTransaction:
         )
         
         # Perform rollback to step 1
-        rollback_event = MockOutboxEvent(
+        rollback_event = create_cross_system_event(
             event_id=f"rollback-{exec_id}",
-            event_type="DISTRIBUTED_ROLLBACK",
+            event_type_name="DISTRIBUTED_ROLLBACK",
             aggregate_type="Execution",
             aggregate_id=exec_id,
             payload={
@@ -522,9 +622,9 @@ class TestEndToEndScenarios:
             )
             
             # Create step event
-            setup["outbox_repository"].add(MockOutboxEvent(
+            setup["outbox_repository"].add(create_cross_system_event(
                 event_id=f"step-{exec_id}-{i}",
-                event_type="PIPELINE_STEP_COMPLETED",
+                event_type_name="PIPELINE_STEP_COMPLETED",
                 aggregate_type="MLPipeline",
                 aggregate_id=exec_id,
                 payload={"step": step_name, "index": i},
@@ -577,9 +677,9 @@ class TestEndToEndScenarios:
             )
         
         # Simulate variant 1 needs rollback
-        rollback_event = MockOutboxEvent(
+        rollback_event = create_cross_system_event(
             event_id=f"rollback-{batch_id}-v1",
-            event_type="VARIANT_ROLLBACK",
+            event_type_name="VARIANT_ROLLBACK",
             aggregate_type="BatchTest",
             aggregate_id=batch_id,
             payload={
@@ -702,9 +802,9 @@ class TestCrossSystemACIDProperties:
             operations.append(("venv", True))
             
             # Outbox
-            setup["outbox_repository"].add(MockOutboxEvent(
+            setup["outbox_repository"].add(create_cross_system_event(
                 event_id=f"event-{exec_id}",
-                event_type="CROSS_SYSTEM_COMPLETE",
+                event_type_name="CROSS_SYSTEM_COMPLETE",
                 aggregate_type="Execution",
                 aggregate_id=exec_id,
             ))
@@ -832,9 +932,9 @@ class TestCrossSystemACIDProperties:
             venv_path=f"/tmp/venv-{exec_id}",
         )
         
-        event = setup["outbox_repository"].add(MockOutboxEvent(
+        event = setup["outbox_repository"].add(create_cross_system_event(
             event_id=f"durable-event-{exec_id}",
-            event_type="DURABLE_TEST",
+            event_type_name="DURABLE_TEST",
             aggregate_type="Execution",
             aggregate_id=exec_id,
         ))
@@ -850,7 +950,7 @@ class TestCrossSystemACIDProperties:
         
         retrieved_event = setup["outbox_repository"].get_by_id(f"durable-event-{exec_id}")
         assert retrieved_event is not None
-        assert retrieved_event.status == "processed"
+        assert retrieved_event.status.value == "processed"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -883,9 +983,9 @@ class TestFailureRecovery:
         )
         
         # Record failure event
-        failure_event = MockOutboxEvent(
+        failure_event = create_cross_system_event(
             event_id=f"failure-{exec_id}",
-            event_type="EXECUTION_FAILED",
+            event_type_name="EXECUTION_FAILED",
             aggregate_type="Execution",
             aggregate_id=exec_id,
             payload={
@@ -927,9 +1027,9 @@ class TestFailureRecovery:
         )
         
         # Create recovery event
-        recovery_event = MockOutboxEvent(
+        recovery_event = create_cross_system_event(
             event_id=f"recovery-{exec_id}",
-            event_type="EXECUTION_RECOVERED",
+            event_type_name="EXECUTION_RECOVERED",
             aggregate_type="Execution",
             aggregate_id=exec_id,
             payload={

@@ -1,5 +1,5 @@
 """
-Integration tests for Batch Testing and Parallel Execution Transaction Consistency.
+Unit tests for Batch Testing and Parallel Execution Transaction Consistency.
 
 Tests outbox transaction consistency during:
 - Batch test execution with multiple variants
@@ -15,6 +15,11 @@ ACID Compliance Focus:
 - Isolation: Workers don't interfere with each other
 - Durability: All results persisted correctly
 
+REFACTORED (2026-01-28):
+- Now uses REAL OutboxEvent domain types
+- Uses centralized mock infrastructure from tests.mocks
+- Tests pass with both mock and real implementations
+
 Run with: pytest tests/test_outbox_transaction_consistency/test_batch_parallel.py -v
 """
 
@@ -26,19 +31,95 @@ from datetime import datetime
 from typing import Dict, Any, List
 from unittest.mock import Mock, MagicMock
 
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
+
+# Import test helpers
 from tests.test_outbox_transaction_consistency.helpers import (
     BatchTestState,
     ParallelExecutionState,
     create_batch_test_state,
     create_parallel_state,
-    MockOutboxEvent,
-    MockCommit,
+)
+
+# Import centralized mocks and utilities
+from tests.mocks import (
     MockMemento,
-    MockActor,
-    verify_outbox_consistency,
-    verify_transaction_atomicity,
+    create_test_outbox_event,
     generate_batch_test_variants,
 )
+from tests.mocks.services import verify_outbox_consistency, verify_transaction_atomicity
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helper Function for Creating Test Events
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def create_batch_outbox_event(
+    event_id: str,
+    event_type_name: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    payload: Dict[str, Any] = None,
+) -> OutboxEvent:
+    """
+    Create an OutboxEvent for batch testing.
+    
+    This helper bridges old string-based event types to proper enums.
+    Maps custom event type names to appropriate OutboxEventType enums.
+    
+    Args:
+        event_id: Unique event ID
+        event_type_name: String name for event type (for backward compatibility)
+        aggregate_type: Type of aggregate
+        aggregate_id: ID of aggregate
+        payload: Event payload
+        
+    Returns:
+        Real OutboxEvent instance
+    """
+    # Map common test event type strings to real enums
+    type_mapping = {
+        "BATCH_TEST_STARTED": OutboxEventType.BATCH_TEST_CREATED,
+        "BATCH_TEST_COMPLETED": OutboxEventType.BATCH_TEST_CREATED,
+        "BATCH_TEST_CANCELLED": OutboxEventType.BATCH_TEST_CANCELLED,
+        "VARIANT_EXECUTION_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "TASK_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "PARALLEL_TASK_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "ACTOR_POOL_CREATED": OutboxEventType.RAY_EVENT,
+        "ACTOR_FAILED": OutboxEventType.RAY_EVENT,
+        "ACTOR_REPLACED": OutboxEventType.RAY_EVENT,
+        "TASK_ASSIGNED": OutboxEventType.RAY_EVENT,
+        "RESULTS_AGGREGATED": OutboxEventType.CHECKPOINT_VERIFY,
+    }
+    
+    # Get the enum type, default to CHECKPOINT_CREATE for unknown types
+    event_type = type_mapping.get(event_type_name, OutboxEventType.CHECKPOINT_CREATE)
+    
+    event = OutboxEvent(
+        event_id=event_id,
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        payload=payload or {},
+    )
+    # Store original type name for backward-compatible comparisons
+    event.payload["_event_type_name"] = event_type_name
+    return event
+
+
+def event_type_matches(event: OutboxEvent, type_name: str) -> bool:
+    """
+    Check if event matches a given type name.
+    
+    Supports both enum comparisons and backward-compatible string names.
+    """
+    # Check if original type name was stored
+    if "_event_type_name" in event.payload:
+        return event.payload["_event_type_name"] == type_name
+    # Fall back to enum value comparison
+    return event.event_type.value == type_name.lower()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -57,12 +138,12 @@ class TestBatchTestExecutionConsistency:
         """Batch test start should create outbox event."""
         batch_test_id = "bt-start-1"
         
-        # Create batch start event
-        start_event = MockOutboxEvent(
-            event_id=f"batch-start-{batch_test_id}",
-            event_type="BATCH_TEST_STARTED",
+        # Create batch start event using REAL OutboxEvent
+        start_event = create_test_outbox_event(
+            event_type=OutboxEventType.BATCH_TEST_CREATED,
             aggregate_type="BatchTest",
             aggregate_id=batch_test_id,
+            event_id=f"batch-start-{batch_test_id}",
             payload={
                 "workflow_id": "wf-1",
                 "variant_count": 5,
@@ -97,10 +178,10 @@ class TestBatchTestExecutionConsistency:
             
             result = batch_test_compiled_graph.invoke(state, config)
             
-            # Create variant completion event
-            event = MockOutboxEvent(
+            # Create variant completion event using the helper for backward compatibility
+            event = create_batch_outbox_event(
                 event_id=f"variant-complete-{batch_test_id}-{i}",
-                event_type="VARIANT_EXECUTION_COMPLETED",
+                event_type_name="VARIANT_EXECUTION_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
                 payload={
@@ -113,7 +194,7 @@ class TestBatchTestExecutionConsistency:
         
         # Verify all variant events created
         all_events = outbox_repository.list_all()
-        variant_events = [e for e in all_events if e.event_type == "VARIANT_EXECUTION_COMPLETED"]
+        variant_events = [e for e in all_events if event_type_matches(e, "VARIANT_EXECUTION_COMPLETED")]
         assert len(variant_events) == 3
     
     def test_batch_test_completion_event(
@@ -125,18 +206,18 @@ class TestBatchTestExecutionConsistency:
         
         # Simulate variant completions
         for i in range(5):
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"var-{batch_test_id}-{i}",
-                event_type="VARIANT_EXECUTION_COMPLETED",
+                event_type_name="VARIANT_EXECUTION_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
                 payload={"variant_index": i, "success": True},
             ))
         
         # Create completion event
-        completion_event = MockOutboxEvent(
+        completion_event = create_batch_outbox_event(
             event_id=f"batch-complete-{batch_test_id}",
-            event_type="BATCH_TEST_COMPLETED",
+            event_type_name="BATCH_TEST_COMPLETED",
             aggregate_type="BatchTest",
             aggregate_id=batch_test_id,
             payload={
@@ -252,9 +333,9 @@ class TestParallelWorkerConsistency:
         
         def create_event(event_id: int):
             try:
-                event = MockOutboxEvent(
+                event = create_batch_outbox_event(
                     event_id=f"parallel-event-{event_id}",
-                    event_type="PARALLEL_TASK_COMPLETED",
+                    event_type_name="PARALLEL_TASK_COMPLETED",
                     aggregate_type="Task",
                     aggregate_id=f"task-{event_id}",
                 )
@@ -301,9 +382,9 @@ class TestRayActorPoolConsistency:
             )
         
         # Create pool event
-        pool_event = MockOutboxEvent(
+        pool_event = create_batch_outbox_event(
             event_id=f"pool-created-{batch_test_id}",
-            event_type="ACTOR_POOL_CREATED",
+            event_type_name="ACTOR_POOL_CREATED",
             aggregate_type="ActorPool",
             aggregate_id=batch_test_id,
             payload={
@@ -346,9 +427,9 @@ class TestRayActorPoolConsistency:
             task_assignments[actor_id].append(task_id)
             
             # Create task assignment event
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"task-assign-{task_id}",
-                event_type="TASK_ASSIGNED",
+                event_type_name="TASK_ASSIGNED",
                 aggregate_type="Task",
                 aggregate_id=str(task_id),
                 payload={
@@ -380,9 +461,9 @@ class TestRayActorPoolConsistency:
         actor_pool.kill_actor("actor-fail-1")
         
         # Create failure event
-        failure_event = MockOutboxEvent(
+        failure_event = create_batch_outbox_event(
             event_id="actor-failure-event-1",
-            event_type="ACTOR_FAILED",
+            event_type_name="ACTOR_FAILED",
             aggregate_type="Actor",
             aggregate_id="actor-fail-1",
             payload={
@@ -401,9 +482,9 @@ class TestRayActorPoolConsistency:
         )
         
         # Create replacement event
-        replacement_event = MockOutboxEvent(
+        replacement_event = create_batch_outbox_event(
             event_id="actor-replacement-event-1",
-            event_type="ACTOR_REPLACED",
+            event_type_name="ACTOR_REPLACED",
             aggregate_type="Actor",
             aggregate_id="actor-fail-1-replacement",
             payload={
@@ -437,9 +518,9 @@ class TestResultAggregationConsistency:
         results = []
         for i in range(5):
             success = i != 2  # Variant 2 fails
-            event = MockOutboxEvent(
+            event = create_batch_outbox_event(
                 event_id=f"var-result-{i}",
-                event_type="VARIANT_EXECUTION_COMPLETED",
+                event_type_name="VARIANT_EXECUTION_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
                 payload={
@@ -459,9 +540,9 @@ class TestResultAggregationConsistency:
         avg_duration = sum(r["duration"] for r in results) / len(results)
         
         # Create aggregation event
-        agg_event = MockOutboxEvent(
+        agg_event = create_batch_outbox_event(
             event_id=f"aggregate-{batch_test_id}",
-            event_type="RESULTS_AGGREGATED",
+            event_type_name="RESULTS_AGGREGATED",
             aggregate_type="BatchTest",
             aggregate_id=batch_test_id,
             payload={
@@ -487,18 +568,18 @@ class TestResultAggregationConsistency:
         
         # Some variants complete
         for i in range(3):
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"var-partial-{i}",
-                event_type="VARIANT_EXECUTION_COMPLETED",
+                event_type_name="VARIANT_EXECUTION_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
                 payload={"variant_index": i, "success": True},
             ))
         
         # Cancellation
-        cancel_event = MockOutboxEvent(
+        cancel_event = create_batch_outbox_event(
             event_id=f"cancel-{batch_test_id}",
-            event_type="BATCH_TEST_CANCELLED",
+            event_type_name="BATCH_TEST_CANCELLED",
             aggregate_type="BatchTest",
             aggregate_id=batch_test_id,
             payload={
@@ -511,7 +592,7 @@ class TestResultAggregationConsistency:
         
         # Verify partial results preserved
         all_events = outbox_repository.list_all()
-        completed = [e for e in all_events if e.event_type == "VARIANT_EXECUTION_COMPLETED"]
+        completed = [e for e in all_events if event_type_matches(e, "VARIANT_EXECUTION_COMPLETED")]
         assert len(completed) == 3
 
 
@@ -535,18 +616,18 @@ class TestConcurrentBatchTestConsistency:
         
         def run_batch(batch_id: str):
             # Start event
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"start-{batch_id}",
-                event_type="BATCH_TEST_STARTED",
+                event_type_name="BATCH_TEST_STARTED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_id,
             ))
             
             # Variant events
             for i in range(3):
-                outbox_repository.add(MockOutboxEvent(
+                outbox_repository.add(create_batch_outbox_event(
                     event_id=f"var-{batch_id}-{i}",
-                    event_type="VARIANT_EXECUTION_COMPLETED",
+                    event_type_name="VARIANT_EXECUTION_COMPLETED",
                     aggregate_type="BatchTest",
                     aggregate_id=batch_id,
                     payload={"variant_index": i},
@@ -555,9 +636,9 @@ class TestConcurrentBatchTestConsistency:
                     results[batch_id].append(i)
             
             # Complete event
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"complete-{batch_id}",
-                event_type="BATCH_TEST_COMPLETED",
+                event_type_name="BATCH_TEST_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_id,
             ))
@@ -643,9 +724,9 @@ class TestBatchParallelACIDCompliance:
         
         try:
             # Start
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"start-{batch_test_id}",
-                event_type="BATCH_TEST_STARTED",
+                event_type_name="BATCH_TEST_STARTED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
             ))
@@ -653,18 +734,18 @@ class TestBatchParallelACIDCompliance:
             
             # All variants
             for i in range(3):
-                outbox_repository.add(MockOutboxEvent(
+                outbox_repository.add(create_batch_outbox_event(
                     event_id=f"var-{batch_test_id}-{i}",
-                    event_type="VARIANT_EXECUTION_COMPLETED",
+                    event_type_name="VARIANT_EXECUTION_COMPLETED",
                     aggregate_type="BatchTest",
                     aggregate_id=batch_test_id,
                 ))
                 operations.append((f"variant_{i}", True))
             
             # Complete
-            outbox_repository.add(MockOutboxEvent(
+            outbox_repository.add(create_batch_outbox_event(
                 event_id=f"complete-{batch_test_id}",
-                event_type="BATCH_TEST_COMPLETED",
+                event_type_name="BATCH_TEST_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
             ))
@@ -723,9 +804,9 @@ class TestBatchParallelACIDCompliance:
         
         def create_events(exec_id: str, unique_data: str):
             for i in range(3):
-                event = MockOutboxEvent(
+                event = create_batch_outbox_event(
                     event_id=f"event-{exec_id}-{i}",
-                    event_type="TASK_COMPLETED",
+                    event_type_name="TASK_COMPLETED",
                     aggregate_type="Execution",
                     aggregate_id=exec_id,
                     payload={"data": unique_data, "step": i},
@@ -764,9 +845,9 @@ class TestBatchParallelACIDCompliance:
         # Create events
         event_ids = []
         for i in range(10):
-            event = MockOutboxEvent(
+            event = create_batch_outbox_event(
                 event_id=f"durable-{batch_test_id}-{i}",
-                event_type="VARIANT_EXECUTION_COMPLETED",
+                event_type_name="VARIANT_EXECUTION_COMPLETED",
                 aggregate_type="BatchTest",
                 aggregate_id=batch_test_id,
             )
@@ -779,4 +860,5 @@ class TestBatchParallelACIDCompliance:
         for event_id in event_ids:
             saved = outbox_repository.get_by_id(event_id)
             assert saved is not None
-            assert saved.status == "processed"
+            # Compare against enum value (works with both enum and string)
+            assert saved.status.value == "processed" or saved.status == OutboxStatus.PROCESSED

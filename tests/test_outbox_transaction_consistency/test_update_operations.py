@@ -27,20 +27,81 @@ from unittest.mock import Mock, MagicMock, patch
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+
+# Import test helpers
 from tests.test_outbox_transaction_consistency.helpers import (
     SimpleState,
     TransactionState,
     create_simple_state,
     create_transaction_state,
-    MockOutboxEvent,
-    MockCheckpoint,
-    verify_outbox_consistency,
-    verify_transaction_atomicity,
     node_a,
     node_b,
     node_c,
     node_d,
 )
+
+# Import centralized mocks
+from tests.mocks.services import (
+    verify_outbox_consistency,
+    verify_transaction_atomicity,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Helper Functions for Test Events
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def create_update_event(
+    event_id: str,
+    event_type_name: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    payload: Dict[str, Any] = None,
+) -> OutboxEvent:
+    """
+    Create an OutboxEvent for update operation testing.
+    
+    Maps string event type names to proper OutboxEventType enums.
+    """
+    type_mapping = {
+        "NODE_UPDATED": OutboxEventType.STATE_MODIFIED,
+        "NODE_UPDATE_VERIFIED": OutboxEventType.CHECKPOINT_VERIFY,
+        "WORKFLOW_UPDATED": OutboxEventType.WORKFLOW_CREATED,
+        "WORKFLOW_VERSION_CREATED": OutboxEventType.WORKFLOW_CREATED,
+        "CONFIG_UPDATED": OutboxEventType.STATE_MODIFIED,
+        "HOT_RELOAD_COMPLETED": OutboxEventType.STATE_MODIFIED,
+        "HOT_RELOAD_PREPARING": OutboxEventType.STATE_MODIFIED,
+        "HOT_RELOAD_SWAPPING": OutboxEventType.STATE_MODIFIED,
+        "HOT_RELOAD_VERIFYING": OutboxEventType.STATE_MODIFIED,
+        "UPDATE_COMPLETED": OutboxEventType.CHECKPOINT_SAVED,
+        "CONFIG_BATCH_UPDATED": OutboxEventType.STATE_MODIFIED,
+        "EXECUTION_UPDATE_COMMITTED": OutboxEventType.STATE_MODIFIED,
+        "CONCURRENT_UPDATE": OutboxEventType.STATE_MODIFIED,
+        "UPDATE_DURABLY_STORED": OutboxEventType.CHECKPOINT_SAVED,
+        "WORKFLOW_UPDATE_QUEUED": OutboxEventType.STATE_MODIFIED,
+    }
+    
+    event_type = type_mapping.get(event_type_name, OutboxEventType.STATE_MODIFIED)
+    
+    event = OutboxEvent(
+        event_id=event_id,
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        payload=payload or {},
+    )
+    event.payload["_event_type_name"] = event_type_name
+    return event
+
+
+def event_type_matches(event: OutboxEvent, type_name: str) -> bool:
+    """Check if event matches a given type name."""
+    if "_event_type_name" in event.payload:
+        return event.payload["_event_type_name"] == type_name
+    return event.event_type.value == type_name.lower()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -80,9 +141,9 @@ class TestNodeUpdateTransactionConsistency:
         )
         
         # Create outbox event for node update
-        update_event = MockOutboxEvent(
+        update_event = create_update_event(
             event_id="node-update-event-1",
-            event_type="NODE_UPDATED",
+            event_type_name="NODE_UPDATED",
             aggregate_type="WorkflowNode",
             aggregate_id="node_b",
             payload={
@@ -173,9 +234,9 @@ class TestNodeUpdateTransactionConsistency:
             operations.append(("checkpoint", True))
             
             # Step 2: Create outbox event
-            event = MockOutboxEvent(
+            event = create_update_event(
                 event_id="update-atomic-1",
-                event_type="NODE_UPDATED",
+                event_type_name="NODE_UPDATED",
                 aggregate_type="WorkflowNode",
                 aggregate_id="node_b",
             )
@@ -240,9 +301,9 @@ class TestWorkflowUpdateTransactionConsistency:
         updated_graph = updated.compile(checkpointer=memory_checkpointer)
         
         # Create update event
-        update_event = MockOutboxEvent(
+        update_event = create_update_event(
             event_id="wf-update-event-1",
-            event_type="WORKFLOW_UPDATED",
+            event_type_name="WORKFLOW_UPDATED",
             aggregate_type="Workflow",
             aggregate_id="wf-1",
             payload={
@@ -291,9 +352,9 @@ class TestWorkflowUpdateTransactionConsistency:
         )
         
         # Create workflow update event (should be queued, not immediate)
-        update_event = MockOutboxEvent(
+        update_event = create_update_event(
             event_id="wf-running-update-1",
-            event_type="WORKFLOW_UPDATE_QUEUED",
+            event_type_name="WORKFLOW_UPDATE_QUEUED",
             aggregate_type="Workflow",
             aggregate_id="wf-1",
             payload={
@@ -305,7 +366,7 @@ class TestWorkflowUpdateTransactionConsistency:
         outbox_repository.add(update_event)
         
         # Verify event is pending
-        assert update_event.status == "pending"
+        assert update_event.status.value == "pending"
     
     def test_workflow_version_consistency(
         self,
@@ -316,9 +377,9 @@ class TestWorkflowUpdateTransactionConsistency:
         
         # Create sequence of version events
         for v in [1, 2, 3]:
-            event = MockOutboxEvent(
+            event = create_update_event(
                 event_id=f"version-event-{v}",
-                event_type="WORKFLOW_VERSION_CREATED",
+                event_type_name="WORKFLOW_VERSION_CREATED",
                 aggregate_type="Workflow",
                 aggregate_id="wf-1",
                 payload={
@@ -366,9 +427,9 @@ class TestConfigurationUpdateConsistency:
         }
         
         # Create config update event
-        config_event = MockOutboxEvent(
+        config_event = create_update_event(
             event_id="config-update-1",
-            event_type="CONFIG_UPDATED",
+            event_type_name="CONFIG_UPDATED",
             aggregate_type="RuntimeConfig",
             aggregate_id="config-1",
             payload={
@@ -400,9 +461,9 @@ class TestConfigurationUpdateConsistency:
         result1 = batch_test_compiled_graph.invoke(state1, config1)
         
         # Create config update event
-        outbox_repository.add(MockOutboxEvent(
+        outbox_repository.add(create_update_event(
             event_id="config-update-exec-1",
-            event_type="CONFIG_UPDATED",
+            event_type_name="CONFIG_UPDATED",
             aggregate_type="RuntimeConfig",
             aggregate_id="global",
             payload={"batch_size": {"from": 32, "to": 64}},
@@ -478,15 +539,15 @@ class TestHotReloadConsistency:
         events = []
         
         # Sequence: prepare -> swap -> verify
-        for i, event_type in enumerate([
+        for i, event_type_str in enumerate([
             "HOT_RELOAD_PREPARING",
             "HOT_RELOAD_SWAPPING",
             "HOT_RELOAD_VERIFYING",
             "HOT_RELOAD_COMPLETED",
         ]):
-            event = MockOutboxEvent(
+            event = create_update_event(
                 event_id=f"reload-{i}",
-                event_type=event_type,
+                event_type_name=event_type_str,
                 aggregate_type="Workflow",
                 aggregate_id="wf-1",
                 payload={"step": i},
@@ -497,8 +558,8 @@ class TestHotReloadConsistency:
         
         # Verify ordering
         saved = sorted(outbox_repository.list_all(), key=lambda e: e.created_at)
-        assert saved[0].event_type == "HOT_RELOAD_PREPARING"
-        assert saved[-1].event_type == "HOT_RELOAD_COMPLETED"
+        assert event_type_matches(saved[0], "HOT_RELOAD_PREPARING")
+        assert event_type_matches(saved[-1], "HOT_RELOAD_COMPLETED")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -518,9 +579,9 @@ class TestConcurrentUpdateConsistency:
         lock = threading.Lock()
         
         def update_node(update_id: int):
-            event = MockOutboxEvent(
+            event = create_update_event(
                 event_id=f"concurrent-update-{update_id}",
-                event_type="NODE_UPDATED",
+                event_type_name="NODE_UPDATED",
                 aggregate_type="WorkflowNode",
                 aggregate_id="node_b",
                 payload={"update_id": update_id},
@@ -550,9 +611,9 @@ class TestConcurrentUpdateConsistency:
         
         def update_workflow():
             for i in range(5):
-                event = MockOutboxEvent(
+                event = create_update_event(
                     event_id=f"wf-update-{i}",
-                    event_type="WORKFLOW_UPDATED",
+                    event_type_name="WORKFLOW_UPDATED",
                     aggregate_type="Workflow",
                     aggregate_id="wf-1",
                 )
@@ -562,9 +623,9 @@ class TestConcurrentUpdateConsistency:
         
         def update_node():
             for i in range(5):
-                event = MockOutboxEvent(
+                event = create_update_event(
                     event_id=f"node-update-{i}",
-                    event_type="NODE_UPDATED",
+                    event_type_name="NODE_UPDATED",
                     aggregate_type="WorkflowNode",
                     aggregate_id="node_a",
                 )
@@ -610,9 +671,9 @@ class TestUpdateACIDCompliance:
             )
             operations.append(("checkpoint", True))
             
-            event = MockOutboxEvent(
+            event = create_update_event(
                 event_id="atomic-event-1",
-                event_type="UPDATE",
+                event_type_name="UPDATE",
                 aggregate_type="Workflow",
                 aggregate_id="wf-1",
             )
@@ -697,9 +758,9 @@ class TestUpdateACIDCompliance:
     ):
         """Updates should be durably persisted."""
         # Create update event
-        event = MockOutboxEvent(
+        event = create_update_event(
             event_id="durable-update-1",
-            event_type="NODE_UPDATED",
+            event_type_name="NODE_UPDATED",
             aggregate_type="WorkflowNode",
             aggregate_id="node_a",
             payload={"version": 2},
@@ -713,5 +774,5 @@ class TestUpdateACIDCompliance:
         # Verify persistence
         retrieved = outbox_repository.get_by_id("durable-update-1")
         assert retrieved is not None
-        assert retrieved.status == "processed"
+        assert retrieved.status.value == "processed"
         assert retrieved.processed_at is not None
