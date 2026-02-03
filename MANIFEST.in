@@ -1,0 +1,22 @@
+# Include package data files
+recursive-include wtb *.sql
+recursive-include wtb *.proto
+
+# Include documentation
+include README.md
+include LICENSE
+
+# Exclude non-package directories
+prune examples
+prune docs
+prune tests
+prune uv_venv_manager
+prune .cursor
+prune .git
+
+# Exclude build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.egg-info
+global-exclude .DS_Store

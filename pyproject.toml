@@ -1,18 +1,26 @@
 [project]
-name = "12-22"
+name = "wtb"
 version = "0.1.0"
-description = "Workflow Test Bench (WTB) for AgentGit v0.2"
+description = "Workflow Test Bench (WTB) - SDK for workflow testing, debugging, and orchestration"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["workflow", "testing", "langgraph", "checkpoint", "debugging"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "sqlalchemy>=2.0.0",
     "langgraph>=0.2.60",
     "langgraph-checkpoint>=2.0.10",
-    "aiofiles>=25.1.0",
-    "aiosqlite>=0.22.1",
-    "grpcio>=1.76.0",
-    "grpcio-tools>=1.76.0",
-    "protobuf>=6.33.4",
+    "aiofiles>=24.1.0",
+    "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +47,10 @@ api = [
 grpc = [
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
+    "protobuf>=4.25.0",
+]
+venv = [
+    "uv-venv-manager>=0.1.0",
 ]
 observability = [
     "opentelemetry-api>=1.22.0",
@@ -51,54 +63,42 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.23.0",
     "httpx>=0.26.0",
+    "ruff>=0.1.0",
 ]
 test = [
-    # Testing framework
     "pytest>=7.0.0",
     "pytest-asyncio>=0.23.0",
     "pytest-env>=1.1.0",
     "httpx>=0.26.0",
-    # Ray for batch testing
     "ray>=2.9.0",
     "dill>=0.3.7",
-    # gRPC for environment provider tests
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
-    # LangGraph checkpointer for integration tests
     "langgraph-checkpoint-sqlite>=2.0.5",
-    # OpenAI for LLM tests
     "openai>=1.0.0",
-    # FastAPI for REST API tests
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
 ]
 all = [
-    "ray>=2.9.0",
-    "dill>=0.3.7",
-    "prometheus-client>=0.17.0",
-    "langgraph-checkpoint-sqlite>=2.0.5",
-    "langgraph-checkpoint-postgres>=2.0.15",
-    "psycopg[binary]>=3.1.0",
-    "openai>=1.0.0",
-    "fastapi>=0.109.0",
-    "uvicorn[standard]>=0.27.0",
-    "websockets>=12.0",
-    "pydantic>=2.5.0",
-    "grpcio>=1.60.0",
-    "grpcio-tools>=1.60.0",
-    "opentelemetry-api>=1.22.0",
-    "opentelemetry-sdk>=1.22.0",
-    "opentelemetry-instrumentation-fastapi>=0.43b0",
-    "opentelemetry-exporter-otlp>=1.22.0",
-    "httpx>=0.26.0",
+    "wtb[ray,langgraph-sqlite,langgraph-postgres,llm,api,grpc,venv,observability]",
 ]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["wtb", "wtb.domain", "wtb.domain.models", "wtb.domain.interfaces", "wtb.domain.events", "wtb.application", "wtb.application.services", "wtb.infrastructure", "wtb.infrastructure.database", "wtb.infrastructure.database.repositories", "wtb.infrastructure.database.migrations", "wtb.infrastructure.adapters", "wtb.infrastructure.events", "wtb.infrastructure.environment", "wtb.infrastructure.outbox", "wtb.infrastructure.integrity", "wtb.infrastructure.stores", "wtb.api", "wtb.api.rest", "wtb.api.rest.routes", "wtb.api.websocket", "wtb.api.grpc", "wtb.sdk"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["wtb*"]
+exclude = ["examples*", "docs*", "tests*", "uv_venv_manager*"]
+
+[tool.setuptools.package-data]
+wtb = [
+    "**/*.sql",
+    "**/*.proto",
+    "infrastructure/database/migrations/*.sql",
+    "api/grpc/protos/*.proto",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -114,3 +114,6 @@ filterwarnings = [
 # Enable Ray integration tests
 RAY_E2E_TESTS = "1"
 RAY_INTEGRATION_TESTS = "1"
+
+# [tool.uv.workspace]
+# members = []

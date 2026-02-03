@@ -23,3 +23,7 @@ docs_archive/
 file_processing/
 docs/
 tests/
+
+
+examples/
+uv_venv_manager/
