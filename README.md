@@ -35,6 +35,9 @@ We mandate [uv](https://github.com/astral-sh/uv) for environment management. WTB
 - **Content-Addressable Artifacts**: All generated files and outputs are hashed and stored immutably.
 - **Variant Testing**: define multiple versions of a node (e.g., "Prompt A" vs "Prompt B") and run them competitively in the same pipeline.
 
+
+note: use RayBatchTestRunner and LangGraphStateAdapter only for deveopment.
+
 ## 📦 Installation
 
 WTB is optimized for the modern Python stack.
