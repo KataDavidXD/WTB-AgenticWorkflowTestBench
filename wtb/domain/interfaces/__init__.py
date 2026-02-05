@@ -67,6 +67,14 @@ from .batch_runner import (
     BatchRunnerConfigError,
     BatchRunnerExecutionError,
 )
+# Batch Coordinator (v1.8 - 2026-02-05)
+from .batch_coordinator import (
+    IBatchExecutionCoordinator,
+    IExecutionControllerFactory,
+    OperationType,
+    BatchOperationRequest,
+    BatchOperationResult,
+)
 from .file_tracking import (
     IFileTrackingService,
     IFileTrackingServiceFactory,
@@ -163,6 +171,12 @@ __all__ = [
     "BatchRunnerError",
     "BatchRunnerConfigError",
     "BatchRunnerExecutionError",
+    # Batch Coordinator (v1.8)
+    "IBatchExecutionCoordinator",
+    "IExecutionControllerFactory",
+    "OperationType",
+    "BatchOperationRequest",
+    "BatchOperationResult",
     # File Tracking (2026-01-15, renamed 2026-01-16)
     "IFileTrackingService",
     "IFileTrackingServiceFactory",

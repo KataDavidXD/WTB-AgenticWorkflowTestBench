@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         IBatchTestRunner,
     )
     from wtb.application.services import ProjectService, VariantService
+    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,41 @@ class ForkResult:
     source_execution_id: str
     source_checkpoint_id: str
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class BatchRollbackResult:
+    """
+    Result of rolling back a batch test result (SDK operation DTO).
+    
+    Usage:
+        result = wtb.rollback_batch_result(batch.results[0])
+        if result.success:
+            print(f"Rolled back to {result.checkpoint_id}")
+    """
+    execution_id: str
+    checkpoint_id: str
+    success: bool
+    execution: Optional[Execution] = None
+    files_restored: int = 0
+    error: Optional[str] = None
+
+
+@dataclass
+class BatchForkResult:
+    """
+    Result of forking a batch test result (SDK operation DTO).
+    
+    Usage:
+        fork = wtb.fork_batch_result(batch.results[0])
+        # Run the forked execution
+        execution = wtb.resume(fork.fork_execution_id)
+    """
+    source_execution_id: str
+    fork_execution_id: str
+    checkpoint_id: str
+    execution: Optional[Execution] = None
+    error: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -402,6 +438,208 @@ class WTBTestBench:
         except Exception as e:
             logger.error(f"Fork failed: {e}")
             raise
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Batch Rollback/Fork - NEW (v1.8)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def get_batch_coordinator(self) -> "BatchExecutionCoordinator":
+        """
+        Get or create BatchExecutionCoordinator for rollback/fork operations.
+        
+        Lazily initializes coordinator on first call.
+        Reuses same coordinator instance for efficiency (StateAdapter reuse).
+        
+        Design (SOLID):
+        - SRP: Coordinator handles batch operations, SDK provides convenient access
+        - DIP: Uses interfaces, not concrete implementations
+        
+        Usage:
+            batch = wtb.run_batch_test(...)
+            coordinator = wtb.get_batch_coordinator()
+            coordinator.rollback(batch.results[0].execution_id, checkpoint_id)
+        
+        Returns:
+            BatchExecutionCoordinator instance
+        """
+        if not hasattr(self, '_batch_coordinator') or self._batch_coordinator is None:
+            self._batch_coordinator = self._create_batch_coordinator()
+        return self._batch_coordinator
+    
+    def rollback_batch_result(
+        self,
+        result: BatchTestResult,
+        checkpoint_id: Optional[str] = None,
+    ) -> BatchRollbackResult:
+        """
+        Convenience: Rollback a batch test result to a checkpoint.
+        
+        Transaction Flow (ACID):
+        1. [UoW] Restore state via ExecutionController
+        2. [UoW] Emit outbox event for audit
+        3. [UoW] Commit transaction
+        4. [Post-commit] Restore files (best-effort, retryable)
+        
+        Args:
+            result: BatchTestResult from run_batch_test()
+            checkpoint_id: Checkpoint ID to rollback to.
+                          Defaults to result.last_checkpoint_id if not provided.
+            
+        Returns:
+            BatchRollbackResult with execution and file restore status
+            
+        Raises:
+            ValueError: If result has no execution_id or no checkpoint available
+            
+        Example:
+            # Rollback to last checkpoint (most common)
+            wtb.rollback_batch_result(batch.results[0])
+            
+            # Rollback to specific checkpoint
+            wtb.rollback_batch_result(batch.results[0], checkpoint_id="abc-123")
+        """
+        if not result.execution_id:
+            raise ValueError("BatchTestResult has no execution_id")
+        
+        # Use provided checkpoint_id or default to last_checkpoint_id
+        cp_id = checkpoint_id or result.last_checkpoint_id
+        if not cp_id:
+            raise ValueError(
+                "No checkpoint_id provided and result has no last_checkpoint_id. "
+                "Use get_batch_result_checkpoints() to list available checkpoints."
+            )
+        
+        try:
+            coordinator = self.get_batch_coordinator()
+            execution = coordinator.rollback(result.execution_id, cp_id)
+            
+            return BatchRollbackResult(
+                execution_id=result.execution_id,
+                checkpoint_id=cp_id,
+                success=True,
+                execution=execution,
+            )
+        except Exception as e:
+            logger.error(f"Batch rollback failed: {e}")
+            return BatchRollbackResult(
+                execution_id=result.execution_id,
+                checkpoint_id=cp_id,
+                success=False,
+                error=str(e),
+            )
+    
+    def fork_batch_result(
+        self,
+        result: BatchTestResult,
+        checkpoint_id: Optional[str] = None,
+        new_state: Optional[Dict[str, Any]] = None,
+    ) -> BatchForkResult:
+        """
+        Convenience: Fork a batch test result from a checkpoint.
+        
+        Creates a new execution starting from the checkpoint state.
+        Original execution is unchanged (non-destructive operation).
+        
+        Transaction Flow (ACID):
+        1. [UoW] Create new execution from checkpoint state
+        2. [UoW] Emit EXECUTION_FORKED outbox event
+        3. [UoW] Commit transaction
+        
+        Args:
+            result: BatchTestResult from run_batch_test()
+            checkpoint_id: Checkpoint ID to fork from.
+                          Defaults to result.last_checkpoint_id if not provided.
+            new_state: Optional state to merge with checkpoint state
+            
+        Returns:
+            BatchForkResult with new execution details
+            
+        Example:
+            # Fork from last checkpoint
+            fork = wtb.fork_batch_result(batch.results[0])
+            
+            # Fork from specific checkpoint with modified state
+            fork = wtb.fork_batch_result(
+                batch.results[0], 
+                checkpoint_id="abc-123",
+                new_state={"temperature": 0.5}
+            )
+        """
+        if not result.execution_id:
+            raise ValueError("BatchTestResult has no execution_id")
+        
+        # Use provided checkpoint_id or default to last_checkpoint_id
+        cp_id = checkpoint_id or result.last_checkpoint_id
+        if not cp_id:
+            raise ValueError(
+                "No checkpoint_id provided and result has no last_checkpoint_id. "
+                "Use get_batch_result_checkpoints() to list available checkpoints."
+            )
+        
+        try:
+            coordinator = self.get_batch_coordinator()
+            forked = coordinator.fork(result.execution_id, cp_id, new_state)
+            
+            return BatchForkResult(
+                source_execution_id=result.execution_id,
+                fork_execution_id=forked.id,
+                checkpoint_id=cp_id,
+                execution=forked,
+            )
+        except Exception as e:
+            logger.error(f"Batch fork failed: {e}")
+            return BatchForkResult(
+                source_execution_id=result.execution_id,
+                fork_execution_id="",
+                checkpoint_id=cp_id,
+                error=str(e),
+            )
+    
+    def get_batch_result_checkpoints(
+        self,
+        result: BatchTestResult,
+    ) -> List[Checkpoint]:
+        """
+        Get checkpoints for a batch test result.
+        
+        Convenience method to list available checkpoints for rollback/fork.
+        
+        Args:
+            result: BatchTestResult from run_batch_test()
+            
+        Returns:
+            List of Checkpoint objects
+            
+        Example:
+            checkpoints = wtb.get_batch_result_checkpoints(batch.results[0])
+            for cp in checkpoints:
+                print(f"Checkpoint {cp.id} at step {cp.step}")
+        """
+        if not result.execution_id:
+            return []
+        return self.get_checkpoints(result.execution_id)
+    
+    def _create_batch_coordinator(self) -> "BatchExecutionCoordinator":
+        """
+        Create BatchExecutionCoordinator with current configuration.
+        
+        Design (DIP + Layer Separation):
+        - Prefers using batch_runner's factory if available (shares config)
+        - Falls back to Application layer factory (NOT infrastructure)
+        - SDK never directly instantiates infrastructure components
+        """
+        # Prefer batch_runner's factory (shares configuration)
+        if self._batch_runner and hasattr(self._batch_runner, 'create_rollback_coordinator'):
+            return self._batch_runner.create_rollback_coordinator()
+        
+        # Fallback: delegate to Application layer factory (proper layer separation)
+        logger.warning(
+            "Creating BatchExecutionCoordinator without batch_runner - "
+            "using Application factory with default configuration"
+        )
+        
+        from wtb.application.factories import BatchCoordinatorFactory
+        return BatchCoordinatorFactory.create_default()
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Variant Management - Delegates to VariantService

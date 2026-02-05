@@ -56,6 +56,9 @@ class OutboxEventType(Enum):
     WORKFLOW_CREATED = "workflow_created"
     BATCH_TEST_CREATED = "batch_test_created"
     BATCH_TEST_CANCELLED = "batch_test_cancelled"
+    
+    # Batch coordination events (v1.8 - 2026-02-05)
+    EXECUTION_FORKED = "execution_forked"
 
 
 class OutboxStatus(Enum):

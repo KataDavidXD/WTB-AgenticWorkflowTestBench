@@ -53,6 +53,14 @@ class VariantCombination:
 class BatchTestResult:
     """
     Value Object - Results from a single variant combination run.
+    
+    v1.8 (2026-02-05): Added rollback support fields:
+    - file_commit_id: FileTracker commit ID for file restoration
+    - checkpoint_count: Number of checkpoints created during execution
+    - last_checkpoint_id: Most recent checkpoint ID for rollback operations
+    
+    These fields enable BatchExecutionCoordinator to perform rollback/fork
+    operations without information loss from Ray actor results.
     """
     combination_name: str
     execution_id: str
@@ -61,6 +69,10 @@ class BatchTestResult:
     overall_score: float = 0.0
     duration_ms: int = 0
     error_message: Optional[str] = None
+    # v1.8: Rollback support fields
+    file_commit_id: Optional[str] = None      # FileTracker commit ID
+    checkpoint_count: int = 0                  # Number of checkpoints
+    last_checkpoint_id: Optional[str] = None   # Most recent checkpoint ID
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -71,6 +83,10 @@ class BatchTestResult:
             "overall_score": self.overall_score,
             "duration_ms": self.duration_ms,
             "error_message": self.error_message,
+            # v1.8: Rollback support fields
+            "file_commit_id": self.file_commit_id,
+            "checkpoint_count": self.checkpoint_count,
+            "last_checkpoint_id": self.last_checkpoint_id,
         }
     
     @classmethod
@@ -83,6 +99,10 @@ class BatchTestResult:
             overall_score=data.get("overall_score", 0.0),
             duration_ms=data.get("duration_ms", 0),
             error_message=data.get("error_message"),
+            # v1.8: Rollback support fields
+            file_commit_id=data.get("file_commit_id"),
+            checkpoint_count=data.get("checkpoint_count", 0),
+            last_checkpoint_id=data.get("last_checkpoint_id"),
         )
 
 
@@ -197,6 +217,10 @@ class BatchTest:
                 "success": result.success,
                 "overall_score": result.overall_score,
                 "duration_ms": result.duration_ms,
+                # v1.8: Rollback support fields for coordinator access
+                "file_commit_id": result.file_commit_id,
+                "checkpoint_count": result.checkpoint_count,
+                "last_checkpoint_id": result.last_checkpoint_id,
             }
             for metric in all_metrics:
                 row[metric] = result.metrics.get(metric)

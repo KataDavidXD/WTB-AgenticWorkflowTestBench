@@ -105,4 +105,18 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
     def session(self) -> Optional[Session]:
         """Get the current session (for advanced usage)."""
         return self._session
+    
+    def dispose(self):
+        """
+        Dispose the engine and release all resources.
+        
+        Call this when the UoW is no longer needed to properly release
+        database file locks (especially important on Windows with SQLite).
+        """
+        if self._session:
+            self._session.close()
+            self._session = None
+        if self._engine:
+            self._engine.dispose()
+            self._engine = None
 

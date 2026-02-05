@@ -47,8 +47,20 @@ from .test_bench import (
     # SDK operation results (thin DTOs, not domain models)
     RollbackResult,
     ForkResult,
+    BatchRollbackResult,   # NEW v1.8: Batch rollback result
+    BatchForkResult,       # NEW v1.8: Batch fork result
     # Deprecated
     ExecutionControllerBuilder,
+)
+
+# Re-export coordinator for advanced use (v1.8)
+from wtb.application.services.batch_execution_coordinator import (
+    BatchExecutionCoordinator,
+)
+from wtb.domain.interfaces.batch_coordinator import (
+    BatchOperationRequest,
+    BatchOperationResult,
+    OperationType,
 )
 
 # Re-export domain models for convenience (single import location)
@@ -85,6 +97,13 @@ __all__ = [
     # SDK operation results (thin DTOs)
     "RollbackResult",
     "ForkResult",
+    "BatchRollbackResult",   # NEW v1.8
+    "BatchForkResult",       # NEW v1.8
+    # Batch coordinator (advanced use)
+    "BatchExecutionCoordinator",
+    "BatchOperationRequest",
+    "BatchOperationResult",
+    "OperationType",
     # Deprecated
     "ExecutionControllerBuilder",
 ]

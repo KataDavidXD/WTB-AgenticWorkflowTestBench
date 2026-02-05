@@ -22,6 +22,7 @@ from contextlib import contextmanager
 
 if TYPE_CHECKING:
     from wtb.sdk.test_bench import WTBTestBench
+    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
 
 from wtb.domain.interfaces.state_adapter import IStateAdapter
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
@@ -412,6 +413,128 @@ class BatchTestRunnerFactory:
             controller_factory=controller_factory,
             max_workers=max_workers,
             execution_timeout_seconds=60.0,
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BatchCoordinator Factory (v1.8)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class BatchCoordinatorFactory:
+    """
+    Factory for creating BatchExecutionCoordinator.
+    
+    Design (v1.8):
+    - Application layer factory handles all infrastructure wiring
+    - SDK layer calls this factory (not infrastructure directly)
+    - Ensures proper DIP compliance
+    
+    ACID Compliance:
+    - UoW factory creates fresh UoW for each operation (Isolation)
+    - Coordinator manages transaction boundaries (Atomicity)
+    """
+    
+    @staticmethod
+    def create_default(config: Optional[WTBConfig] = None) -> "BatchExecutionCoordinator":
+        """
+        Create BatchExecutionCoordinator with default configuration.
+        
+        Args:
+            config: WTB configuration (defaults to global config)
+            
+        Returns:
+            BatchExecutionCoordinator with properly wired dependencies
+        """
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+            DefaultExecutionControllerFactory,
+        )
+        
+        if config is None:
+            config = get_config()
+        
+        # Create UoW factory using Application layer factory (not direct infrastructure)
+        def uow_factory() -> IUnitOfWork:
+            return UnitOfWorkFactory.create(
+                mode=config.wtb_storage_mode,
+                db_url=config.wtb_db_url,
+                echo=config.log_sql,
+            )
+        
+        # Create state adapter using existing factory method
+        state_adapter = ExecutionControllerFactory._create_state_adapter(config, None)
+        
+        return BatchExecutionCoordinator(
+            uow_factory=uow_factory,
+            controller_factory=DefaultExecutionControllerFactory(),
+            state_adapter=state_adapter,
+        )
+    
+    @staticmethod
+    def create_for_testing() -> "BatchExecutionCoordinator":
+        """
+        Create BatchExecutionCoordinator for unit tests.
+        
+        Uses in-memory dependencies.
+        """
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+            DefaultExecutionControllerFactory,
+        )
+        
+        def uow_factory() -> IUnitOfWork:
+            return InMemoryUnitOfWork()
+        
+        state_adapter = InMemoryStateAdapter()
+        
+        return BatchExecutionCoordinator(
+            uow_factory=uow_factory,
+            controller_factory=DefaultExecutionControllerFactory(),
+            state_adapter=state_adapter,
+        )
+    
+    @staticmethod
+    def create_for_development(data_dir: str = "data") -> "BatchExecutionCoordinator":
+        """
+        Create BatchExecutionCoordinator for development.
+        
+        Uses SQLite persistence with LangGraph checkpointer.
+        """
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+            DefaultExecutionControllerFactory,
+        )
+        import os
+        
+        os.makedirs(data_dir, exist_ok=True)
+        
+        db_url = f"sqlite:///{data_dir}/wtb.db"
+        
+        def uow_factory() -> IUnitOfWork:
+            return UnitOfWorkFactory.create(mode="sqlalchemy", db_url=db_url)
+        
+        # Use LangGraph state adapter if available
+        try:
+            from wtb.infrastructure.adapters.langgraph_state_adapter import (
+                LangGraphStateAdapter, 
+                LangGraphConfig,
+                LANGGRAPH_AVAILABLE,
+            )
+            if LANGGRAPH_AVAILABLE:
+                checkpoint_db_path = os.path.join(data_dir, "wtb_checkpoints.db")
+                state_adapter = LangGraphStateAdapter(
+                    LangGraphConfig.for_development(checkpoint_db_path)
+                )
+            else:
+                state_adapter = InMemoryStateAdapter()
+        except ImportError:
+            state_adapter = InMemoryStateAdapter()
+        
+        return BatchExecutionCoordinator(
+            uow_factory=uow_factory,
+            controller_factory=DefaultExecutionControllerFactory(),
+            state_adapter=state_adapter,
         )
 
 

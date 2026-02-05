@@ -62,6 +62,18 @@ except ImportError:
     VariantExecutionResult = None
     RAY_AVAILABLE = False
 
+# Batch Execution Coordinator (v1.8 - 2026-02-05)
+try:
+    from .batch_execution_coordinator import (
+        BatchExecutionCoordinator,
+        DefaultExecutionControllerFactory,
+    )
+    BATCH_COORDINATOR_AVAILABLE = True
+except ImportError:
+    BatchExecutionCoordinator = None
+    DefaultExecutionControllerFactory = None
+    BATCH_COORDINATOR_AVAILABLE = False
+
 # LangGraph node replacer (optional utility for native LangGraph development)
 try:
     from .langgraph_node_replacer import (
@@ -140,6 +152,10 @@ __all__ = [
     # Ray specific
     "VariantExecutionActor",
     "VariantExecutionResult",
+    # Batch Coordinator (v1.8)
+    "BatchExecutionCoordinator",
+    "DefaultExecutionControllerFactory",
+    "BATCH_COORDINATOR_AVAILABLE",
     # LangGraph node replacer (optional)
     "LangGraphNodeReplacer",
     "LangGraphNodeVariant",

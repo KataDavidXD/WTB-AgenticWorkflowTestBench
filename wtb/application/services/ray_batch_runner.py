@@ -85,6 +85,8 @@ from wtb.config import RayConfig
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from wtb.infrastructure.events.ray_event_bridge import RayEventBridge
+    from wtb.domain.interfaces.file_tracking import IFileTrackingService
+    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -1401,6 +1403,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 result_dict = ray.get(ref)
                 
                 # Convert to BatchTestResult
+                # v1.8: Include rollback support fields (file_commit_id, checkpoint_count, last_checkpoint_id)
                 result = BatchTestResult(
                     combination_name=result_dict.get("combination_name", "unknown"),
                     execution_id=result_dict.get("execution_id", ""),
@@ -1409,6 +1412,10 @@ class RayBatchTestRunner(IBatchTestRunner):
                     metrics=result_dict.get("metrics", {}),
                     overall_score=result_dict.get("metrics", {}).get("overall_score", 0.0),
                     error_message=result_dict.get("error"),
+                    # v1.8: Rollback support fields - preserve from actor result
+                    file_commit_id=result_dict.get("file_commit_id"),
+                    checkpoint_count=result_dict.get("checkpoint_count", 0),
+                    last_checkpoint_id=result_dict.get("last_checkpoint_id"),
                 )
                 
                 batch_test.add_result(result)
@@ -1633,3 +1640,111 @@ class RayBatchTestRunner(IBatchTestRunner):
                 logger.warning(f"Failed to get actor stats: {e}")
         
         return stats
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Rollback Coordinator Factory (v1.8)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def create_rollback_coordinator(self) -> "BatchExecutionCoordinator":
+        """
+        Create BatchExecutionCoordinator reusing this runner's configuration.
+        
+        v1.8: Factory method for creating coordinator that shares configuration
+        with the Ray batch runner for consistent rollback/fork operations.
+        
+        Usage:
+            runner = RayBatchTestRunner(config, ...)
+            result = runner.run_batch_test(batch_test)
+            
+            # After batch completes, rollback specific variants
+            coordinator = runner.create_rollback_coordinator()
+            coordinator.rollback(
+                execution_id=result.results[0].execution_id,
+                checkpoint_id=result.results[0].last_checkpoint_id,
+            )
+            
+            # Or fork for A/B exploration
+            forked = coordinator.fork(
+                execution_id=result.results[0].execution_id,
+                checkpoint_id=result.results[0].last_checkpoint_id,
+                new_state={"temperature": 0.7},
+            )
+        
+        Returns:
+            BatchExecutionCoordinator configured with runner's dependencies
+        """
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+            DefaultExecutionControllerFactory,
+        )
+        
+        return BatchExecutionCoordinator(
+            uow_factory=self._create_uow,
+            controller_factory=DefaultExecutionControllerFactory(),
+            state_adapter=self._create_shared_state_adapter(),
+            file_tracking=self._create_file_tracking_service(),
+        )
+    
+    def _create_shared_state_adapter(self) -> Optional["IStateAdapter"]:
+        """
+        Create StateAdapter with same config as actors.
+        
+        v1.8: Used by create_rollback_coordinator() for consistent state access.
+        
+        Returns:
+            IStateAdapter instance or None
+        """
+        try:
+            from wtb.infrastructure.adapters.langgraph_state_adapter import (
+                LangGraphStateAdapter,
+                LangGraphConfig,
+                LANGGRAPH_AVAILABLE,
+            )
+            
+            if LANGGRAPH_AVAILABLE:
+                return LangGraphStateAdapter(LangGraphConfig.for_development())
+            
+        except ImportError:
+            pass
+        
+        # Fallback to InMemory
+        from wtb.infrastructure.adapters import InMemoryStateAdapter
+        return InMemoryStateAdapter()
+    
+    def _create_file_tracking_service(self) -> Optional["IFileTrackingService"]:
+        """
+        Create FileTrackingService if configured.
+        
+        v1.8: Used by create_rollback_coordinator() for file restore operations.
+        
+        Returns:
+            IFileTrackingService instance or None if not configured
+        """
+        if not self._file_tracking_enabled or not self._filetracker_config:
+            return None
+        
+        try:
+            from wtb.infrastructure.file_tracking import FileTrackerService
+            from wtb.infrastructure.file_tracking.config import FileTrackingConfig
+            
+            config = FileTrackingConfig.from_dict(self._filetracker_config)
+            return FileTrackerService(config)
+        except Exception as e:
+            logger.warning(f"Failed to create file tracking service: {e}")
+            return None
+    
+    def _create_uow(self) -> "IUnitOfWork":
+        """
+        Create UnitOfWork instance.
+        
+        v1.8: Used by create_rollback_coordinator() for transaction management.
+        
+        Returns:
+            IUnitOfWork instance
+        """
+        from wtb.infrastructure.database import UnitOfWorkFactory
+        
+        return UnitOfWorkFactory.create(
+            mode="sqlalchemy" if "://" in self._wtb_db_url else "inmemory",
+            db_url=self._wtb_db_url,
+        )
