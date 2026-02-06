@@ -1,14 +1,22 @@
 """
 WTB Audit Trail - Execution/Node-level audit tracking.
 
+v1.8 (2026-02-06): Enhanced for batch rollback/fork operations.
+
 Tracks workflow execution at the WTB abstraction level:
 - Execution lifecycle (start/pause/resume/complete/fail)
 - Node execution (start/complete/fail/skip)
 - Checkpoint operations (create/rollback/branch)
+- Batch rollback/fork operations (v1.8)
 
 Differs from AgentGit AuditTrail:
 - AgentGit: Tool-level, LLM calls, fine-grained
 - WTB: Node-level, execution lifecycle, checkpoint operations
+
+v1.8 Enhancements:
+- Tracks ROLLBACK_PERFORMED and EXECUTION_FORKED events
+- Records graph factory usage for distributed execution
+- Captures checkpoint_id and last_checkpoint_id for batch results
 
 Usage:
     trail = WTBAuditTrail(execution_id="exec-1")
@@ -64,6 +72,7 @@ class WTBAuditEventType(Enum):
     CHECKPOINT_CREATED = "checkpoint_created"
     ROLLBACK_PERFORMED = "rollback_performed"
     BRANCH_CREATED = "branch_created"
+    EXECUTION_FORKED = "execution_forked"  # v1.8: Fork from checkpoint
     
     # State modifications
     STATE_MODIFIED = "state_modified"

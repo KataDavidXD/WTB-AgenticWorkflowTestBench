@@ -174,6 +174,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self,
         execution_id: str,
         checkpoint_id: str,
+        graph: Optional[Any] = None,
     ) -> "Execution":
         """
         Rollback execution to checkpoint (destructive).
@@ -189,6 +190,9 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         Args:
             execution_id: Execution to rollback
             checkpoint_id: Target checkpoint (UUID string)
+            graph: Optional LangGraph graph for state adapter (v1.8)
+                   Required if using LangGraphStateAdapter for rollback.
+                   Can be created via graph_factory().
             
         Returns:
             Execution in PAUSED state with restored checkpoint state
@@ -200,7 +204,13 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         file_commit_id: Optional[str] = None
         execution: Optional["Execution"] = None
         
-        # Phase 1: UoW Transaction
+        # v1.8: Set graph on state adapter if provided (for LangGraph rollback)
+        if graph and hasattr(self._state_adapter, 'set_workflow_graph'):
+            self._state_adapter.set_workflow_graph(graph, force_recompile=True)
+            logger.debug(f"Set graph on state adapter for rollback")
+        
+        # Single Phase: UoW Transaction (State + File Restore Outbox = ACID)
+        # Both rollback state AND file restore intent are in same transaction
         uow = self._uow_factory()
         try:
             uow.__enter__()
@@ -216,8 +226,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             # Extract file_commit_id from execution state if available
             file_commit_id = self._extract_file_commit_id(execution)
             
-            # Emit audit event via outbox
-            outbox_event = OutboxEvent.create(
+            # 1. Emit audit event via outbox (for tracking)
+            audit_event = OutboxEvent.create(
                 event_type=OutboxEventType.ROLLBACK_PERFORMED,
                 aggregate_id=execution_id,
                 aggregate_type="Execution",
@@ -228,7 +238,25 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                     "operation": "rollback",
                 },
             )
-            uow.outbox.add(outbox_event)
+            uow.outbox.add(audit_event)
+            
+            # 2. Emit file restore event via outbox (for ACID file restoration)
+            # This ensures file restoration is coordinated via outbox processor
+            if file_commit_id and self._file_tracking:
+                file_restore_event = OutboxEvent.create(
+                    event_type=OutboxEventType.ROLLBACK_FILE_RESTORE,
+                    aggregate_id=execution_id,
+                    aggregate_type="Execution",
+                    payload={
+                        "source_checkpoint_id": checkpoint_id,
+                        "target_checkpoint_id": checkpoint_id,
+                        "source_commit_id": file_commit_id,
+                        "execution_id": execution_id,
+                    },
+                )
+                uow.outbox.add(file_restore_event)
+                logger.debug(f"Queued file restore for commit {file_commit_id}")
+            
             uow.commit()
             
         except Exception as e:
@@ -238,13 +266,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         finally:
             uow.__exit__(None, None, None)
         
-        # Phase 2: Post-commit file restore (best-effort)
-        self._restore_files_post_commit(
-            file_commit_id=file_commit_id,
-            execution_id=execution_id,
-            checkpoint_id=checkpoint_id,
-            operation="rollback",
-        )
+        # No more post-commit file restore - all handled via outbox pattern
+        # OutboxProcessor will process ROLLBACK_FILE_RESTORE event
         
         return execution
     
@@ -253,6 +276,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         execution_id: str,
         checkpoint_id: str,
         new_state: Optional[Dict[str, Any]] = None,
+        graph: Optional[Any] = None,
     ) -> "Execution":
         """
         Fork execution from checkpoint (non-destructive).
@@ -266,6 +290,9 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             execution_id: Source execution to fork from
             checkpoint_id: Checkpoint to fork from
             new_state: Optional state to merge into checkpoint state
+            graph: Optional LangGraph graph for state adapter (v1.8)
+                   Required if using LangGraphStateAdapter for fork.
+                   Can be created via graph_factory().
             
         Returns:
             NEW Execution in PENDING state
@@ -274,6 +301,11 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             ValueError: If execution or checkpoint not found
             RuntimeError: If fork fails
         """
+        # v1.8: Set graph on state adapter if provided (for LangGraph fork)
+        if graph and hasattr(self._state_adapter, 'set_workflow_graph'):
+            self._state_adapter.set_workflow_graph(graph, force_recompile=True)
+            logger.debug(f"Set graph on state adapter for fork")
+        
         forked: Optional["Execution"] = None
         
         uow = self._uow_factory()
@@ -481,6 +513,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self,
         requests: List[BatchOperationRequest],
         stop_on_error: bool = False,
+        graph: Optional[Any] = None,
     ) -> List[BatchOperationResult]:
         """
         Execute batch operations.
@@ -491,6 +524,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         Args:
             requests: List of operation requests
             stop_on_error: If True, stop on first error
+            graph: Optional LangGraph graph for state adapter (v1.8)
+                   Required if using LangGraphStateAdapter.
             
         Returns:
             List of results (same order as requests)
@@ -500,7 +535,9 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         for req in requests:
             try:
                 if req.operation == OperationType.ROLLBACK:
-                    execution = self.rollback(req.execution_id, req.checkpoint_id)
+                    execution = self.rollback(
+                        req.execution_id, req.checkpoint_id, graph=graph
+                    )
                     results.append(BatchOperationResult(
                         execution_id=req.execution_id,
                         checkpoint_id=req.checkpoint_id,
@@ -511,7 +548,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                     
                 elif req.operation == OperationType.FORK:
                     execution = self.fork(
-                        req.execution_id, req.checkpoint_id, req.new_state
+                        req.execution_id, req.checkpoint_id, req.new_state, graph=graph
                     )
                     results.append(BatchOperationResult(
                         execution_id=req.execution_id,

@@ -1,10 +1,13 @@
 """
 Ray Event Bridge - Integrates Ray batch testing with WTB Event Bus and Audit.
 
+v1.8 (2026-02-06): Enhanced for rollback/fork operations with graph factory pattern.
+
 Provides transaction-consistent event publishing for Ray distributed execution:
 - Outbox pattern for ACID compliance
 - Event aggregation from Ray actors
 - Audit trail integration
+- Rollback/Fork event coordination (v1.8)
 
 Design Principles:
 - SOLID: Single responsibility (bridge events), Open for extension
@@ -22,6 +25,12 @@ Architecture:
                        │
                        ▼
                  WTBAuditTrail
+
+v1.8 Graph Factory Integration:
+- Ray actors receive graph_factory_module/name (serializable)
+- Actors import factory and create LangGraph locally
+- Enables checkpoint creation during batch execution
+- Coordinator receives graph for rollback/fork operations
 
 Usage:
     # Create bridge with UoW factory
@@ -215,6 +224,11 @@ class RayEventBridge:
         else:
             logger.info("RayEventBridge initialized without outbox (immediate publish)")
     
+    @property
+    def event_bus(self) -> WTBEventBus:
+        """Get the underlying event bus (for WorkspaceManager integration)."""
+        return self._event_bus
+    
     # ═══════════════════════════════════════════════════════════════
     # Core Event Publishing
     # ═══════════════════════════════════════════════════════════════
@@ -272,7 +286,8 @@ class RayEventBridge:
             with uow:
                 # Create outbox event
                 outbox_event = OutboxEvent(
-                    id=str(uuid.uuid4()),
+                    id=None,  # Auto-generated integer by database
+                    event_id=str(uuid.uuid4()),  # UUID for idempotency
                     event_type=OutboxEventType.RAY_EVENT,
                     aggregate_id=batch_test_id or "ray-batch",
                     aggregate_type="RayBatchTest",
@@ -280,21 +295,21 @@ class RayEventBridge:
                     created_at=datetime.now(),
                 )
                 
-                # Write to outbox (within transaction)
-                uow.outbox.add(outbox_event)
+                # Write to outbox (within transaction) - capture returned event with ID
+                outbox_event = uow.outbox.add(outbox_event)
                 uow.commit()
                 
                 # Try immediate publish (best effort)
                 try:
                     self._event_bus.publish(event)
                     
-                    # Mark as published
+                    # Mark as published (outbox_event now has database-assigned ID)
                     outbox_event.mark_published()
                     uow.outbox.update(outbox_event)
                     uow.commit()
                 except Exception as e:
-                    # Event in outbox will be processed later
-                    logger.warning(f"Immediate publish failed, event in outbox: {e}")
+                    # Event in outbox will be processed later by OutboxProcessor
+                    logger.debug(f"Event queued for async processing: {e}")
                 
                 return True
                 
@@ -330,7 +345,8 @@ class RayEventBridge:
                     with uow:
                         for event in events:
                             outbox_event = OutboxEvent(
-                                id=str(uuid.uuid4()),
+                                id=None,  # Auto-generated integer by database
+                                event_id=str(uuid.uuid4()),  # UUID for idempotency
                                 event_type=OutboxEventType.RAY_EVENT,
                                 aggregate_id=batch_test_id,
                                 aggregate_type="RayBatchTest",

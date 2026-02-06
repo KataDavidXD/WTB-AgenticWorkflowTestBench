@@ -100,9 +100,11 @@ class OutboxMapper:
             
         Returns:
             Dictionary suitable for creating ORM instance
+            
+        Note:
+            Excludes 'id' when None to let SQLAlchemy auto-generate the primary key.
         """
-        return {
-            "id": event.id,
+        result = {
             "event_id": event.event_id,
             "event_type": event.event_type.value if hasattr(event.event_type, 'value') else str(event.event_type),
             "aggregate_type": event.aggregate_type,
@@ -116,6 +118,10 @@ class OutboxMapper:
             "processed_at": event.processed_at,
             "last_error": event.last_error,
         }
+        # Only include id if it's set (for updates, not inserts)
+        if event.id is not None:
+            result["id"] = event.id
+        return result
     
     @staticmethod
     def update_orm_from_event(orm: "OutboxEventORM", event: OutboxEvent) -> None:

@@ -28,17 +28,44 @@ class VariantCombination:
     Value Object - A specific combination of node variants.
     
     Represents which variant to use for each node in a single test run.
+    
+    v1.8 (2026-02-06): Added graph factory reference for LangGraph execution.
+    This enables distributed actors (Ray) to recreate LangGraph graphs locally
+    for proper checkpoint support.
+    
+    Graph Factory Pattern:
+    - graph_factory_module: Python module containing the factory function
+    - graph_factory_name: Name of the factory function
+    - Actor imports module and calls factory() to get LangGraph graph
+    
+    Example:
+        vc = VariantCombination(
+            name="Config_A",
+            graph_factory_module="myapp.workflows",
+            graph_factory_name="create_my_graph",
+        )
+        # Actor can then: graph = importlib.import_module(...).create_my_graph()
     """
     name: str  # Human-readable name (e.g., "Config A")
     variants: Dict[str, str] = field(default_factory=dict)  # node_id -> variant_id
     metadata: Dict[str, Any] = field(default_factory=dict)
     
+    # v1.8: Graph factory reference for distributed execution with checkpoints
+    graph_factory_module: Optional[str] = None  # e.g., "examples.ray_batch_demo.run_demo"
+    graph_factory_name: Optional[str] = None    # e.g., "create_demo_graph"
+    
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "name": self.name,
             "variants": self.variants,
             "metadata": self.metadata,
         }
+        # Include graph factory ref if set (for Ray actors)
+        if self.graph_factory_module:
+            result["graph_factory_module"] = self.graph_factory_module
+        if self.graph_factory_name:
+            result["graph_factory_name"] = self.graph_factory_name
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "VariantCombination":
@@ -46,7 +73,36 @@ class VariantCombination:
             name=data.get("name", ""),
             variants=data.get("variants", {}),
             metadata=data.get("metadata", {}),
+            graph_factory_module=data.get("graph_factory_module"),
+            graph_factory_name=data.get("graph_factory_name"),
         )
+    
+    def has_graph_factory(self) -> bool:
+        """Check if graph factory reference is set."""
+        return bool(self.graph_factory_module and self.graph_factory_name)
+    
+    def create_graph(self) -> Any:
+        """
+        Create LangGraph graph from factory reference.
+        
+        Returns:
+            Compiled LangGraph graph
+            
+        Raises:
+            ValueError: If graph factory not configured
+            ImportError: If module not found
+            AttributeError: If function not found in module
+        """
+        if not self.has_graph_factory():
+            raise ValueError(
+                f"Graph factory not configured for variant '{self.name}'. "
+                f"Set graph_factory_module and graph_factory_name."
+            )
+        
+        import importlib
+        module = importlib.import_module(self.graph_factory_module)
+        factory = getattr(module, self.graph_factory_name)
+        return factory()
 
 
 @dataclass

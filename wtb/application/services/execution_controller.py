@@ -521,6 +521,19 @@ class ExecutionController(IExecutionController):
         if not execution.can_rollback():
             raise ValueError(f"Cannot rollback execution in status {execution.status.value}")
         
+        # v1.8: Initialize session for rollback (required by LangGraphStateAdapter)
+        # This connects the adapter to the execution's checkpoint history
+        if hasattr(self._state_adapter, 'initialize_session'):
+            try:
+                # Use existing state from execution, or create minimal state
+                initial_state = execution.state or ExecutionState(
+                    current_node_id="__rollback__",
+                    workflow_variables={},
+                )
+                self._state_adapter.initialize_session(execution_id, initial_state)
+            except Exception as init_err:
+                logger.debug(f"Session init for rollback: {init_err}")
+        
         # Perform state rollback via state adapter
         restored_state = self._state_adapter.rollback(checkpoint_id)
         
@@ -616,6 +629,18 @@ class ExecutionController(IExecutionController):
         workflow = self._workflow_repo.get(source_execution.workflow_id)
         if not workflow:
             raise ValueError(f"Workflow '{source_execution.workflow_id}' not found")
+        
+        # v1.8: Initialize session for source execution (required by LangGraphStateAdapter
+        # to load checkpoint from the execution's thread)
+        if hasattr(self._state_adapter, 'initialize_session'):
+            try:
+                initial_state = source_execution.state or ExecutionState(
+                    current_node_id="__fork__",
+                    workflow_variables={},
+                )
+                self._state_adapter.initialize_session(execution_id, initial_state)
+            except Exception as init_err:
+                logger.debug(f"Session init for fork: {init_err}")
         
         # Load checkpoint state
         checkpoint_state = self._state_adapter.load_checkpoint(checkpoint_id)

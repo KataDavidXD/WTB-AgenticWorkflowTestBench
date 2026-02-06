@@ -56,6 +56,8 @@ from wtb.domain.models.batch_test import (
 )
 from wtb.domain.models.workflow import (
     TestWorkflow,
+    WorkflowNode,
+    WorkflowEdge,
     Execution,
     ExecutionState,
     ExecutionStatus,
@@ -236,13 +238,19 @@ def _create_variant_execution_actor_class():
                         LangGraphConfig,
                         CheckpointerType,
                     )
-                    # Use SQLite checkpointer for Ray actors (per-actor isolation)
-                    # thread_id will be set per execution for isolation
+                    # Use per-actor SQLite checkpointer to avoid locking conflicts
+                    # Each actor gets its own DB file for checkpoint isolation
+                    base_path = (
+                        self._wtb_db_url.replace("sqlite:///", "") 
+                        if self._wtb_db_url.startswith("sqlite:///")
+                        else self._wtb_db_url
+                    )
+                    # Include actor_id in path for isolation (SYSTEM FIX: SQLite locking)
+                    checkpoint_db_path = f"{base_path}_{self._actor_id}_checkpoints.db"
+                    
                     config = LangGraphConfig(
                         checkpointer_type=CheckpointerType.SQLITE,
-                        connection_string=self._wtb_db_url.replace("sqlite:///", "") 
-                            if self._wtb_db_url.startswith("sqlite:///")
-                            else f"{self._wtb_db_url}_checkpoints.db",
+                        connection_string=checkpoint_db_path,
                     )
                     self._state_adapter = LangGraphStateAdapter(config)
                     logger.info(f"Actor {self._actor_id}: Using LangGraphStateAdapter (PRIMARY)")
@@ -337,11 +345,16 @@ def _create_variant_execution_actor_class():
             execution_id = str(uuid.uuid4())
             combination_name = combination.get("name", "unknown")
             variants = combination.get("variants", {})
+            # v1.8: Extract graph factory reference for LangGraph execution with checkpoints
+            graph_factory_module = combination.get("graph_factory_module")
+            graph_factory_name = combination.get("graph_factory_name")
             workspace: Optional[Workspace] = None
             
             logger.info(
                 f"Actor {self._actor_id}: Starting execution {execution_id} "
                 f"for variant '{combination_name}'"
+                + (f" (graph: {graph_factory_module}.{graph_factory_name})" 
+                   if graph_factory_module else " (no graph factory)")
             )
             
             try:
@@ -364,6 +377,7 @@ def _create_variant_execution_actor_class():
                         workspace = None
                 
                 # Execute workflow with variant applied
+                # v1.8: Pass graph factory ref for LangGraph execution with checkpoints
                 result = self._run_workflow_execution(
                     workflow_dict=workflow_dict,
                     variants=variants,
@@ -371,6 +385,8 @@ def _create_variant_execution_actor_class():
                     execution_id=execution_id,
                     batch_test_id=batch_test_id,
                     workspace=workspace,  # Pass workspace for output file writing
+                    graph_factory_module=graph_factory_module,
+                    graph_factory_name=graph_factory_name,
                 )
                 
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -385,8 +401,10 @@ def _create_variant_execution_actor_class():
                     "metrics": result.get("metrics", {}),
                     "error": None,
                     "checkpoint_count": result.get("checkpoint_count", 0),
+                    "last_checkpoint_id": result.get("last_checkpoint_id"),  # v1.8: For rollback
                     "node_count": result.get("node_count", 0),
                     "workspace_id": workspace.workspace_id if workspace else None,
+                    "file_commit_id": result.get("file_commit_id"),  # v1.8: For file restore
                 }
                 
             except Exception as e:
@@ -433,11 +451,14 @@ def _create_variant_execution_actor_class():
             execution_id: str,
             batch_test_id: str,
             workspace: Optional[Workspace] = None,
+            graph_factory_module: Optional[str] = None,
+            graph_factory_name: Optional[str] = None,
         ) -> Dict[str, Any]:
             """
             Run workflow execution with variants applied.
             
             Refactored (v1.7): Uses ExecutionController pattern for ACID compliance.
+            v1.8: Added graph factory support for LangGraph execution with checkpoints.
             
             Args:
                 workflow_dict: Serialized workflow definition
@@ -446,15 +467,23 @@ def _create_variant_execution_actor_class():
                 execution_id: Unique execution ID
                 batch_test_id: Parent batch test ID
                 workspace: Optional workspace for output file isolation
+                graph_factory_module: Optional module containing graph factory (v1.8)
+                graph_factory_name: Optional name of graph factory function (v1.8)
             
             Returns:
-                Dict with metrics, checkpoint_count, node_count, files_tracked, file_commit_id
+                Dict with metrics, checkpoint_count, last_checkpoint_id, node_count, 
+                files_tracked, file_commit_id
                 
             ACID Compliance:
             - Atomicity: Execution within UoW transaction
             - Consistency: Via ExecutionController
             - Isolation: Each call creates new UoW
             - Durability: UoW.commit() persists results
+            
+            Checkpoint Support (v1.8):
+            - If graph_factory_module and graph_factory_name are provided,
+              creates LangGraph graph and passes to controller.run(graph=graph)
+            - This enables LangGraph native execution with automatic checkpointing
             """
             from wtb.application.services.execution_controller import (
                 ExecutionController,
@@ -504,9 +533,30 @@ def _create_variant_execution_actor_class():
                 uow.executions.update(execution)
                 uow.commit()
                 
+                # v1.8: Create LangGraph graph from factory if available
+                # This enables automatic checkpointing at each super-step
+                langgraph_graph = None
+                if graph_factory_module and graph_factory_name:
+                    try:
+                        import importlib
+                        module = importlib.import_module(graph_factory_module)
+                        factory = getattr(module, graph_factory_name)
+                        langgraph_graph = factory()
+                        logger.info(
+                            f"Actor {self._actor_id}: Created LangGraph graph from "
+                            f"{graph_factory_module}.{graph_factory_name}"
+                        )
+                    except Exception as graph_err:
+                        logger.warning(
+                            f"Actor {self._actor_id}: Failed to create graph from factory "
+                            f"{graph_factory_module}.{graph_factory_name}: {graph_err}. "
+                            f"Falling back to legacy execution (no checkpoints)."
+                        )
+                
                 # Run execution (ACID: via controller with UoW)
+                # v1.8: Pass graph for LangGraph execution with checkpoints
                 try:
-                    execution = controller.run(execution.id)
+                    execution = controller.run(execution.id, graph=langgraph_graph)
                 except Exception as e:
                     logger.warning(f"Execution {execution_id} encountered error: {e}")
                     # Re-fetch to get latest state
@@ -589,17 +639,24 @@ def _create_variant_execution_actor_class():
                 metrics = self._calculate_metrics(execution)
                 
                 # v1.6: checkpoint_id is now str, count checkpoints from history
+                # v1.8: Also extract last_checkpoint_id for rollback support
                 checkpoint_count = 0
+                last_checkpoint_id = execution.checkpoint_id  # Fallback to execution's checkpoint
                 if hasattr(self._state_adapter, 'get_checkpoint_history'):
                     try:
                         history = self._state_adapter.get_checkpoint_history()
-                        checkpoint_count = len(history) if history else 0
-                    except Exception:
+                        if history:
+                            checkpoint_count = len(history)
+                            # Get the most recent checkpoint (first in history, sorted desc)
+                            last_checkpoint_id = history[0].get("checkpoint_id", last_checkpoint_id)
+                    except Exception as e:
+                        logger.debug(f"Failed to get checkpoint history: {e}")
                         checkpoint_count = 1 if execution.checkpoint_id else 0
                 
                 return {
                     "metrics": metrics,
                     "checkpoint_count": checkpoint_count,
+                    "last_checkpoint_id": last_checkpoint_id,  # v1.8: For rollback support
                     "node_count": len(execution.state.execution_path),
                     "files_tracked": files_tracked,
                     "file_commit_id": file_commit_id,
@@ -1042,13 +1099,19 @@ class RayBatchTestRunner(IBatchTestRunner):
         Load workflow and serialize for Ray transmission.
         
         Args:
-            workflow_id: Workflow ID to load
+            workflow_id: Workflow ID to load (generates UUID if empty)
             
         Returns:
             Workflow as serializable dict
         """
+        import uuid as uuid_module
+        
         # Import here to avoid circular imports
         from wtb.infrastructure.database import UnitOfWorkFactory
+        
+        # Generate workflow_id if empty to avoid UNIQUE constraint issues
+        if not workflow_id:
+            workflow_id = f"auto_{uuid_module.uuid4().hex[:8]}"
         
         # Create UoW to load workflow
         uow = UnitOfWorkFactory.create(
@@ -1068,16 +1131,26 @@ class RayBatchTestRunner(IBatchTestRunner):
                     id=workflow_id,
                     name=f"Workflow {workflow_id}",
                     description="Auto-generated workflow",
-                    definition={
-                        "nodes": {
-                            "start": {"type": "start"},
-                            "end": {"type": "end"},
-                        },
-                        "edges": [
-                            {"source": "start", "target": "end"},
-                        ],
-                    },
+                    entry_point="start",
                 )
+                # Add default nodes and edges
+                workflow.add_node(WorkflowNode(id="start", name="Start", type="start"))
+                workflow.add_node(WorkflowNode(id="end", name="End", type="end"))
+                workflow.add_edge(WorkflowEdge(source_id="start", target_id="end"))
+                
+                # Save to DB to avoid duplicate insert by actors (SYSTEM FIX)
+                # Use separate try block for add+commit as atomic unit
+                try:
+                    uow.workflows.add(workflow)
+                except Exception as e:
+                    # Might already exist (race condition) - that's OK, rollback add
+                    uow.rollback()
+                    logger.debug(f"Workflow {workflow_id} add failed (may exist): {e}")
+                else:
+                    # Only commit if add succeeded
+                    uow.commit()
+                    logger.info(f"Auto-created workflow {workflow_id} saved to DB")
+                
                 logger.warning(
                     f"Workflow {workflow_id} not found, using default workflow"
                 )

@@ -1,6 +1,8 @@
 """
 WTB Event Bus - Thread-safe event bus for WTB domain events.
 
+v1.8 (2026-02-06): Enhanced for batch rollback/fork coordination.
+
 Provides a thread-safe publish-subscribe mechanism for domain events,
 with optional bridging of AgentGit events to WTB events.
 
@@ -9,6 +11,11 @@ Design Decisions:
 - Bounded history to prevent memory leaks
 - Standalone implementation (no AgentGit inheritance to avoid import issues)
 - Optional AgentGit event bridging when AgentGit is available
+
+v1.8 Enhancements:
+- Supports RollbackPerformed and ExecutionForked events
+- Integrates with BatchExecutionCoordinator outbox pattern
+- Enables graph factory-based checkpoint event tracking
 
 Usage:
     bus = WTBEventBus()
