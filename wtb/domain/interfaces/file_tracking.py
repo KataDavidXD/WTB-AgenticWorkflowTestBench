@@ -24,6 +24,7 @@ Usage:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 from enum import Enum
 
@@ -187,6 +188,82 @@ class FileTrackingLink:
             "file_count": self.file_count,
             "total_size_bytes": self.total_size_bytes,
         }
+
+
+@dataclass(frozen=True)
+class FileCleanupResult:
+    """
+    Result of orphaned file cleanup operation (v1.9).
+    
+    Value object representing the outcome of cleaning up files created after
+    a checkpoint during rollback. Immutable for thread-safety.
+    
+    Design Decision (2026-02-13):
+    - Separate from FileRestoreResult to follow SRP
+    - Uses tuples (not lists) for frozen=True compatibility
+    - success property derived from errors for consistency
+    """
+    checkpoint_id: int
+    execution_id: str
+    files_deleted: int = 0
+    files_backed_up: int = 0
+    files_skipped: int = 0
+    deleted_paths: tuple = field(default_factory=tuple)  # Immutable for frozen=True
+    backed_up_paths: tuple = field(default_factory=tuple)
+    skipped_paths: tuple = field(default_factory=tuple)
+    errors: tuple = field(default_factory=tuple)
+    dry_run: bool = False
+    
+    @property
+    def success(self) -> bool:
+        """Check if cleanup completed without errors."""
+        return len(self.errors) == 0
+    
+    @property
+    def total_processed(self) -> int:
+        """Total files processed (deleted + backed up + skipped)."""
+        return self.files_deleted + self.files_backed_up + self.files_skipped
+    
+    def to_dict(self) -> Dict:
+        """Serialize to dictionary."""
+        return {
+            "checkpoint_id": self.checkpoint_id,
+            "execution_id": self.execution_id,
+            "files_deleted": self.files_deleted,
+            "files_backed_up": self.files_backed_up,
+            "files_skipped": self.files_skipped,
+            "deleted_paths": list(self.deleted_paths),
+            "backed_up_paths": list(self.backed_up_paths),
+            "skipped_paths": list(self.skipped_paths),
+            "errors": list(self.errors),
+            "dry_run": self.dry_run,
+            "success": self.success,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> "FileCleanupResult":
+        """Deserialize from dictionary."""
+        return cls(
+            checkpoint_id=data["checkpoint_id"],
+            execution_id=data["execution_id"],
+            files_deleted=data.get("files_deleted", 0),
+            files_backed_up=data.get("files_backed_up", 0),
+            files_skipped=data.get("files_skipped", 0),
+            deleted_paths=tuple(data.get("deleted_paths", [])),
+            backed_up_paths=tuple(data.get("backed_up_paths", [])),
+            skipped_paths=tuple(data.get("skipped_paths", [])),
+            errors=tuple(data.get("errors", [])),
+            dry_run=data.get("dry_run", False),
+        )
+    
+    @classmethod
+    def empty(cls, checkpoint_id: int, execution_id: str, dry_run: bool = False) -> "FileCleanupResult":
+        """Create empty result (no files to cleanup)."""
+        return cls(
+            checkpoint_id=checkpoint_id,
+            execution_id=execution_id,
+            dry_run=dry_run,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -382,6 +459,133 @@ class IFileTrackingService(ABC):
         
         Returns:
             True if service can track files, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def get_files_at_checkpoint(
+        self,
+        checkpoint_id: int,
+    ) -> List[str]:
+        """
+        Get file paths that existed at a specific checkpoint.
+        
+        Uses existing checkpoint_links -> commit_id -> mementos relationship.
+        NO new table required - leverages existing schema.
+        
+        Args:
+            checkpoint_id: Checkpoint to query
+            
+        Returns:
+            List of file paths that existed at the checkpoint
+            
+        Design Decision (2026-02-13):
+        - Added for v1.9 rollback cleanup feature
+        - Uses existing tables: checkpoint_links + mementos
+        - Avoids data duplication
+        """
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# File Cleanup Service Interface (v1.9 - ISP Compliant)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class IFileCleanupService(ABC):
+    """
+    Interface for post-rollback file cleanup operations (v1.9).
+    
+    Follows Interface Segregation Principle - cleanup is a separate concern
+    from file tracking. This interface handles identifying and removing
+    orphaned files (files created after a checkpoint during rollback).
+    
+    Design Principles:
+    - ISP: Cleanup operations separated from IFileTrackingService
+    - SRP: Single responsibility - orphaned file management
+    - OCP: Open for extension (strategies), closed for modification
+    
+    Safety Features:
+    - max_files limit prevents runaway deletion
+    - dry_run mode for testing cleanup logic
+    - backup option preserves files before deletion
+    
+    Usage:
+        cleanup_service = FileCleanupService()
+        orphaned = cleanup_service.identify_orphaned_files(
+            target_checkpoint_id=42,
+            current_workspace_path=Path("/project"),
+            track_patterns=["*.py", "data/*.json"],
+            exclude_patterns=["*.pyc", "__pycache__/*"],
+            file_tracking_service=file_tracker,
+        )
+        result = cleanup_service.cleanup_orphaned_files(
+            orphaned_paths=orphaned,
+            backup_dir=Path(".rollback_backup"),
+            dry_run=False,
+            max_files=100,
+        )
+    """
+    
+    @abstractmethod
+    def identify_orphaned_files(
+        self,
+        target_checkpoint_id: int,
+        execution_id: str,
+        current_workspace_path: Path,
+        track_patterns: List[str],
+        exclude_patterns: List[str],
+        file_tracking_service: IFileTrackingService,
+    ) -> List[str]:
+        """
+        Identify files created after target checkpoint.
+        
+        Compares current workspace files (matching patterns) against
+        files tracked at the checkpoint. Returns paths that exist now
+        but weren't tracked at the checkpoint.
+        
+        Args:
+            target_checkpoint_id: Checkpoint being rolled back to
+            execution_id: Execution ID for logging/tracking
+            current_workspace_path: Root path to scan for current files
+            track_patterns: Glob patterns for files to consider (e.g., ["*.py"])
+            exclude_patterns: Glob patterns to exclude (e.g., ["*.pyc"])
+            file_tracking_service: Service to query checkpoint file state
+            
+        Returns:
+            List of file paths that are orphaned (created after checkpoint)
+        """
+        pass
+    
+    @abstractmethod
+    def cleanup_orphaned_files(
+        self,
+        checkpoint_id: int,
+        execution_id: str,
+        orphaned_paths: List[str],
+        backup_dir: Optional[Path] = None,
+        dry_run: bool = False,
+        max_files: int = 100,
+    ) -> FileCleanupResult:
+        """
+        Delete orphaned files with safety checks.
+        
+        Removes files that were created after a checkpoint, with optional
+        backup and safety limits.
+        
+        Args:
+            checkpoint_id: Source checkpoint (for result tracking)
+            execution_id: Execution being rolled back
+            orphaned_paths: Files to delete (from identify_orphaned_files)
+            backup_dir: If provided, backup files before deletion
+            dry_run: If True, log actions but don't delete
+            max_files: Safety limit - refuse to delete more than this
+            
+        Returns:
+            FileCleanupResult with detailed operation outcome
+            
+        Raises:
+            ValueError: If orphaned_paths exceeds max_files and not dry_run
         """
         pass
 

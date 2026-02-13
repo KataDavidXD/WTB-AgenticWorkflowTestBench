@@ -8,6 +8,7 @@ Implementations:
 - SqliteFileTrackingService: Lightweight SQLite-based for single-run execution (NEW)
 - FileTrackerService: Real FileTracker integration (PostgreSQL)
 - RayFileTrackerService: Ray-compatible wrapper with serializable config
+- FileCleanupService: Rollback file cleanup (v1.9)
 
 The services integrate with the FileTracker project at:
   file_processing/file_processing/FileTracker/
@@ -40,16 +41,22 @@ Usage:
     # For Ray actors
     from wtb.infrastructure.file_tracking import RayFileTrackerService
     service = RayFileTrackerService(config.to_dict())
+    
+    # For rollback cleanup (v1.9)
+    from wtb.infrastructure.file_tracking import FileCleanupService
+    cleanup_service = FileCleanupService()
 """
 
 from wtb.infrastructure.file_tracking.mock_service import MockFileTrackingService
 from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
 from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
 from wtb.infrastructure.file_tracking.ray_filetracker_service import RayFileTrackerService
+from wtb.infrastructure.file_tracking.cleanup_service import FileCleanupService
 
 __all__ = [
     "MockFileTrackingService",
     "SqliteFileTrackingService",
     "FileTrackerService",
     "RayFileTrackerService",
+    "FileCleanupService",
 ]

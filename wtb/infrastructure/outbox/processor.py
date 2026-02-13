@@ -109,6 +109,42 @@ class IFileTrackingService(Protocol):
     def restore_from_checkpoint(self, checkpoint_id: int) -> Any:
         """Restore files from checkpoint's linked commit."""
         ...
+    
+    def get_files_at_checkpoint(self, checkpoint_id: int) -> List[str]:
+        """Get file paths at checkpoint (v1.9)."""
+        ...
+
+
+class IFileCleanupService(Protocol):
+    """
+    Protocol for file cleanup service integration (v1.9).
+    
+    Follows ISP - cleanup operations are separate from tracking.
+    """
+    
+    def identify_orphaned_files(
+        self,
+        target_checkpoint_id: int,
+        execution_id: str,
+        current_workspace_path: Path,
+        track_patterns: List[str],
+        exclude_patterns: List[str],
+        file_tracking_service: IFileTrackingService,
+    ) -> List[str]:
+        """Identify files created after checkpoint."""
+        ...
+    
+    def cleanup_orphaned_files(
+        self,
+        checkpoint_id: int,
+        execution_id: str,
+        orphaned_paths: List[str],
+        backup_dir: Optional[Path] = None,
+        dry_run: bool = False,
+        max_files: int = 100,
+    ) -> Any:
+        """Delete orphaned files with safety checks."""
+        ...
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -190,6 +226,7 @@ class OutboxProcessor:
         commit_repo: Optional[ICommitRepository] = None,
         blob_repo: Optional[IBlobRepository] = None,
         file_tracking_service: Optional[IFileTrackingService] = None,
+        file_cleanup_service: Optional["IFileCleanupService"] = None,
         poll_interval_seconds: float = 1.0,
         batch_size: int = 50,
         strict_verification: bool = False,
@@ -204,6 +241,7 @@ class OutboxProcessor:
             commit_repo: Optional FileTracker commit repository for verification
             blob_repo: Optional FileTracker blob repository for verification
             file_tracking_service: Optional IFileTrackingService for comprehensive FileTracker ops
+            file_cleanup_service: Optional IFileCleanupService for rollback cleanup (v1.9)
             poll_interval_seconds: How often to poll for new events
             batch_size: Maximum events to process per batch
             strict_verification: If True, raise errors when repos are missing
@@ -214,6 +252,7 @@ class OutboxProcessor:
         self._commit_repo = commit_repo
         self._blob_repo = blob_repo
         self._file_tracking_service = file_tracking_service
+        self._file_cleanup_service = file_cleanup_service
         self._poll_interval = poll_interval_seconds
         self._batch_size = batch_size
         self._strict = strict_verification
@@ -915,20 +954,33 @@ class OutboxProcessor:
         Coordinates with FileTracker to restore files from a checkpoint's
         linked commit during workflow rollback.
         
+        v1.9: Also handles cleanup of orphaned files if cleanup_orphaned_files=True
+        
         Args:
             event: OutboxEvent with payload containing:
                 - source_checkpoint_id: Original checkpoint
                 - target_checkpoint_id: Checkpoint to rollback to
                 - source_commit_id: FileTracker commit to restore from
+                - cleanup_orphaned_files: (v1.9) If True, cleanup files after checkpoint
+                - cleanup_dry_run: (v1.9) If True, log only, don't delete
+                - cleanup_backup: (v1.9) If True, backup before delete
+                - cleanup_max_files: (v1.9) Safety limit for deletion
+                - workspace_path: (v1.9) Workspace root for file discovery
+                - track_patterns: (v1.9) Glob patterns for file discovery
+                - exclude_patterns: (v1.9) Glob patterns to exclude
         """
         payload = event.payload
         source_checkpoint_id = payload.get("source_checkpoint_id")
         target_checkpoint_id = payload.get("target_checkpoint_id")
         source_commit_id = payload.get("source_commit_id")
+        execution_id = payload.get("execution_id", "unknown")
         
         if not source_commit_id:
             logger.warning(f"No source_commit_id in rollback event {event.event_id}")
             return
+        
+        restore_success = False
+        files_restored = 0
         
         # Use file tracking service if available
         if self._file_tracking_service and self._file_tracking_service.is_available():
@@ -949,7 +1001,7 @@ class OutboxProcessor:
                 
                 self._stats["restores_verified"] += 1
                 self._stats["files_verified"] += files_restored
-                return
+                restore_success = True
                 
             except Exception as e:
                 logger.error(f"FileTrackingService restore failed: {e}")
@@ -957,7 +1009,7 @@ class OutboxProcessor:
                     raise
         
         # Fall back to commit_repo + blob_repo
-        if self._commit_repo and self._blob_repo:
+        elif self._commit_repo and self._blob_repo:
             commit = self._commit_repo.find_by_id(source_commit_id)
             if not commit:
                 raise ValueError(f"Commit {source_commit_id} not found for rollback")
@@ -984,16 +1036,175 @@ class OutboxProcessor:
             )
             self._stats["restores_verified"] += 1
             self._stats["files_verified"] += restored
+            files_restored = restored
+            restore_success = True
+        
+        else:
+            # No FileTracker available
+            if self._strict:
+                raise ValueError("FileTracker not configured for rollback file restore")
+            
+            logger.warning(
+                f"FileTracker not configured, skipping file restore for rollback "
+                f"(checkpoint {source_checkpoint_id} -> {target_checkpoint_id})"
+            )
+        
+        # v1.9: Cleanup orphaned files after restore if enabled
+        if restore_success and payload.get("cleanup_orphaned_files", False):
+            self._cleanup_orphaned_files_post_restore(
+                payload=payload,
+                target_checkpoint_id=target_checkpoint_id,
+                execution_id=execution_id,
+            )
+    
+    def _cleanup_orphaned_files_post_restore(
+        self,
+        payload: Dict[str, Any],
+        target_checkpoint_id: Any,
+        execution_id: str,
+    ) -> None:
+        """
+        Cleanup files created after checkpoint (v1.9).
+        
+        Called after successful file restore to remove orphaned files.
+        
+        Args:
+            payload: Event payload with cleanup configuration
+            target_checkpoint_id: Checkpoint being rolled back to
+            execution_id: Execution being rolled back
+        """
+        if not self._file_cleanup_service:
+            logger.debug("FileCleanupService not configured, skipping cleanup")
             return
         
-        # No FileTracker available
-        if self._strict:
-            raise ValueError("FileTracker not configured for rollback file restore")
+        if not self._file_tracking_service:
+            logger.debug("FileTrackingService not configured, skipping cleanup")
+            return
         
-        logger.warning(
-            f"FileTracker not configured, skipping file restore for rollback "
-            f"(checkpoint {source_checkpoint_id} -> {target_checkpoint_id})"
-        )
+        try:
+            # Extract cleanup config from payload
+            workspace_path = Path(payload.get("workspace_path", "."))
+            track_patterns = payload.get("track_patterns", [])
+            exclude_patterns = payload.get("exclude_patterns", [])
+            dry_run = payload.get("cleanup_dry_run", False)
+            backup = payload.get("cleanup_backup", True)
+            max_files = payload.get("cleanup_max_files", 100)
+            
+            # Convert checkpoint_id to int if it's a string (UUID)
+            checkpoint_id = target_checkpoint_id
+            if isinstance(checkpoint_id, str):
+                # Try to parse as int, or use hash for UUID
+                try:
+                    checkpoint_id = int(checkpoint_id)
+                except ValueError:
+                    # For UUID checkpoint IDs, we need the numeric ID
+                    # This should be passed in payload or looked up
+                    checkpoint_id = payload.get("target_checkpoint_numeric_id", 0)
+                    if not checkpoint_id:
+                        logger.warning(
+                            f"Cannot cleanup: checkpoint_id {target_checkpoint_id} "
+                            f"is not numeric and no target_checkpoint_numeric_id in payload"
+                        )
+                        return
+            
+            # Identify orphaned files
+            orphaned = self._file_cleanup_service.identify_orphaned_files(
+                target_checkpoint_id=checkpoint_id,
+                execution_id=execution_id,
+                current_workspace_path=workspace_path,
+                track_patterns=track_patterns,
+                exclude_patterns=exclude_patterns,
+                file_tracking_service=self._file_tracking_service,
+            )
+            
+            if not orphaned:
+                logger.info(f"No orphaned files to cleanup for checkpoint {checkpoint_id}")
+                return
+            
+            # Cleanup with config options
+            backup_dir = workspace_path / ".rollback_backup" if backup else None
+            result = self._file_cleanup_service.cleanup_orphaned_files(
+                checkpoint_id=checkpoint_id,
+                execution_id=execution_id,
+                orphaned_paths=orphaned,
+                backup_dir=backup_dir,
+                dry_run=dry_run,
+                max_files=max_files,
+            )
+            
+            mode = "DRY RUN" if dry_run else "LIVE"
+            logger.info(
+                f"[{mode}] File cleanup: {result.files_deleted} deleted, "
+                f"{result.files_backed_up} backed up, {result.files_skipped} skipped"
+            )
+            
+            # Track in stats
+            if not dry_run:
+                self._stats["files_verified"] += result.files_deleted
+            
+            # v1.9: Emit FILE_CLEANUP_COMPLETED event for audit trail
+            self._emit_cleanup_completed_event(
+                execution_id=execution_id,
+                checkpoint_id=checkpoint_id,
+                result=result,
+                backup_dir=str(backup_dir) if backup_dir else None,
+            )
+            
+        except Exception as e:
+            logger.error(f"File cleanup failed: {e}")
+            if self._strict:
+                raise
+    
+    def _emit_cleanup_completed_event(
+        self,
+        execution_id: str,
+        checkpoint_id: int,
+        result: Any,  # FileCleanupResult
+        backup_dir: Optional[str] = None,
+    ) -> None:
+        """
+        Emit FILE_CLEANUP_COMPLETED outbox event for audit trail (v1.9).
+        
+        Args:
+            execution_id: Execution that was rolled back
+            checkpoint_id: Target checkpoint
+            result: FileCleanupResult from cleanup service
+            backup_dir: Directory where backups were stored
+        """
+        try:
+            from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+            
+            event = OutboxEvent(
+                event_type=OutboxEventType.FILE_CLEANUP_COMPLETED,
+                aggregate_type="Execution",
+                aggregate_id=execution_id,
+                payload={
+                    "execution_id": execution_id,
+                    "checkpoint_id": checkpoint_id,
+                    "files_deleted": result.files_deleted,
+                    "files_backed_up": result.files_backed_up,
+                    "files_skipped": result.files_skipped,
+                    "deleted_paths": list(result.deleted_paths),
+                    "backed_up_paths": list(result.backed_up_paths),
+                    "backup_dir": backup_dir,
+                    "dry_run": result.dry_run,
+                    "errors": list(result.errors),
+                },
+            )
+            
+            # Save to outbox for audit/verification
+            with self._get_session() as session:
+                from wtb.infrastructure.database.repositories.outbox_repository import (
+                    SQLAlchemyOutboxRepository,
+                )
+                repo = SQLAlchemyOutboxRepository(session)
+                repo.add(event)
+                session.commit()
+            
+            logger.debug(f"Emitted FILE_CLEANUP_COMPLETED event for {execution_id}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to emit cleanup event: {e}")
     
     def _handle_rollback_verify(self, event: OutboxEvent) -> None:
         """

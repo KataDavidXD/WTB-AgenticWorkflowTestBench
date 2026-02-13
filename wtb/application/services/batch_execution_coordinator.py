@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from wtb.domain.interfaces.state_adapter import IStateAdapter
     from wtb.domain.interfaces.file_tracking import IFileTrackingService
     from wtb.domain.models.workflow import Execution
+    from wtb.config import WTBConfig
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         controller_factory: Optional[IExecutionControllerFactory] = None,
         state_adapter: Optional["IStateAdapter"] = None,
         file_tracking: Optional["IFileTrackingService"] = None,
+        config: Optional["WTBConfig"] = None,
     ):
         """
         Initialize coordinator with dependencies.
@@ -154,17 +156,25 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             state_adapter: Shared StateAdapter (reused across operations for efficiency).
                           Must be thread-safe if used concurrently.
             file_tracking: Optional FileTrackingService for file restore operations.
+            config: Optional WTBConfig for rollback cleanup options (v1.9).
         
         Design Decision:
             StateAdapter is REUSED across operations because:
             1. It's expensive to create (may involve DB connections)
             2. State operations are idempotent
             3. Different from UoW which manages transaction boundaries
+        
+        v1.9 Design Decision:
+            config is optional for backward compatibility.
+            When rollback_cleanup_enabled is True, cleanup info is added to
+            ROLLBACK_FILE_RESTORE outbox event payload. The actual cleanup
+            is performed by OutboxProcessor (which has IFileCleanupService).
         """
         self._uow_factory = uow_factory
         self._controller_factory = controller_factory or DefaultExecutionControllerFactory()
         self._state_adapter = state_adapter
         self._file_tracking = file_tracking
+        self._config = config
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Single Operations
@@ -243,16 +253,43 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             # 2. Emit file restore event via outbox (for ACID file restoration)
             # This ensures file restoration is coordinated via outbox processor
             if file_commit_id and self._file_tracking:
+                # Build payload with base restore info
+                file_restore_payload = {
+                    "source_checkpoint_id": checkpoint_id,
+                    "target_checkpoint_id": checkpoint_id,
+                    "source_commit_id": file_commit_id,
+                    "execution_id": execution_id,
+                }
+                
+                # v1.9: Add cleanup configuration if enabled
+                if self._config and self._config.rollback_cleanup_enabled:
+                    file_restore_payload.update({
+                        "cleanup_orphaned_files": True,
+                        "cleanup_dry_run": self._config.rollback_cleanup_dry_run,
+                        "cleanup_backup": self._config.rollback_cleanup_backup,
+                        "cleanup_max_files": self._config.rollback_cleanup_max_files,
+                    })
+                    
+                    # Add workspace path and patterns from file_tracking_config
+                    if self._config.file_tracking_config:
+                        ft_cfg = self._config.file_tracking_config
+                        file_restore_payload.update({
+                            "workspace_path": str(ft_cfg.workspace_path) if ft_cfg.workspace_path else ".",
+                            "track_patterns": ft_cfg.auto_track_patterns or [],
+                            "exclude_patterns": ft_cfg.exclude_patterns or [],
+                        })
+                    
+                    logger.debug(
+                        f"Rollback cleanup enabled: dry_run={self._config.rollback_cleanup_dry_run}, "
+                        f"backup={self._config.rollback_cleanup_backup}, "
+                        f"max_files={self._config.rollback_cleanup_max_files}"
+                    )
+                
                 file_restore_event = OutboxEvent.create(
                     event_type=OutboxEventType.ROLLBACK_FILE_RESTORE,
                     aggregate_id=execution_id,
                     aggregate_type="Execution",
-                    payload={
-                        "source_checkpoint_id": checkpoint_id,
-                        "target_checkpoint_id": checkpoint_id,
-                        "source_commit_id": file_commit_id,
-                        "execution_id": execution_id,
-                    },
+                    payload=file_restore_payload,
                 )
                 uow.outbox.add(file_restore_event)
                 logger.debug(f"Queued file restore for commit {file_commit_id}")

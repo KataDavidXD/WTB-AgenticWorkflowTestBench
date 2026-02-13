@@ -73,6 +73,7 @@ class WTBAuditEventType(Enum):
     ROLLBACK_PERFORMED = "rollback_performed"
     BRANCH_CREATED = "branch_created"
     EXECUTION_FORKED = "execution_forked"  # v1.8: Fork from checkpoint
+    FILES_CLEANED_UP = "files_cleaned_up"  # v1.9: Orphaned files deleted on rollback
     
     # State modifications
     STATE_MODIFIED = "state_modified"

@@ -44,6 +44,7 @@ class OutboxEventType(Enum):
     ROLLBACK_FILE_RESTORE = "rollback_file_restore"
     ROLLBACK_VERIFY = "rollback_verify"
     ROLLBACK_PERFORMED = "rollback_performed"  # v2.0 API
+    FILE_CLEANUP_COMPLETED = "file_cleanup_completed"  # v1.9: Orphaned file cleanup
     
     # Ray batch test events (2026-01-15)
     RAY_EVENT = "ray_event"

@@ -89,6 +89,7 @@ if TYPE_CHECKING:
     from wtb.infrastructure.events.ray_event_bridge import RayEventBridge
     from wtb.domain.interfaces.file_tracking import IFileTrackingService
     from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+    from wtb.config import WTBConfig
 
 logger = logging.getLogger(__name__)
 
@@ -1718,12 +1719,17 @@ class RayBatchTestRunner(IBatchTestRunner):
     # Rollback Coordinator Factory (v1.8)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def create_rollback_coordinator(self) -> "BatchExecutionCoordinator":
+    def create_rollback_coordinator(
+        self,
+        config: Optional["WTBConfig"] = None,
+    ) -> "BatchExecutionCoordinator":
         """
         Create BatchExecutionCoordinator reusing this runner's configuration.
         
         v1.8: Factory method for creating coordinator that shares configuration
         with the Ray batch runner for consistent rollback/fork operations.
+        
+        v1.9: Added config parameter for rollback cleanup options.
         
         Usage:
             runner = RayBatchTestRunner(config, ...)
@@ -1742,6 +1748,15 @@ class RayBatchTestRunner(IBatchTestRunner):
                 checkpoint_id=result.results[0].last_checkpoint_id,
                 new_state={"temperature": 0.7},
             )
+            
+            # v1.9: With cleanup enabled
+            from wtb.config import WTBConfig
+            wtb_config = WTBConfig(rollback_cleanup_enabled=True)
+            coordinator = runner.create_rollback_coordinator(config=wtb_config)
+        
+        Args:
+            config: Optional WTBConfig for rollback cleanup options (v1.9).
+                   If not provided, file cleanup after rollback is disabled.
         
         Returns:
             BatchExecutionCoordinator configured with runner's dependencies
@@ -1756,6 +1771,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             controller_factory=DefaultExecutionControllerFactory(),
             state_adapter=self._create_shared_state_adapter(),
             file_tracking=self._create_file_tracking_service(),
+            config=config,
         )
     
     def _create_shared_state_adapter(self) -> Optional["IStateAdapter"]:

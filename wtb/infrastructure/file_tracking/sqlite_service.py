@@ -659,6 +659,51 @@ class SqliteFileTrackingService(IFileTrackingService):
         except Exception:
             return False
     
+    def get_files_at_checkpoint(
+        self,
+        checkpoint_id: int,
+    ) -> List[str]:
+        """
+        Get file paths that existed at a specific checkpoint.
+        
+        Uses existing checkpoint_links -> commit_id -> mementos relationship.
+        NO new table required - leverages existing schema.
+        
+        Design Decision (2026-02-13, v1.9):
+        - Added for rollback cleanup feature
+        - Uses existing tables to avoid data duplication
+        - Returns only file paths (not full TrackedFile objects) for efficiency
+        
+        Args:
+            checkpoint_id: Checkpoint to query
+            
+        Returns:
+            List of file paths that existed at the checkpoint
+        """
+        with self._lock:
+            # Get commit ID for checkpoint
+            commit_id = self.get_commit_for_checkpoint(checkpoint_id)
+            if commit_id is None:
+                logger.debug(f"No commit linked to checkpoint {checkpoint_id}")
+                return []
+            
+            # Get file paths from mementos
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT file_path FROM mementos WHERE commit_id = ?",
+                (commit_id,)
+            )
+            
+            file_paths = [row['file_path'] for row in cursor.fetchall()]
+            logger.debug(
+                f"Found {len(file_paths)} files at checkpoint {checkpoint_id} "
+                f"(commit {commit_id[:8]}...)"
+            )
+            
+            return file_paths
+    
     # ═══════════════════════════════════════════════════════════════════════════════
     # Additional Methods
     # ═══════════════════════════════════════════════════════════════════════════════

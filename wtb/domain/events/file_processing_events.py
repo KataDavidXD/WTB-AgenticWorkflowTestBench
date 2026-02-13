@@ -210,6 +210,67 @@ class FileRestoreFailedEvent(WTBEvent):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# File Cleanup Events (v1.9)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class FileCleanupCompletedEvent(WTBEvent):
+    """
+    Emitted when orphaned files are cleaned up after rollback (v1.9).
+    
+    This event is published after OutboxProcessor identifies and removes
+    files that were created after the target checkpoint during rollback.
+    
+    Attributes:
+        execution_id: Execution that was rolled back
+        checkpoint_id: Target checkpoint rolled back to
+        files_deleted: Number of files deleted
+        files_backed_up: Number of files backed up before deletion
+        files_skipped: Number of files skipped (errors or limits)
+        deleted_paths: Paths of deleted files
+        backed_up_paths: Paths of backed up files
+        backup_dir: Directory where backups were stored
+        dry_run: Whether this was a dry run (no actual deletion)
+        errors: List of error messages (if any)
+    """
+    execution_id: str = ""
+    checkpoint_id: int = 0
+    files_deleted: int = 0
+    files_backed_up: int = 0
+    files_skipped: int = 0
+    deleted_paths: tuple = field(default_factory=tuple)
+    backed_up_paths: tuple = field(default_factory=tuple)
+    backup_dir: Optional[str] = None
+    dry_run: bool = False
+    errors: tuple = field(default_factory=tuple)
+    
+    @property
+    def event_type(self) -> str:
+        return "file_cleanup.completed"
+    
+    @property
+    def total_processed(self) -> int:
+        return self.files_deleted + self.files_backed_up + self.files_skipped
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_type": self.event_type,
+            "timestamp": self.timestamp.isoformat(),
+            "execution_id": self.execution_id,
+            "checkpoint_id": self.checkpoint_id,
+            "files_deleted": self.files_deleted,
+            "files_backed_up": self.files_backed_up,
+            "files_skipped": self.files_skipped,
+            "deleted_paths": list(self.deleted_paths),
+            "backed_up_paths": list(self.backed_up_paths),
+            "backup_dir": self.backup_dir,
+            "dry_run": self.dry_run,
+            "errors": list(self.errors),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Checkpoint-File Link Events
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -443,6 +504,8 @@ __all__ = [
     # Restore events
     "FileRestoredEvent",
     "FileRestoreFailedEvent",
+    # Cleanup events (v1.9)
+    "FileCleanupCompletedEvent",
     # Link events
     "CheckpointFileLinkCreatedEvent",
     "CheckpointFileLinkVerifiedEvent",

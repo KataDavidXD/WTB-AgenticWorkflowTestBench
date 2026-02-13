@@ -372,6 +372,12 @@ class WTBConfig:
         ray_enabled: Enable Ray for batch testing
         ray_config: Ray cluster configuration
         environment_provider: Environment provider type ("ray", "grpc", "inprocess")
+        
+    Rollback Cleanup (v1.9):
+        rollback_cleanup_enabled: Enable auto-cleanup of files created after checkpoint
+        rollback_cleanup_dry_run: Log cleanup actions without deleting
+        rollback_cleanup_backup: Backup files before deletion
+        rollback_cleanup_max_files: Safety limit on files to delete per rollback
     """
     
     # Storage mode: "inmemory" or "sqlalchemy"
@@ -418,6 +424,13 @@ class WTBConfig:
     # SQLite WAL mode (for concurrent access)
     sqlite_wal_mode: bool = False
     
+    # v1.9: Rollback cleanup options (opt-in feature)
+    # When enabled, files created after a checkpoint will be cleaned up on rollback
+    rollback_cleanup_enabled: bool = False     # Default OFF - opt-in feature
+    rollback_cleanup_dry_run: bool = False     # Log actions only, no actual deletion
+    rollback_cleanup_backup: bool = True       # Backup files before deletion
+    rollback_cleanup_max_files: int = 100      # Safety limit to prevent runaway deletion
+    
     def __post_init__(self):
         """Set default wtb_db_url if not provided."""
         if self.wtb_db_url is None and self.wtb_storage_mode == "sqlalchemy":
@@ -440,6 +453,10 @@ class WTBConfig:
             IDE_SYNC_URL: IDE WebSocket URL
             WTB_LOG_SQL: Log SQL statements (default: "false")
             WTB_LOG_LEVEL: Logging level (default: "INFO")
+            WTB_ROLLBACK_CLEANUP_ENABLED: Enable file cleanup on rollback (default: "false")
+            WTB_ROLLBACK_CLEANUP_DRY_RUN: Dry run mode (default: "false")
+            WTB_ROLLBACK_CLEANUP_BACKUP: Backup before delete (default: "true")
+            WTB_ROLLBACK_CLEANUP_MAX_FILES: Max files to delete (default: "100")
         
         Returns:
             WTBConfig instance
@@ -458,6 +475,11 @@ class WTBConfig:
             ide_sync_url=os.getenv("IDE_SYNC_URL"),
             log_sql=os.getenv("WTB_LOG_SQL", "false").lower() == "true",
             log_level=os.getenv("WTB_LOG_LEVEL", "INFO"),
+            # v1.9: Rollback cleanup options
+            rollback_cleanup_enabled=os.getenv("WTB_ROLLBACK_CLEANUP_ENABLED", "false").lower() == "true",
+            rollback_cleanup_dry_run=os.getenv("WTB_ROLLBACK_CLEANUP_DRY_RUN", "false").lower() == "true",
+            rollback_cleanup_backup=os.getenv("WTB_ROLLBACK_CLEANUP_BACKUP", "true").lower() == "true",
+            rollback_cleanup_max_files=int(os.getenv("WTB_ROLLBACK_CLEANUP_MAX_FILES", "100")),
         )
     
     @classmethod
@@ -634,6 +656,11 @@ class WTBConfig:
             "langgraph_event_config": self.langgraph_event_config.to_dict() if self.langgraph_event_config else None,
             "log_sql": self.log_sql,
             "log_level": self.log_level,
+            # v1.9: Rollback cleanup options
+            "rollback_cleanup_enabled": self.rollback_cleanup_enabled,
+            "rollback_cleanup_dry_run": self.rollback_cleanup_dry_run,
+            "rollback_cleanup_backup": self.rollback_cleanup_backup,
+            "rollback_cleanup_max_files": self.rollback_cleanup_max_files,
         }
 
 

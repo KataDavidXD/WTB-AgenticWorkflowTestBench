@@ -111,6 +111,7 @@ class OutboxLifecycleManager:
         wtb_db_url: str,
         checkpoint_repo=None,
         file_tracking_service=None,
+        file_cleanup_service=None,
         poll_interval_seconds: float = 1.0,
         batch_size: int = 50,
         auto_start: bool = False,
@@ -127,6 +128,7 @@ class OutboxLifecycleManager:
             wtb_db_url: WTB database connection URL
             checkpoint_repo: Optional checkpoint repository for verification
             file_tracking_service: Optional file tracking service
+            file_cleanup_service: Optional file cleanup service for rollback cleanup (v1.9)
             poll_interval_seconds: How often processor polls for events
             batch_size: Maximum events per batch
             auto_start: If True, start processor immediately
@@ -139,6 +141,7 @@ class OutboxLifecycleManager:
         self._wtb_db_url = wtb_db_url
         self._checkpoint_repo = checkpoint_repo
         self._file_tracking_service = file_tracking_service
+        self._file_cleanup_service = file_cleanup_service
         self._poll_interval = poll_interval_seconds
         self._batch_size = batch_size
         self._shutdown_timeout = shutdown_timeout_seconds
@@ -190,6 +193,7 @@ class OutboxLifecycleManager:
                 wtb_db_url=self._wtb_db_url,
                 checkpoint_repo=self._checkpoint_repo,
                 file_tracking_service=self._file_tracking_service,
+                file_cleanup_service=self._file_cleanup_service,
                 poll_interval_seconds=self._poll_interval,
                 batch_size=self._batch_size,
             )
