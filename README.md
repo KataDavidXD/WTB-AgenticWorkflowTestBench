@@ -1,6 +1,6 @@
 <h1 align="center">WTB: Workflow Test Bench for Agentic Workflows</h1>
 
-<p align="center">Built as the testing layer for <a href="https://github.com/HKU-MAS-Infra-Layer/Agent-Git">Agent Git</a> (production-grade).</p>
+<p align="center">Built as the production release of <a href="https://github.com/HKU-MAS-Infra-Layer/Agent-Git">Agent Git</a>.</p>
 
 <div align="center">
 
@@ -301,12 +301,10 @@ We welcome contributions! WTB is open source and actively seeking:
 - Documentation improvements
 - Performance optimizations
 
-Partners: **HKU Lab for AI Agents in Business and Economics**
+Partner: HKU CAMO Lab
 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ---
-
-Built for the LangChain/LangGraph community.
