@@ -20,12 +20,11 @@ from .unit_of_work import SQLAlchemyUnitOfWork
 from .inmemory_unit_of_work import InMemoryUnitOfWork
 from .factory import UnitOfWorkFactory
 from .config import (
-    DatabaseConfig,
+    # DatabaseConfig,
     get_database_config,
-    redirect_agentgit_database,
-    create_wtb_engine,
-    create_wtb_session_factory,
-    print_database_locations,
+    # create_wtb_engine,
+    # create_wtb_session_factory,
+    # print_database_locations,
 )
 from .setup import (
     setup_wtb_database,
@@ -55,10 +54,9 @@ __all__ = [
     # Config
     "DatabaseConfig",
     "get_database_config",
-    "redirect_agentgit_database",
-    "create_wtb_engine",
-    "create_wtb_session_factory",
-    "print_database_locations",
+    # "create_wtb_engine",
+    # "create_wtb_session_factory",
+    # "print_database_locations",
     # Setup
     "setup_wtb_database",
     "setup_agentgit_database",

@@ -219,10 +219,11 @@ class LangGraphStateAdapter(IStateAdapter):
         elif self._config.checkpointer_type == CheckpointerType.POSTGRES:
             try:
                 from langgraph.checkpoint.postgres import PostgresSaver
-                
-                saver = PostgresSaver.from_conn_string(
+
+                self._checkpointer_cm = PostgresSaver.from_conn_string(  # ← 改这里
                     self._config.connection_string
                 )
+                saver = self._checkpointer_cm.__enter__()  # ← 改这里
                 saver.setup()
                 return saver
             except ImportError:
@@ -767,6 +768,24 @@ class LangGraphStateAdapter(IStateAdapter):
                 self._compiled_graph.update_state(fork_config, source_state.values)
         
         return fork_adapter
+
+    def close(self) -> None:
+        """Close checkpointer database connection."""
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
+        try:
+            if self._config.checkpointer_type == CheckpointerType.SQLITE:
+                conn = getattr(self._checkpointer, 'conn', None)
+                if conn:
+                    conn.close()
+            elif self._config.checkpointer_type == CheckpointerType.POSTGRES:
+                # 通过上下文管理器正常退出，触发 finally 关闭连接
+                cm = getattr(self, '_checkpointer_cm', None)
+                if cm is not None:
+                    cm.__exit__(None, None, None)
+        except Exception as e:
+            logger.warning(f"Error closing checkpointer: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

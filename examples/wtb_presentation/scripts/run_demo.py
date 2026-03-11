@@ -107,11 +107,19 @@ def demo_basic_execution():
     # Step 1: Create WTBTestBench with development mode (SQLite)
     print_step(1, "Creating WTBTestBench with SQLite persistence...")
     
+    # bench = WTBTestBench.create(
+    #     mode="development",
+    #     data_dir=str(DATA_DIR),
+    #     enable_file_tracking=False,
+    # )
+
     bench = WTBTestBench.create(
-        mode="development",
-        data_dir=str(DATA_DIR),
+        mode="production",
+        checkpointer="postgres",
+        connection_string="postgresql://postgres:secret@localhost:5432/wtb_checkpoints",
         enable_file_tracking=False,
     )
+
     print(f"  - Bench created with data_dir: {DATA_DIR}")
     
     # Step 2: Create and register WorkflowProject
@@ -160,7 +168,7 @@ def demo_basic_execution():
     for i, cp in enumerate(checkpoints[:5]):  # Show first 5
         print(f"    [{i}] Step {cp.step}, Next: {cp.next_nodes[:2] if cp.next_nodes else '(end)'}")
     
-    return bench, project, result
+    bench.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -182,7 +190,13 @@ def demo_rollback():
     
     from examples.wtb_presentation.graphs.unified_graph import create_rag_only_graph
     
-    bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
+    # bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
+    bench = WTBTestBench.create(
+        mode="production",
+        checkpointer="postgres",
+        connection_string="postgresql://postgres:secret@localhost:5432/wtb_checkpoints",
+        enable_file_tracking=False,
+    )
     
     project = WorkflowProject(
         name="rollback_demo",
@@ -232,6 +246,8 @@ def demo_rollback():
     state = bench.get_state(result.id)
     print(f"  - State retrieved: {state is not None}")
 
+    bench.close()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Demo 3: Forking
@@ -251,8 +267,14 @@ def demo_forking():
     
     from examples.wtb_presentation.graphs.unified_graph import create_rag_only_graph
     
-    bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
-    
+    # bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
+    bench = WTBTestBench.create(
+        mode="production",
+        checkpointer="postgres",
+        connection_string="postgresql://postgres:secret@localhost:5432/wtb_checkpoints",
+        enable_file_tracking=False,
+    )
+
     project = WorkflowProject(
         name="fork_demo",
         graph_factory=create_rag_only_graph,
@@ -304,6 +326,8 @@ def demo_forking():
     
     print(f"\n  Total forks created: {len(forks)}")
 
+    bench.close()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Demo 4: Batch Testing
@@ -323,8 +347,15 @@ def demo_batch_testing():
     
     from examples.wtb_presentation.graphs.unified_graph import create_rag_only_graph
     
-    bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
-    
+    # bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
+
+    bench = WTBTestBench.create(
+        mode="production",
+        checkpointer="postgres",
+        connection_string="postgresql://postgres:secret@localhost:5432/wtb_checkpoints",
+        enable_file_tracking=False,
+    )
+
     project = WorkflowProject(
         name="batch_demo",
         graph_factory=create_rag_only_graph,
@@ -373,6 +404,8 @@ def demo_batch_testing():
         status = "SUCCESS" if result.success else "FAILED"
         print(f"    [{i}] {result.combination_name}: {status}")
 
+    bench.close()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Demo 5: Pause/Resume
@@ -393,8 +426,14 @@ def demo_pause_resume():
     
     from examples.wtb_presentation.graphs.unified_graph import create_rag_only_graph
     
-    bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
-    
+    # bench = WTBTestBench.create(mode="development", data_dir=str(DATA_DIR))
+    bench = WTBTestBench.create(
+        mode="production",
+        checkpointer="postgres",
+        connection_string="postgresql://postgres:secret@localhost:5432/wtb_checkpoints",
+        enable_file_tracking=False,
+    )
+
     project = WorkflowProject(
         name="pause_resume_demo",
         graph_factory=create_rag_only_graph,
@@ -428,6 +467,8 @@ def demo_pause_resume():
         print(f"  - Resumed status: {resumed.status}")
     else:
         print("  - Execution completed without pausing (breakpoint may not be supported)")
+
+    bench.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

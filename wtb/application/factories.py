@@ -587,6 +587,8 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=exec_ctrl,
             batch_runner=None,
+            _state_adapter=state_adapter,  # ← 加
+            _uow=uow,  # ← 加
         )
     
     @staticmethod
@@ -623,6 +625,8 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=exec_ctrl,
             batch_runner=None,
+            _state_adapter=state_adapter,  # ← 加
+            _uow=uow,  # ← 加
         )
     
     @staticmethod
@@ -642,8 +646,8 @@ class WTBTestBenchFactory:
         
         os.makedirs(data_dir, exist_ok=True)
         
-        db_url = f"sqlite:///{data_dir}/wtb.db"
-        uow = UnitOfWorkFactory.create(mode="sqlalchemy", db_url=db_url)
+        # db_url = f"sqlite:///{data_dir}/wtb.db"
+        uow = UnitOfWorkFactory.create(mode="sqlalchemy")
         
         # Use LangGraph state adapter with SQLite checkpointer
         try:
@@ -701,6 +705,8 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=exec_ctrl,
             batch_runner=None,
+            _state_adapter=state_adapter,  # ← 加
+            _uow=uow,  # ← 加
         )
     
     @staticmethod
@@ -730,8 +736,8 @@ class WTBTestBenchFactory:
         if checkpointer_type == "memory":
             uow = InMemoryUnitOfWork()
         else:
-            db_url = f"sqlite:///{data_dir}/wtb.db"
-            uow = UnitOfWorkFactory.create(mode="sqlalchemy", db_url=db_url)
+            # db_url = f"sqlite:///{data_dir}/wtb.db"
+            uow = UnitOfWorkFactory.create(mode="sqlalchemy")
         
         try:
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
@@ -796,4 +802,6 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=exec_ctrl,
             batch_runner=None,
+            _state_adapter=state_adapter,  # ← 加
+            _uow=uow,  # ← 加
         )
