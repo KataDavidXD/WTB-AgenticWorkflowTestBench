@@ -999,11 +999,19 @@ def run_full_presentation(sections: Optional[List[str]] = None):
     # - SQLite UoW at DATA_DIR/wtb.db
     # - LangGraph SQLite checkpointer at DATA_DIR/wtb_checkpoints.db
     # - File tracking SQLite at DATA_DIR/.filetrack/filetrack.db (2026-01-17)
+    # bench = WTBTestBench.create(
+    #     mode="development",
+    #     data_dir=str(DATA_DIR),
+    #     enable_file_tracking=True,  # Enable file tracking for rollback
+    # )
+
     bench = WTBTestBench.create(
-        mode="development", 
-        data_dir=str(DATA_DIR),
-        enable_file_tracking=True,  # Enable file tracking for rollback
+        mode="production",
+        checkpointer="postgres",
+        connection_string="postgresql://postgres:secret@localhost:5432/wtb",
+        enable_file_tracking=False,
     )
+
     print(f"  - WTB initialized with SQLite persistence in: {DATA_DIR}")
     print(f"  - File tracking ENABLED: rollback will restore files")
     

@@ -242,6 +242,8 @@ class WTBTestBench:
         variant_service: "VariantService",
         execution_controller: "IExecutionController",
         batch_runner: Optional["IBatchTestRunner"] = None,
+        _state_adapter=None,  # ← 新增
+        _uow=None,  # ← 新增
     ):
         """
         Initialize WTBTestBench with Application Services.
@@ -256,6 +258,8 @@ class WTBTestBench:
         self._variant_service = variant_service
         self._exec_ctrl = execution_controller
         self._batch_runner = batch_runner
+        self._state_adapter_ref = _state_adapter  # ← 新增
+        self._uow_ref = _uow  # ← 新增
         
         # SDK-level caches
         self._project_cache: Dict[str, WorkflowProject] = {}
@@ -817,6 +821,26 @@ class WTBTestBench:
         
         converter = WorkflowConversionService()
         return converter.convert_from_project(project)
+
+    def close(self) -> None:
+        """Close saver and UoW database connections."""
+        if self._state_adapter_ref and hasattr(self._state_adapter_ref, 'close'):
+            try:
+                self._state_adapter_ref.close()
+            except Exception:
+                pass
+        if self._uow_ref:
+            try:
+                self._uow_ref.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

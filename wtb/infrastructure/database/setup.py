@@ -1,244 +1,528 @@
 """
 Database Setup and Initialization.
 
-Uses SQLAlchemy to initialize database schemas following the architecture pattern:
-- Config: Paths and URLs (config.py)
-- Models: SQLAlchemy ORM (models.py) 
-- This module: Schema creation using SQLAlchemy
-- Repositories: Data access (repositories/)
-- UoW: Transaction management (unit_of_work.py)
+Architecture:
+- config.py: database paths and URLs (three independent PostgreSQL databases)
+- models.py: SQLAlchemy ORM models for WTB
+- setup.py: database/table initialization
+- repositories/: data access
+- unit_of_work.py: transaction management
 
-Usage:
-    from wtb.infrastructure.database.setup import setup_all_databases
-    
-    setup_all_databases()
+Supports:
+- SQLite
+- PostgreSQL
+
+Rules:
+- WTB uses SQLAlchemy ORM to create tables
+- AgentGit uses raw SQL because it does not provide ORM models
+- FileTracker currently only ensures storage target is ready
 """
 
-import os
 import sys
-from pathlib import Path
-from typing import Optional
-from datetime import datetime
+from typing import Any
 
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
-from .config import get_database_config, redirect_agentgit_database
-from .models import Base
+from wtb.infrastructure.database import get_database_config
+from wtb.infrastructure.database import Base
+
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def _quote_ident(name: str) -> str:
+    """Quote a PostgreSQL identifier safely."""
+    return '"' + name.replace('"', '""') + '"'
 
 
-def setup_wtb_database(echo: bool = False) -> bool:
-    """
-    Initialize WTB database using SQLAlchemy ORM.
-    
-    Creates all tables defined in models.py.
-    
-    Args:
-        echo: Whether to log SQL statements
-        
-    Returns:
-        True if successful
-    """
+def _create_sqlite_engine(db_url: str, echo: bool = False):
+    """Create SQLite engine."""
+    return create_engine(
+        db_url,
+        echo=echo,
+        connect_args={"check_same_thread": False},
+    )
+
+
+def _create_postgresql_engine(db_url: str, echo: bool = False):
+    """Create PostgreSQL engine."""
+    return create_engine(
+        db_url,
+        echo=echo,
+        pool_size=5,
+        max_overflow=10,
+        pool_pre_ping=True,
+    )
+
+
+def _create_engine(db_url: str, mode: str, echo: bool = False):
+    """Create engine based on storage mode."""
+    if mode == "sqlite":
+        return _create_sqlite_engine(db_url, echo=echo)
+    return _create_postgresql_engine(db_url, echo=echo)
+
+
+def _build_postgres_admin_url(config) -> str:
+    """Build PostgreSQL admin URL (connect to 'postgres' database)."""
+    from urllib.parse import quote_plus
+    password = quote_plus(config.pg_password)
+    return (
+        f"postgresql://{config.pg_user}:{password}"
+        f"@{config.pg_host}:{config.pg_port}/postgres"
+    )
+
+
+def _ensure_postgresql_database(db_name: str, echo: bool = False) -> bool:
+    """Ensure a specific PostgreSQL database exists."""
     config = get_database_config()
-    
-    engine = create_engine(config.wtb_db_url, echo=echo)
-    
-    # Create all tables from ORM models
-    Base.metadata.create_all(engine)
-    
-    # Verify tables were created
-    inspector = inspect(engine)
-    tables = inspector.get_table_names()
-    
-    expected_tables = [
-        "wtb_workflows", "wtb_executions", "wtb_node_variants",
-        "wtb_batch_tests", "wtb_evaluation_results", 
-        "wtb_node_boundaries", "wtb_checkpoint_files"
-    ]
-    
-    created_count = sum(1 for t in expected_tables if t in tables)
-    
-    print(f"[OK] WTB database initialized: {config.wtb_db_path}")
-    print(f"     Tables: {created_count}/{len(expected_tables)}")
-    
+    if config.mode != "postgresql":
+        return True
+
+    admin_engine = create_engine(
+        _build_postgres_admin_url(config),
+        echo=echo,
+        isolation_level="AUTOCOMMIT",
+        pool_pre_ping=True,
+    )
+    with admin_engine.connect() as conn:
+        exists = conn.execute(
+            text("SELECT 1 FROM pg_database WHERE datname = :db_name"),
+            {"db_name": db_name},
+        ).scalar()
+        if not exists:
+            conn.execute(text(f"CREATE DATABASE {_quote_ident(db_name)}"))
+            print(f"  ✅ Created database: {db_name}")
+        else:
+            print(f"  ✅ Database already exists: {db_name}")
+    admin_engine.dispose()
     return True
+
+
+def _ensure_all_postgresql_databases(echo: bool = False) -> bool:
+    """Ensure all three PostgreSQL databases exist."""
+    config = get_database_config()
+    if config.mode != "postgresql":
+        return True
+    print("\n--- Ensuring PostgreSQL databases exist ---")
+    _ensure_postgresql_database(config.pg_database_wtb, echo=echo)
+    _ensure_postgresql_database(config.pg_database_agentgit, echo=echo)
+    _ensure_postgresql_database(config.pg_database_filetracker, echo=echo)
+    return True
+
+
+# =============================================================================
+# AgentGit Setup
+# =============================================================================
+
+def _create_agentgit_tables(conn, id_type: str):
+    """
+    Create AgentGit tables using raw SQL.
+
+    Args:
+        conn: SQLAlchemy connection
+        id_type: Primary key type (e.g. 'INTEGER PRIMARY KEY AUTOINCREMENT' for SQLite,
+                 'INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY' for PostgreSQL)
+    """
+    # 表定义
+    tables_sql = [
+        f"""
+        CREATE TABLE IF NOT EXISTS users (
+            id {id_type},
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_admin INTEGER DEFAULT 0,
+            created_at TEXT,
+            last_login TEXT,
+            data TEXT,
+            api_key TEXT,
+            session_limit INTEGER DEFAULT 5
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS external_sessions (
+            id {id_type},
+            user_id INTEGER NOT NULL,
+            session_name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            is_active INTEGER DEFAULT 1,
+            data TEXT,
+            metadata TEXT,
+            branch_count INTEGER DEFAULT 0,
+            total_checkpoints INTEGER DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS internal_sessions (
+            id {id_type},
+            external_session_id INTEGER NOT NULL,
+            langgraph_session_id TEXT UNIQUE NOT NULL,
+            state_data TEXT,
+            conversation_history TEXT,
+            created_at TEXT NOT NULL,
+            is_current INTEGER DEFAULT 0,
+            checkpoint_count INTEGER DEFAULT 0,
+            parent_session_id INTEGER,
+            branch_point_checkpoint_id INTEGER,
+            tool_invocation_count INTEGER DEFAULT 0,
+            metadata TEXT,
+            FOREIGN KEY (external_session_id) REFERENCES external_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_session_id) REFERENCES internal_sessions(id) ON DELETE SET NULL
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            id {id_type},
+            internal_session_id INTEGER NOT NULL,
+            checkpoint_name TEXT,
+            checkpoint_data TEXT NOT NULL,
+            is_auto INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            user_id INTEGER,
+            FOREIGN KEY (internal_session_id) REFERENCES internal_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    ]
+
+    for sql in tables_sql:
+        conn.execute(text(sql))
+
+    # 索引定义
+    index_defs = [
+        ("idx_external_sessions_user", "external_sessions", "user_id"),
+        ("idx_internal_sessions_external", "internal_sessions", "external_session_id"),
+        ("idx_internal_sessions_langgraph", "internal_sessions", "langgraph_session_id"),
+        ("idx_checkpoints_session", "checkpoints", "internal_session_id"),
+    ]
+    for idx_name, table, column in index_defs:
+        conn.execute(text(
+            f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})"
+        ))
 
 
 def setup_agentgit_database(echo: bool = False) -> bool:
     """
     Initialize AgentGit database schema.
-    
-    AgentGit uses its own models, so we create tables using raw SQL
-    that matches their schema. This is the anti-corruption layer approach.
-    
-    Args:
-        echo: Whether to log SQL statements
-        
-    Returns:
-        True if successful
+
+    SQLite: Create tables in agentgit.db
+    PostgreSQL: Create tables in agentgit database (public schema)
     """
     config = get_database_config()
-    
-    engine = create_engine(config.agentgit_db_url, echo=echo)
-    
-    # AgentGit schema (matches their internal structure)
-    with engine.connect() as conn:
-        # Users table
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                is_admin INTEGER DEFAULT 0,
-                created_at TEXT,
-                last_login TEXT,
-                data TEXT,
-                api_key TEXT,
-                session_limit INTEGER DEFAULT 5
-            )
-        """))
-        
-        # External sessions
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS external_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                session_name TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT,
-                is_active INTEGER DEFAULT 1,
-                data TEXT,
-                metadata TEXT,
-                branch_count INTEGER DEFAULT 0,
-                total_checkpoints INTEGER DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-            )
-        """))
-        
-        # Internal sessions
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS internal_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                external_session_id INTEGER NOT NULL,
-                langgraph_session_id TEXT UNIQUE NOT NULL,
-                state_data TEXT,
-                conversation_history TEXT,
-                created_at TEXT NOT NULL,
-                is_current INTEGER DEFAULT 0,
-                checkpoint_count INTEGER DEFAULT 0,
-                parent_session_id INTEGER,
-                branch_point_checkpoint_id INTEGER,
-                tool_invocation_count INTEGER DEFAULT 0,
-                metadata TEXT,
-                FOREIGN KEY (external_session_id) REFERENCES external_sessions(id) ON DELETE CASCADE,
-                FOREIGN KEY (parent_session_id) REFERENCES internal_sessions(id) ON DELETE SET NULL
-            )
-        """))
-        
-        # Checkpoints
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS checkpoints (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                internal_session_id INTEGER NOT NULL,
-                checkpoint_name TEXT,
-                checkpoint_data TEXT NOT NULL,
-                is_auto INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                user_id INTEGER,
-                FOREIGN KEY (internal_session_id) REFERENCES internal_sessions(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-            )
-        """))
-        
-        # Indexes
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_external_sessions_user ON external_sessions(user_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_internal_sessions_external ON internal_sessions(external_session_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_internal_sessions_langgraph ON internal_sessions(langgraph_session_id)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(internal_session_id)"))
-        
-        conn.commit()
-    
-    # Verify
+    expected_tables = ["users", "external_sessions", "internal_sessions", "checkpoints"]
+
+    print("\n--- AgentGit Database ---")
+    if config.mode == "postgresql":
+        _ensure_postgresql_database(config.pg_database_agentgit, echo=echo)
+        print(f"Location: {config.pg_database_agentgit} (PostgreSQL)")
+        id_type = "INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+    else:
+        print(f"Location: {config.agentgit_db_path} (SQLite)")
+        id_type = "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+    engine = _create_engine(config.agentgit_db_url, config.mode, echo=echo)
+
+    # Create tables
+    with engine.begin() as conn:
+        _create_agentgit_tables(conn, id_type)
+
+    # Verify tables
     inspector = inspect(engine)
-    tables = inspector.get_table_names()
-    expected = ["users", "external_sessions", "internal_sessions", "checkpoints"]
-    created_count = sum(1 for t in expected if t in tables)
-    
-    print(f"[OK] AgentGit database initialized: {config.agentgit_db_path}")
-    print(f"     Tables: {created_count}/{len(expected)}")
-    
+    existing_tables = set(inspector.get_table_names())
+    print("Tables:")
+    all_exist = True
+    for table in expected_tables:
+        if table in existing_tables:
+            print(f"  ✅ {table}")
+        else:
+            print(f"  ❌ {table}")
+            all_exist = False
+
+    if all_exist:
+        print(f"✅ AgentGit database setup complete (all {len(expected_tables)} tables present).")
+    else:
+        missing = [t for t in expected_tables if t not in existing_tables]
+        print(f"⚠️ AgentGit database setup incomplete. Missing tables: {', '.join(missing)}")
+
     return True
 
 
-def setup_all_databases(echo: bool = False) -> dict:
-    """
-    Setup all databases for the WTB system.
-    
-    1. Redirects AgentGit to local data/ directory
-    2. Initializes AgentGit schema
-    3. Initializes WTB schema using SQLAlchemy ORM
-    
-    Args:
-        echo: Whether to log SQL statements
-        
-    Returns:
-        Dict with database config and status
-    """
+def reset_agentgit_database(echo: bool = False) -> bool:
+    """Drop and recreate AgentGit tables."""
     config = get_database_config()
-    
-    print("\n" + "="*60)
-    print("DATABASE SETUP")
-    print("="*60)
-    print(f"Data directory: {config.data_dir}")
-    print("-"*60)
-    
-    # Redirect AgentGit
-    redirected = redirect_agentgit_database()
-    if redirected:
-        print("[OK] AgentGit database path redirected")
-    else:
-        print("[WARN] AgentGit not installed, skipping redirect")
-    
-    # Initialize databases
-    setup_agentgit_database(echo)
-    setup_wtb_database(echo)
-    
-    print("-"*60)
-    print("Database files:")
-    print(f"  AgentGit: {config.agentgit_db_path}")
-    print(f"  WTB:      {config.wtb_db_path}")
-    print("="*60 + "\n")
-    
-    return {
-        "config": config,
-        "agentgit_redirected": redirected,
-        "status": "success"
-    }
+    expected_tables = ["users", "external_sessions", "internal_sessions", "checkpoints"]
 
+    print("\n--- Resetting AgentGit Database ---")
+
+    if config.mode == "sqlite":
+        if config.agentgit_db_path.exists():
+            config.agentgit_db_path.unlink()
+            print(f"  ✅ Deleted SQLite file: {config.agentgit_db_path}")
+        else:
+            print(f"  ℹ️ SQLite file did not exist: {config.agentgit_db_path}")
+        # Recreate tables (reuse setup logic but print inside this function)
+        engine = _create_engine(config.agentgit_db_url, config.mode, echo=echo)
+        id_type = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        with engine.begin() as conn:
+            _create_agentgit_tables(conn, id_type)
+        print(f"Location: {config.agentgit_db_path} (SQLite)")
+
+    else:  # PostgreSQL
+        _ensure_postgresql_database(config.pg_database_agentgit, echo=echo)
+        engine = _create_engine(config.agentgit_db_url, config.mode, echo=echo)
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+            id_type = "INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+            _create_agentgit_tables(conn, id_type)
+        print(f"Location: {config.pg_database_agentgit} (PostgreSQL)")
+
+    # Verify tables after reset
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    print("Tables after reset:")
+    all_exist = True
+    for table in expected_tables:
+        if table in existing_tables:
+            print(f"  ✅ {table}")
+        else:
+            print(f"  ❌ {table}")
+            all_exist = False
+
+    if all_exist:
+        print(f"✅ AgentGit database reset complete (all {len(expected_tables)} tables present).")
+    else:
+        missing = [t for t in expected_tables if t not in existing_tables]
+        print(f"⚠️ AgentGit database reset incomplete. Missing tables: {', '.join(missing)}")
+
+    return True
+
+
+# =============================================================================
+# WTB Setup
+# =============================================================================
+
+def setup_wtb_database(echo: bool = False) -> bool:
+    """Initialize WTB database using SQLAlchemy ORM."""
+    config = get_database_config()
+    expected_tables = [
+        "wtb_workflows", "wtb_executions", "wtb_node_variants",
+        "wtb_batch_tests", "wtb_evaluation_results", "wtb_node_boundaries",
+        "checkpoint_file_links",
+    ]
+
+    print("\n--- WTB Database ---")
+    if config.mode == "postgresql":
+        _ensure_postgresql_database(config.pg_database_wtb, echo=echo)
+        print(f"Location: {config.pg_database_wtb} (PostgreSQL)")
+    else:
+        print(f"Location: {config.wtb_db_path} (SQLite)")
+
+    engine = _create_engine(config.wtb_db_url, config.mode, echo=echo)
+    Base.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    print("Tables:")
+    all_exist = True
+    for table in expected_tables:
+        if table in existing_tables:
+            print(f"  ✅ {table}")
+        else:
+            print(f"  ❌ {table}")
+            all_exist = False
+
+    if all_exist:
+        print(f"✅ WTB database setup complete (all {len(expected_tables)} tables present).")
+    else:
+        missing = [t for t in expected_tables if t not in existing_tables]
+        print(f"⚠️ WTB database setup incomplete. Missing tables: {', '.join(missing)}")
+
+    return True
+
+
+def reset_wtb_database(echo: bool = False) -> bool:
+    """Drop and recreate WTB tables using SQLAlchemy metadata."""
+    config = get_database_config()
+    expected_tables = [
+        "wtb_workflows", "wtb_executions", "wtb_node_variants",
+        "wtb_batch_tests", "wtb_evaluation_results", "wtb_node_boundaries",
+        "checkpoint_file_links",
+    ]
+
+    print("\n--- Resetting WTB Database ---")
+
+    if config.mode == "sqlite":
+        if config.wtb_db_path.exists():
+            config.wtb_db_path.unlink()
+            print(f"  ✅ Deleted SQLite file: {config.wtb_db_path}")
+        else:
+            print(f"  ℹ️ SQLite file did not exist: {config.wtb_db_path}")
+        engine = _create_engine(config.wtb_db_url, config.mode, echo=echo)
+        Base.metadata.create_all(engine)
+        print(f"Location: {config.wtb_db_path} (SQLite)")
+
+    else:  # PostgreSQL
+        _ensure_postgresql_database(config.pg_database_wtb, echo=echo)
+        engine = _create_engine(config.wtb_db_url, config.mode, echo=echo)
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+            Base.metadata.create_all(bind=conn)
+        print(f"Location: {config.pg_database_wtb} (PostgreSQL)")
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    print("Tables after reset:")
+    all_exist = True
+    for table in expected_tables:
+        if table in existing_tables:
+            print(f"  ✅ {table}")
+        else:
+            print(f"  ❌ {table}")
+            all_exist = False
+
+    if all_exist:
+        print(f"✅ WTB database reset complete (all {len(expected_tables)} tables present).")
+    else:
+        missing = [t for t in expected_tables if t not in existing_tables]
+        print(f"⚠️ WTB database reset incomplete. Missing tables: {', '.join(missing)}")
+
+    return True
+
+
+# =============================================================================
+# FileTracker Setup
+# =============================================================================
+
+def setup_filetracker_database(echo: bool = False) -> bool:
+    """Initialize FileTracker target (ensure database exists)."""
+    config = get_database_config()
+
+    print("\n--- FileTracker Database ---")
+    if config.mode == "sqlite":
+        print(f"Location: {config.filetracker_db_path} (SQLite)")
+        print("✅ FileTracker database ready (no tables required).")
+    else:
+        _ensure_postgresql_database(config.pg_database_filetracker, echo=echo)
+        print(f"Location: {config.pg_database_filetracker} (PostgreSQL)")
+        print("✅ FileTracker database ready (no tables required).")
+
+    return True
+
+
+def reset_filetracker_database(echo: bool = False) -> bool:
+    """Reset FileTracker database (for PostgreSQL, clear public schema)."""
+    config = get_database_config()
+
+    print("\n--- Resetting FileTracker Database ---")
+    if config.mode == "sqlite":
+        if config.filetracker_db_path.exists():
+            config.filetracker_db_path.unlink()
+            print(f"  ✅ Deleted SQLite file: {config.filetracker_db_path}")
+        else:
+            print(f"  ℹ️ SQLite file did not exist: {config.filetracker_db_path}")
+        print(f"Location: {config.filetracker_db_path} (SQLite)")
+        print("✅ FileTracker database reset complete (no tables).")
+    else:
+        _ensure_postgresql_database(config.pg_database_filetracker, echo=echo)
+        engine = _create_engine(config.filetracker_db_url, config.mode, echo=echo)
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+        print(f"Location: {config.pg_database_filetracker} (PostgreSQL)")
+        print("✅ FileTracker database reset complete (schema cleared).")
+
+    return True
+
+
+# =============================================================================
+# Main Setup
+# =============================================================================
+
+def setup_all_databases(echo: bool = False) -> dict[str, Any]:
+    """Setup all databases for the WTB system."""
+    config = get_database_config()
+
+    print("\n" + "=" * 60)
+    print("DATABASE SETUP")
+    print("=" * 60)
+    if config.mode == "sqlite":
+        print(f"Mode: {config.mode}")
+        print(f"Data directory: {config.data_dir}")
+    else:
+        print(f"Mode: {config.mode}")
+        print(f"Host: {config.pg_host}:{config.pg_port}")
+    print("-" * 60)
+
+    if config.mode == "postgresql":
+        _ensure_all_postgresql_databases(echo=echo)
+
+    setup_agentgit_database(echo=echo)
+    setup_wtb_database(echo=echo)
+    setup_filetracker_database(echo=echo)
+
+    print("\n" + "-" * 60)
+    print("SUMMARY")
+    if config.mode == "sqlite":
+        print(f"  ✅ AgentGit:    {config.agentgit_db_path}")
+        print(f"  ✅ WTB:         {config.wtb_db_path}")
+        print(f"  ✅ FileTracker: {config.filetracker_db_path}")
+    else:
+        print(f"  ✅ AgentGit:    {config.pg_database_agentgit}")
+        print(f"  ✅ WTB:         {config.pg_database_wtb}")
+        print(f"  ✅ FileTracker: {config.pg_database_filetracker}")
+    print("=" * 60 + "\n")
+
+    return {"config": config, "mode": config.mode, "status": "success"}
+
+
+def reset_all_databases(echo: bool = False) -> dict[str, Any]:
+    """Reset all databases (drop and recreate tables/files)."""
+    config = get_database_config()
+
+    print("\n" + "=" * 60)
+    print("DATABASE RESET")
+    print("=" * 60)
+    print(f"Mode: {config.mode}")
+    print("-" * 60)
+
+    if config.mode == "postgresql":
+        _ensure_all_postgresql_databases(echo=echo)
+
+    reset_agentgit_database(echo=echo)
+    reset_wtb_database(echo=echo)
+    reset_filetracker_database(echo=echo)
+
+    print("\n" + "-" * 60)
+    print("All databases have been reset.")
+    print("=" * 60 + "\n")
+
+    return {"config": config, "mode": config.mode, "status": "reset"}
+
+
+# =============================================================================
+# Session Helper
+# =============================================================================
 
 def get_wtb_session():
-    """
-    Get a new SQLAlchemy session for WTB database.
-    
-    For simple cases. For transactions, use SQLAlchemyUnitOfWork.
-    
-    Returns:
-        SQLAlchemy Session
-    """
+    """Get a new SQLAlchemy session for WTB database."""
     config = get_database_config()
-    engine = create_engine(config.wtb_db_url)
+    engine = _create_engine(config.wtb_db_url, config.mode, echo=False)
     Session = sessionmaker(bind=engine)
     return Session()
 
 
 if __name__ == "__main__":
-    # Configure stdout for Windows
     if sys.platform == "win32":
         import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    
-    setup_all_databases(echo=False)
-    
-    from .config import print_database_locations
-    print_database_locations()
-
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer,
+            encoding="utf-8",
+            errors="replace",
+        )
+    # 默认执行 setup
+    # setup_all_databases(echo=False)
+    reset_all_databases()

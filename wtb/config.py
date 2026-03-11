@@ -379,10 +379,12 @@ class WTBConfig:
         rollback_cleanup_backup: Backup files before deletion
         rollback_cleanup_max_files: Safety limit on files to delete per rollback
     """
-    
-    # Storage mode: "inmemory" or "sqlalchemy"
-    wtb_storage_mode: str = "inmemory"
-    
+
+    # Storage mode:
+    # - "inmemory": no persistence
+    # - "sqlalchemy": SQL database persistence (SQLite or PostgreSQL via wtb_db_url)
+    wtb_storage_mode: str = "sqlalchemy"
+
     # Database URL (for sqlalchemy mode)
     wtb_db_url: Optional[str] = None
     
@@ -430,12 +432,12 @@ class WTBConfig:
     rollback_cleanup_dry_run: bool = False     # Log actions only, no actual deletion
     rollback_cleanup_backup: bool = True       # Backup files before deletion
     rollback_cleanup_max_files: int = 100      # Safety limit to prevent runaway deletion
-    
+
     def __post_init__(self):
         """Set default wtb_db_url if not provided."""
         if self.wtb_db_url is None and self.wtb_storage_mode == "sqlalchemy":
-            self.wtb_db_url = f"sqlite:///{self.data_dir}/wtb.db"
-    
+            self.wtb_db_url = "postgresql://postgres:secret@localhost:5432/WTB"
+
     @classmethod
     def from_env(cls) -> "WTBConfig":
         """
@@ -464,8 +466,11 @@ class WTBConfig:
         data_dir = os.getenv("WTB_DATA_DIR", "data")
         
         return cls(
-            wtb_storage_mode=os.getenv("WTB_STORAGE_MODE", "inmemory"),
-            wtb_db_url=os.getenv("WTB_DATABASE_URL"),
+            wtb_storage_mode=os.getenv("WTB_STORAGE_MODE", "sqlalchemy"),
+            wtb_db_url=os.getenv(
+                "WTB_DATABASE_URL",
+                "postgresql://postgres:secret@localhost:5432/WTB",
+            ),
             agentgit_db_path=os.getenv("AGENTGIT_DB_PATH", f"{data_dir}/agentgit.db"),
             state_adapter_mode=os.getenv("STATE_ADAPTER_MODE", "inmemory"),
             data_dir=data_dir,
@@ -498,22 +503,13 @@ class WTBConfig:
             ide_sync_enabled=False,
             langgraph_event_config=LangGraphEventConfig.for_testing(),
         )
-    
+
     @classmethod
     def for_development(cls, data_dir: str = "data") -> "WTBConfig":
-        """
-        Create config for development (SQLite persistence).
-        
-        Args:
-            data_dir: Directory for database files
-            
-        Returns:
-            WTBConfig with SQLite persistence
-        """
         return cls(
             wtb_storage_mode="sqlalchemy",
-            wtb_db_url=f"sqlite:///{data_dir}/wtb.db",
-            agentgit_db_path=f"{data_dir}/agentgit.db",
+            wtb_db_url="postgresql://postgres:postgres@localhost:5432/wtb",
+            agentgit_db_path="postgresql://postgres:postgres@localhost:5432/wtb",
             state_adapter_mode="agentgit",
             data_dir=data_dir,
             filetracker_enabled=False,
@@ -521,7 +517,7 @@ class WTBConfig:
             langgraph_event_config=LangGraphEventConfig.for_development(),
             log_sql=True,
         )
-    
+
     @classmethod
     def for_production(
         cls,
