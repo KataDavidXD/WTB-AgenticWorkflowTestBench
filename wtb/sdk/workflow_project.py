@@ -25,7 +25,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Type, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -491,6 +491,23 @@ class WorkflowProject:
     # Private variant storage
     _node_variants: Dict[str, Dict[str, NodeVariant]] = field(default_factory=dict, repr=False)
     _workflow_variants: Dict[str, WorkflowVariant] = field(default_factory=dict, repr=False)
+    _graph_cache: Dict[Tuple[Any, ...], Any] = field(default_factory=dict, repr=False)
+
+    def _graph_cache_key(
+        self,
+        variant_config: Optional[Dict[str, str]],
+        workflow_variant: Optional[str],
+    ) -> Tuple[Any, ...]:
+        """Build a stable cache key for repeated graph construction."""
+        normalized_variant_config = tuple(sorted((variant_config or {}).items()))
+        return (
+            workflow_variant or "",
+            normalized_variant_config,
+        )
+
+    def _clear_graph_cache(self) -> None:
+        """Invalidate memoized graphs after project structure changes."""
+        self._graph_cache.clear()
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Node-Level Variant Management
@@ -540,6 +557,7 @@ class WorkflowProject:
             env_key = f"{node}:{name}"
             self.environment.variant_environments[env_key] = environment
         
+        self._clear_graph_cache()
         self.updated_at = datetime.now(timezone.utc)
     
     def list_variants(self, node: Optional[str] = None) -> Dict[str, List[str]]:
@@ -600,6 +618,7 @@ class WorkflowProject:
             del self._node_variants[node][name]
             if not self._node_variants[node]:
                 del self._node_variants[node]
+            self._clear_graph_cache()
             self.updated_at = datetime.now(timezone.utc)
             return True
         return False
@@ -637,6 +656,7 @@ class WorkflowProject:
             state_schema=state_schema,
         )
         self._workflow_variants[name] = variant
+        self._clear_graph_cache()
         self.updated_at = datetime.now(timezone.utc)
     
     def list_workflow_variants(self) -> List[str]:
@@ -672,6 +692,7 @@ class WorkflowProject:
         """
         if name in self._workflow_variants:
             del self._workflow_variants[name]
+            self._clear_graph_cache()
             self.updated_at = datetime.now(timezone.utc)
             return True
         return False
@@ -712,6 +733,7 @@ class WorkflowProject:
             # Variant already exists, that's fine
             pass
         self.version += 1
+        self._clear_graph_cache()
         self.updated_at = datetime.now(timezone.utc)
     
     def update_workflow(
@@ -732,6 +754,7 @@ class WorkflowProject:
         """
         self.graph_factory = graph_factory
         self.version += 1
+        self._clear_graph_cache()
         self.updated_at = datetime.now(timezone.utc)
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -760,6 +783,14 @@ class WorkflowProject:
             LangGraph - may be compiled or uncompiled depending on factory.
             If compiled without checkpointer, LangGraphStateAdapter will recompile.
         """
+        cache_key = self._graph_cache_key(
+            variant_config=variant_config,
+            workflow_variant=workflow_variant,
+        )
+        cached_graph = self._graph_cache.get(cache_key)
+        if cached_graph is not None:
+            return cached_graph
+
         # Select graph factory
         if workflow_variant:
             wf_variant = self.get_workflow_variant(workflow_variant)
@@ -777,6 +808,7 @@ class WorkflowProject:
         if variant_config:
             graph = self._apply_node_variants(graph, variant_config)
         
+        self._graph_cache[cache_key] = graph
         return graph
     
     def _apply_node_variants(
