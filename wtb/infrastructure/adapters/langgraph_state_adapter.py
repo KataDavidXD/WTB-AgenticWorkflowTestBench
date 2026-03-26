@@ -282,6 +282,10 @@ class LangGraphStateAdapter(IStateAdapter):
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         return self._compiled_graph
     
+    def supports_graph_execution(self) -> bool:
+        """LangGraphStateAdapter always supports graph execution."""
+        return True
+    
     def has_graph(self) -> bool:
         """Check if graph is set."""
         return self._compiled_graph is not None
@@ -289,6 +293,31 @@ class LangGraphStateAdapter(IStateAdapter):
     def get_checkpointer(self) -> "BaseCheckpointSaver":
         """Get the checkpointer instance."""
         return self._checkpointer
+
+    def close(self) -> None:
+        """Close checkpointer and release database connections.
+
+        Strategy (ordered by abstraction level):
+        1. Context manager protocol (__exit__) -- MemorySaver and future savers
+        2. SqliteSaver.conn.close() -- conn is a documented public attribute
+        """
+        if self._checkpointer is None:
+            return
+        try:
+            if callable(getattr(self._checkpointer, '__exit__', None)):
+                self._checkpointer.__exit__(None, None, None)
+                return
+            conn = getattr(self._checkpointer, 'conn', None)
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "LangGraphStateAdapter":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.close()
     
     # ═══════════════════════════════════════════════════════════════════════════
     # IStateAdapter: Session Management (v1.6: string IDs)
@@ -621,11 +650,14 @@ class LangGraphStateAdapter(IStateAdapter):
     # LangGraph-Specific Operations
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def execute(self, initial_state: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, initial_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Execute workflow with automatic checkpointing.
         
-        LangGraph saves a checkpoint at each super-step automatically.
+        Args:
+            initial_state: Initial state dict for fresh execution, or None to
+                          resume from the last checkpoint on the current thread
+                          (native LangGraph behavior via graph.invoke(None, config)).
         """
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")

@@ -531,6 +531,11 @@ def _create_variant_execution_actor_class():
                     "variants": variants,
                     "actor_id": self._actor_id,
                 }
+                # v1.9: Store actor checkpoint DB path for coordinator rollback/fork
+                if hasattr(self._state_adapter, '_config'):
+                    adapter_config = self._state_adapter._config
+                    if hasattr(adapter_config, 'connection_string') and adapter_config.connection_string:
+                        execution.metadata["checkpoint_db_path"] = adapter_config.connection_string
                 uow.executions.update(execution)
                 uow.commit()
                 
@@ -1291,6 +1296,18 @@ class RayBatchTestRunner(IBatchTestRunner):
                         workspace = None
                         workspace_data = None
                 
+                # Emit variant execution started event (FLAW 8 fix)
+                if self._event_bridge:
+                    self._event_bridge.on_variant_execution_started(
+                        execution_id=execution_id,
+                        batch_test_id=batch_test.id,
+                        actor_id="",
+                        combination_name=combo.name,
+                        variants=combo.variants,
+                        queue_position=batch_test.variant_combinations.index(combo),
+                        total_in_queue=len(batch_test.variant_combinations),
+                    )
+                
                 # Submit to pool
                 actor = self._get_available_actor()
                 ref = actor.execute_variant.remote(
@@ -1779,6 +1796,9 @@ class RayBatchTestRunner(IBatchTestRunner):
         Create StateAdapter with same config as actors.
         
         v1.8: Used by create_rollback_coordinator() for consistent state access.
+        v1.9: Uses base wtb_db_url for default checkpoint path. For per-execution
+        rollback, the coordinator should resolve the correct actor-specific
+        checkpoint DB from execution.metadata["checkpoint_db_path"].
         
         Returns:
             IStateAdapter instance or None
@@ -1791,12 +1811,17 @@ class RayBatchTestRunner(IBatchTestRunner):
             )
             
             if LANGGRAPH_AVAILABLE:
-                return LangGraphStateAdapter(LangGraphConfig.for_development())
+                base_path = (
+                    self._wtb_db_url.replace("sqlite:///", "")
+                    if self._wtb_db_url.startswith("sqlite:///")
+                    else self._wtb_db_url
+                )
+                checkpoint_db = f"{base_path}_coordinator_checkpoints.db"
+                return LangGraphStateAdapter(LangGraphConfig.for_development(checkpoint_db))
             
         except ImportError:
             pass
         
-        # Fallback to InMemory
         from wtb.infrastructure.adapters import InMemoryStateAdapter
         return InMemoryStateAdapter()
     

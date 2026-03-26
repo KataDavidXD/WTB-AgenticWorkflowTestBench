@@ -279,13 +279,22 @@ class RayFileTrackerService(IFileTrackingService):
         
         return self._service.get_tracked_files(commit_id)
     
+    def get_files_at_checkpoint(self, checkpoint_id: int) -> List[str]:
+        """Get file paths that existed at a specific checkpoint."""
+        if not self.enabled:
+            return []
+        self._ensure_initialized()
+        if self._service is None:
+            return []
+        return self._service.get_files_at_checkpoint(checkpoint_id)
+
     def is_available(self) -> bool:
         """
         Check if file tracking service is available.
         """
         if not self.enabled:
             return False
-        
+
         try:
             self._ensure_initialized()
             return self._service is not None and self._service.is_available()

@@ -693,6 +693,24 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         return self.batch_operate(requests)
     
     # ═══════════════════════════════════════════════════════════════════════════
+    # Resource Management
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def close(self) -> None:
+        """Release resources held by the coordinator (e.g., state adapter connections)."""
+        if self._state_adapter:
+            try:
+                self._state_adapter.close()
+            except Exception:
+                pass
+
+    def __enter__(self) -> "BatchExecutionCoordinator":
+        return self
+
+    def __exit__(self, *args) -> None:
+        self.close()
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # Private Helpers
     # ═══════════════════════════════════════════════════════════════════════════
     

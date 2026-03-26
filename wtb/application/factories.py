@@ -37,6 +37,7 @@ from wtb.infrastructure.database import (
 from wtb.infrastructure.adapters import InMemoryStateAdapter
 
 from .services.execution_controller import ExecutionController, DefaultNodeExecutor
+from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
 from .services.node_replacer import NodeReplacer
 
 
@@ -577,6 +578,13 @@ class WTBTestBenchFactory:
             state_adapter=state_adapter,
         )
         
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create(config)
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -585,8 +593,8 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=exec_ctrl,
-            batch_runner=None,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
         )
     
     @staticmethod
@@ -613,6 +621,13 @@ class WTBTestBenchFactory:
             state_adapter=state_adapter,
         )
         
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create_for_testing()
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -621,8 +636,8 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=exec_ctrl,
-            batch_runner=None,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
         )
     
     @staticmethod
@@ -691,6 +706,14 @@ class WTBTestBenchFactory:
             output_dir=output_dir,
         )
         
+        config = WTBConfig.for_development(data_dir)
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create_threadpool(config)
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -699,8 +722,8 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=exec_ctrl,
-            batch_runner=None,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
         )
     
     @staticmethod
@@ -786,6 +809,17 @@ class WTBTestBenchFactory:
             output_dir=output_dir,
         )
         
+        lg_config = WTBConfig(
+            data_dir=data_dir,
+            state_adapter_mode="langgraph",
+        )
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create_threadpool(lg_config)
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -794,6 +828,6 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=exec_ctrl,
-            batch_runner=None,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
         )

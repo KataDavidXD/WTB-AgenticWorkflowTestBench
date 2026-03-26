@@ -387,6 +387,21 @@ class IStateAdapter(ABC):
         """
         return []
     
+    def supports_graph_execution(self) -> bool:
+        """
+        Check if this adapter supports LangGraph-style graph execution.
+        
+        Adapters that support graph execution must also implement:
+        - execute(initial_state) -> Dict
+        - set_workflow_graph(graph, force_recompile) -> None
+        - has_graph() -> bool
+        - get_checkpointer() -> BaseCheckpointSaver
+        
+        Returns:
+            True if graph execution is supported
+        """
+        return False
+    
     def supports_streaming(self) -> bool:
         """
         Check if this adapter supports event streaming.
@@ -404,3 +419,7 @@ class IStateAdapter(ABC):
             True if time-travel is supported
         """
         return False
+
+    def close(self) -> None:
+        """Release any resources held by the adapter (e.g., DB connections)."""
+        pass

@@ -744,6 +744,35 @@ class FileTrackerService(IFileTrackingService):
                 for m in commit.mementos
             ]
     
+    def get_files_at_checkpoint(
+        self,
+        checkpoint_id: int,
+    ) -> List[str]:
+        """
+        Get file paths that existed at a specific checkpoint.
+
+        Args:
+            checkpoint_id: Checkpoint to query
+
+        Returns:
+            List of file paths that existed at the checkpoint
+        """
+        if not self._config.enabled:
+            return []
+
+        self._ensure_initialized()
+
+        with self._lock:
+            commit_id = self.get_commit_for_checkpoint(checkpoint_id)
+            if commit_id is None:
+                return []
+
+            commit = self._commit_repo.find_by_id(commit_id)
+            if commit is None:
+                return []
+
+            return [m.file_path for m in commit.mementos]
+
     def is_available(self) -> bool:
         """
         Check if file tracking service is available and configured.

@@ -219,67 +219,57 @@ class ExecutionController(IExecutionController):
         """
         Start or continue execution.
         
-        Execution Strategy:
-        1. If graph is provided AND adapter supports LangGraph -> native LangGraph execution
-        2. Otherwise -> use DefaultNodeExecutor with WTB workflow nodes
+        Capability-based routing (LSP-compliant, no isinstance checks):
+        1. If graph provided AND adapter supports LangGraph -> set graph, LangGraph path
+        2. If adapter already has a graph (resume scenario) -> reuse, LangGraph path
+        3. Otherwise -> DefaultNodeExecutor with WTB workflow nodes
         """
         execution = self._get_execution(execution_id)
         
-        # Check if we should use LangGraph execution
         if graph is not None and self._supports_langgraph_execution():
-            return self._run_with_langgraph(execution, graph)
+            self._state_adapter.set_workflow_graph(graph, force_recompile=True)
+            return self._run_with_langgraph(execution)
         
-        # Fall back to legacy WTB execution
+        if self._supports_langgraph_execution() and self._state_adapter.has_graph():
+            return self._run_with_langgraph(execution)
+        
         return self._run_with_node_executor(execution)
     
     def _supports_langgraph_execution(self) -> bool:
         """Check if state adapter supports LangGraph native execution."""
-        return (
-            hasattr(self._state_adapter, 'execute') and
-            hasattr(self._state_adapter, 'set_workflow_graph') and
-            hasattr(self._state_adapter, 'get_checkpointer')
-        )
+        return self._state_adapter.supports_graph_execution()
     
-    def _run_with_langgraph(self, execution: Execution, graph: Any) -> Execution:
+    def _run_with_langgraph(self, execution: Execution) -> Execution:
         """
         Execute workflow using LangGraph native execution.
         
-        Provides:
-        - Automatic checkpointing at each super-step
-        - Thread-based execution isolation
-        - Time-travel support via checkpoint history
+        Handles both fresh start (PENDING) and resume (PAUSED):
+        - PENDING: execution.start() + adapter.execute(initial_state)
+        - PAUSED: execution.resume() + adapter.execute(None) to resume from checkpoint
+        
+        Graph must already be set on adapter (done by run() before dispatching).
+        Session is initialized in create_execution(), not duplicated here.
         """
         try:
-            # Set graph on adapter - adapter recompiles with its checkpointer
-            self._state_adapter.set_workflow_graph(graph, force_recompile=True)
+            if execution.status == ExecutionStatus.PENDING:
+                execution.start()
+                initial_state = execution.state.workflow_variables.copy()
+                final_state = self._state_adapter.execute(initial_state)
+            elif execution.status == ExecutionStatus.PAUSED:
+                execution.resume()
+                final_state = self._state_adapter.execute(None)
+            else:
+                raise RuntimeError(f"Cannot run execution in status {execution.status.value}")
             
-            # Initialize session for this execution
-            initial_state = execution.state.workflow_variables.copy()
-            exec_state = ExecutionState(
-                current_node_id="__start__",
-                workflow_variables=initial_state,
-            )
-            session_id = self._state_adapter.initialize_session(execution.id, exec_state)
-            execution.session_id = session_id
-            
-            # Mark execution as running
-            execution.start()
-            
-            # Execute via LangGraph
-            final_state = self._state_adapter.execute(initial_state)
-            
-            # Update execution with results
             execution.state.workflow_variables = final_state if isinstance(final_state, dict) else {}
             execution.state.node_results["final"] = final_state
             
-            # Extract common result fields
             if isinstance(final_state, dict):
                 if "answer" in final_state:
                     execution.state.workflow_variables["answer"] = final_state["answer"]
                 if "messages" in final_state:
                     execution.state.execution_path = final_state.get("messages", [])
             
-            # Track output files if file tracking is enabled
             if self._file_tracking and self._file_tracking.is_available():
                 self._track_output_files(execution, final_state)
             
@@ -289,7 +279,6 @@ class ExecutionController(IExecutionController):
             logger.error(f"LangGraph execution failed: {e}")
             execution.fail(str(e), execution.state.current_node_id)
         
-        # Persist final state
         self._exec_repo.update(execution)
         self._commit()
         
@@ -512,89 +501,85 @@ class ExecutionController(IExecutionController):
         """
         Rollback to a previous checkpoint.
         
+        Uses Execution.restore_from_checkpoint() for proper domain validation.
+        
         Args:
             execution_id: Execution to rollback
             checkpoint_id: Checkpoint ID (UUID string)
         """
         execution = self._get_execution(execution_id)
         
-        if not execution.can_rollback():
-            raise ValueError(f"Cannot rollback execution in status {execution.status.value}")
+        # initialize_session is on IStateAdapter -- connect to execution's thread
+        self._state_adapter.initialize_session(
+            execution_id,
+            execution.state or ExecutionState(workflow_variables={}),
+        )
         
-        # v1.8: Initialize session for rollback (required by LangGraphStateAdapter)
-        # This connects the adapter to the execution's checkpoint history
-        if hasattr(self._state_adapter, 'initialize_session'):
-            try:
-                # Use existing state from execution, or create minimal state
-                initial_state = execution.state or ExecutionState(
-                    current_node_id="__rollback__",
-                    workflow_variables={},
-                )
-                self._state_adapter.initialize_session(execution_id, initial_state)
-            except Exception as init_err:
-                logger.debug(f"Session init for rollback: {init_err}")
-        
-        # Perform state rollback via state adapter
         restored_state = self._state_adapter.rollback(checkpoint_id)
         
-        # Restore files from restored state
-        files_restored = False
-        file_restore_error = None
-        files_restored_count = 0
-        if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
-            try:
-                import json
-                from pathlib import Path
-                
-                output_files_data = None
-                if isinstance(restored_state, dict):
-                    output_files_data = restored_state.get("_output_files")
-                elif isinstance(restored_state, ExecutionState):
-                    output_files_data = restored_state.workflow_variables.get("_output_files")
-                
-                if output_files_data and isinstance(output_files_data, dict):
-                    output_dir = Path(self._output_dir)
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    for filename, content in output_files_data.items():
-                        try:
-                            file_path = output_dir / filename
-                            file_path.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            if isinstance(content, bytes):
-                                file_path.write_bytes(content)
-                            elif isinstance(content, str):
-                                file_path.write_text(content, encoding="utf-8")
-                            else:
-                                file_path.write_text(json.dumps(content, indent=2), encoding="utf-8")
-                            
-                            files_restored_count += 1
-                        except Exception as e:
-                            logger.warning(f"Failed to restore file {filename}: {e}")
-                    
-                    files_restored = files_restored_count > 0
-            except Exception as e:
-                file_restore_error = str(e)
-                logger.warning(f"File restore failed (non-fatal): {e}")
+        # Type normalization: ensure ExecutionState for domain model
+        if isinstance(restored_state, dict):
+            restored_state = ExecutionState(
+                current_node_id=restored_state.get("current_node_id"),
+                workflow_variables=dict(restored_state),
+                execution_path=restored_state.get("execution_path", []),
+                node_results=restored_state.get("node_results", {}),
+            )
         
-        # Update execution
-        execution.state = restored_state
-        execution.status = ExecutionStatus.PAUSED
+        # Domain model validates transition, clones state, clears errors, sets PAUSED
+        execution.restore_from_checkpoint(restored_state)
         execution.checkpoint_id = checkpoint_id
         
-        # Store file restore status
-        if self._file_tracking and self._output_dir:
-            execution.state.workflow_variables["_file_restore_status"] = {
-                "attempted": True,
-                "success": files_restored,
-                "files_restored": files_restored_count,
-                "error": file_restore_error,
-            }
+        # File restore (reads from original restored_state, writes to cloned execution.state)
+        if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
+            self._restore_output_files(execution, restored_state)
         
         self._exec_repo.update(execution)
         self._commit()
         
         return execution
+    
+    def _restore_output_files(self, execution: Execution, source_state: ExecutionState) -> None:
+        """Restore output files from a checkpoint state."""
+        import json
+        from pathlib import Path
+        
+        files_restored_count = 0
+        file_restore_error = None
+        
+        try:
+            output_files_data = source_state.workflow_variables.get("_output_files")
+            if not output_files_data or not isinstance(output_files_data, dict):
+                return
+            
+            output_dir = Path(self._output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            for filename, content in output_files_data.items():
+                try:
+                    file_path = output_dir / filename
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    if isinstance(content, bytes):
+                        file_path.write_bytes(content)
+                    elif isinstance(content, str):
+                        file_path.write_text(content, encoding="utf-8")
+                    else:
+                        file_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
+                    
+                    files_restored_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to restore file {filename}: {e}")
+        except Exception as e:
+            file_restore_error = str(e)
+            logger.warning(f"File restore failed (non-fatal): {e}")
+        
+        execution.state.workflow_variables["_file_restore_status"] = {
+            "attempted": True,
+            "success": files_restored_count > 0,
+            "files_restored": files_restored_count,
+            "error": file_restore_error,
+        }
     
     def fork(
         self,
@@ -622,25 +607,17 @@ class ExecutionController(IExecutionController):
         - Isolation: New session isolates forked execution
         - Durability: Persisted to database
         """
-        # Get source execution
         source_execution = self._get_execution(execution_id)
         
-        # Get workflow
         workflow = self._workflow_repo.get(source_execution.workflow_id)
         if not workflow:
             raise ValueError(f"Workflow '{source_execution.workflow_id}' not found")
         
-        # v1.8: Initialize session for source execution (required by LangGraphStateAdapter
-        # to load checkpoint from the execution's thread)
-        if hasattr(self._state_adapter, 'initialize_session'):
-            try:
-                initial_state = source_execution.state or ExecutionState(
-                    current_node_id="__fork__",
-                    workflow_variables={},
-                )
-                self._state_adapter.initialize_session(execution_id, initial_state)
-            except Exception as init_err:
-                logger.debug(f"Session init for fork: {init_err}")
+        # Connect adapter to source execution's checkpoint thread
+        self._state_adapter.initialize_session(
+            execution_id,
+            source_execution.state or ExecutionState(workflow_variables={}),
+        )
         
         # Load checkpoint state
         checkpoint_state = self._state_adapter.load_checkpoint(checkpoint_id)
@@ -689,6 +666,14 @@ class ExecutionController(IExecutionController):
         # Persist forked execution
         self._exec_repo.add(forked_execution)
         self._commit()
+        
+        # Restore adapter session to source execution so subsequent calls
+        # on the source don't operate on the forked thread
+        if source_execution.session_id:
+            self._state_adapter.set_current_session(
+                source_execution.session_id,
+                execution_id=execution_id,
+            )
         
         logger.info(f"Forked execution {fork_execution_id} from {execution_id} at checkpoint {checkpoint_id[:8]}...")
         

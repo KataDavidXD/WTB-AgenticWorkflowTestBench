@@ -753,6 +753,12 @@ class SqliteFileTrackingService(IFileTrackingService):
                 ),
             }
     
+    def __enter__(self) -> "SqliteFileTrackingService":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def close(self):
         """Close database connection for current thread."""
         if hasattr(self._local, 'conn') and self._local.conn:

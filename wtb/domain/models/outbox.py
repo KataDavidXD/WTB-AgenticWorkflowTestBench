@@ -58,6 +58,12 @@ class OutboxEventType(Enum):
     BATCH_TEST_CREATED = "batch_test_created"
     BATCH_TEST_CANCELLED = "batch_test_cancelled"
     
+    # Execution lifecycle events (v1.9 - sequential fix)
+    EXECUTION_CREATED = "execution_created"
+    EXECUTION_STARTED = "execution_started"
+    EXECUTION_COMPLETED = "execution_completed"
+    EXECUTION_FAILED = "execution_failed"
+    
     # Batch coordination events (v1.8 - 2026-02-05)
     EXECUTION_FORKED = "execution_forked"
 

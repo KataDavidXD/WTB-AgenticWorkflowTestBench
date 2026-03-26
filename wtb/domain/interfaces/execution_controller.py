@@ -133,7 +133,7 @@ class IExecutionController(ABC):
         pass
     
     @abstractmethod
-    def rollback(self, execution_id: str, checkpoint_id: int) -> Execution:
+    def rollback(self, execution_id: str, checkpoint_id: str) -> Execution:
         """
         Rollback execution to a previous checkpoint.
         

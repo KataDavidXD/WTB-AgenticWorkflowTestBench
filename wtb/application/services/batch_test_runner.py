@@ -321,14 +321,39 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         """
         Execute variant using v1.7 controller factory pattern.
         
+        v1.9: Imports graph from graph_factory if workflow_graph is None
+        (mirrors Ray actor pattern for LangGraph execution with checkpoints).
+        
         ACID Compliance: Each execution gets isolated controller + UoW.
         """
-        # Create isolated controller with its own UoW
+        # Import graph from factory if not provided (mirror Ray pattern)
+        if workflow_graph is None:
+            graph_factory_module = getattr(combo, 'graph_factory_module', None)
+            graph_factory_name = getattr(combo, 'graph_factory_name', None)
+            if not graph_factory_module:
+                graph_factory_module = (combo.metadata or {}).get("graph_factory_module")
+            if not graph_factory_name:
+                graph_factory_name = (combo.metadata or {}).get("graph_factory_name")
+            if graph_factory_module and graph_factory_name:
+                try:
+                    import importlib
+                    module = importlib.import_module(graph_factory_module)
+                    factory_fn = getattr(module, graph_factory_name)
+                    workflow_graph = factory_fn()
+                    logger.info(
+                        f"ThreadPool: Imported graph from "
+                        f"{graph_factory_module}.{graph_factory_name} for {combo.name}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"ThreadPool: Failed to import graph factory "
+                        f"{graph_factory_module}.{graph_factory_name}: {e}"
+                    )
+        
         with self._controller_factory() as managed:
             controller = managed.controller
             uow = managed.uow
             
-            # Get workflow
             workflow = uow.workflows.get(workflow_id)
             if workflow is None:
                 raise BatchRunnerExecutionError(
@@ -337,21 +362,17 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                     failed_variant=combo.name,
                 )
             
-            # Apply variants to initial state
             variant_state = initial_state.copy()
             variant_state["_variant_config"] = combo.variants
             variant_state["_variant_name"] = combo.name
             
-            # Create and run execution via ExecutionController
             execution = controller.create_execution(
                 workflow=workflow,
                 initial_state=variant_state,
             )
             
-            # Run execution (with optional graph for LangGraph execution)
             execution = controller.run(execution.id, graph=workflow_graph)
             
-            # Calculate metrics from execution state
             result_metrics = self._extract_metrics(execution)
             duration_ms = int((time.time() - start_time) * 1000)
             
@@ -366,6 +387,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 metrics=result_metrics,
                 overall_score=result_metrics.get("overall_score", 0.0),
                 error_message=error_msg,
+                last_checkpoint_id=execution.checkpoint_id,
+                checkpoint_count=len(execution.state.execution_path) if execution.state else 0,
             )
     
     def _execute_with_legacy_factories(

@@ -357,6 +357,26 @@ class MockFileTrackingService(IFileTrackingService):
             
             return self._tracked_files.get(commit_id, []).copy()
     
+    def get_files_at_checkpoint(
+        self,
+        checkpoint_id: int,
+    ) -> List[str]:
+        """
+        Get file paths that existed at a specific checkpoint.
+
+        Args:
+            checkpoint_id: Checkpoint to query
+
+        Returns:
+            List of file paths that existed at the checkpoint
+        """
+        with self._lock:
+            commit_id = self._checkpoint_links.get(checkpoint_id)
+            if commit_id is None:
+                return []
+            tracked = self._tracked_files.get(commit_id, [])
+            return [f.file_path for f in tracked]
+
     def is_available(self) -> bool:
         """
         Check if file tracking service is available.
