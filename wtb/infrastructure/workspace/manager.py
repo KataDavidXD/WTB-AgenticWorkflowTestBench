@@ -445,7 +445,7 @@ class WorkspaceManager:
     def create_branch_workspace(
         self,
         source_workspace_id: str,
-        fork_checkpoint_id: int,
+        fork_checkpoint_id: str,
         new_execution_id: str,
         file_commit_id: Optional[str] = None,
     ) -> Workspace:

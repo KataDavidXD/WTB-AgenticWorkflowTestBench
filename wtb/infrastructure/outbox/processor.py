@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 class ICheckpointRepository(Protocol):
     """Protocol for AgentGit checkpoint repository access."""
     
-    def get_by_id(self, checkpoint_id: int) -> Optional[Any]:
+    def get_by_id(self, checkpoint_id: str) -> Optional[Any]:
         """Get checkpoint by ID."""
         ...
 
@@ -65,7 +65,7 @@ class ICommitRepository(Protocol):
         """Find commit by ID. Returns commit with mementos if found."""
         ...
     
-    def get_by_checkpoint_id(self, checkpoint_id: int) -> Optional[Any]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[Any]:
         """Find commit linked to a checkpoint."""
         ...
 
@@ -94,7 +94,7 @@ class IFileTrackingService(Protocol):
         """Check if service is available."""
         ...
     
-    def get_commit_for_checkpoint(self, checkpoint_id: int) -> Optional[str]:
+    def get_commit_for_checkpoint(self, checkpoint_id: str) -> Optional[str]:
         """Get commit ID linked to a checkpoint."""
         ...
     
@@ -106,11 +106,11 @@ class IFileTrackingService(Protocol):
         """Restore files from a commit."""
         ...
     
-    def restore_from_checkpoint(self, checkpoint_id: int) -> Any:
+    def restore_from_checkpoint(self, checkpoint_id: str) -> Any:
         """Restore files from checkpoint's linked commit."""
         ...
     
-    def get_files_at_checkpoint(self, checkpoint_id: int) -> List[str]:
+    def get_files_at_checkpoint(self, checkpoint_id: str) -> List[str]:
         """Get file paths at checkpoint (v1.9)."""
         ...
 
@@ -124,7 +124,7 @@ class IFileCleanupService(Protocol):
     
     def identify_orphaned_files(
         self,
-        target_checkpoint_id: int,
+        target_checkpoint_id: str,
         execution_id: str,
         current_workspace_path: Path,
         track_patterns: List[str],
@@ -136,7 +136,7 @@ class IFileCleanupService(Protocol):
     
     def cleanup_orphaned_files(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         execution_id: str,
         orphaned_paths: List[str],
         backup_dir: Optional[Path] = None,
@@ -297,6 +297,24 @@ class OutboxProcessor:
             # Rollback handlers (2026-01-15)
             OutboxEventType.ROLLBACK_FILE_RESTORE: self._handle_rollback_file_restore,
             OutboxEventType.ROLLBACK_VERIFY: self._handle_rollback_verify,
+            # Audit-only event handlers (log and mark processed)
+            OutboxEventType.RAY_EVENT: self._handle_audit_only_event,
+            OutboxEventType.FILE_CLEANUP_COMPLETED: self._handle_audit_only_event,
+            OutboxEventType.ROLLBACK_PERFORMED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_STARTED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_COMPLETED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_FAILED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_FORKED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_CREATED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_PAUSED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_RESUMED: self._handle_audit_only_event,
+            OutboxEventType.EXECUTION_STOPPED: self._handle_audit_only_event,
+            OutboxEventType.STATE_MODIFIED: self._handle_audit_only_event,
+            OutboxEventType.WORKFLOW_CREATED: self._handle_audit_only_event,
+            OutboxEventType.BATCH_TEST_CREATED: self._handle_audit_only_event,
+            OutboxEventType.BATCH_TEST_CANCELLED: self._handle_audit_only_event,
+            OutboxEventType.CHECKPOINT_SAVED: self._handle_audit_only_event,
+            OutboxEventType.FILE_TRACKED: self._handle_audit_only_event,
         }
     
     def start(self) -> None:
@@ -411,6 +429,19 @@ class OutboxProcessor:
     # ═══════════════════════════════════════════════════════════════════════════
     # Event Handlers
     # ═══════════════════════════════════════════════════════════════════════════
+    
+    def _handle_audit_only_event(self, event: OutboxEvent) -> None:
+        """
+        Handle events that require no cross-DB verification.
+        
+        These events (lifecycle, Ray, cleanup) are recorded for audit trail
+        purposes only. Processing simply logs and marks them as handled.
+        """
+        logger.debug(
+            f"Audit-only event processed: {event.event_type.value} "
+            f"for aggregate {event.aggregate_id}"
+        )
+        self._stats["events_processed"] += 1
     
     def _handle_checkpoint_create(self, event: OutboxEvent) -> None:
         """
@@ -658,10 +689,10 @@ class OutboxProcessor:
         
         # Step 2: Verify WTB link
         with SQLAlchemyUnitOfWork(self._wtb_db_url) as uow:
-            link = uow.checkpoint_files.find_by_checkpoint(checkpoint_id)
+            link = uow.checkpoint_file_links.get_by_checkpoint(checkpoint_id)
             if not link:
                 errors.append(
-                    f"WTB checkpoint_files link not found for checkpoint {checkpoint_id}"
+                    f"WTB checkpoint_file_links not found for checkpoint {checkpoint_id}"
                 )
             elif link.file_commit_id != file_commit_id:
                 errors.append(
@@ -1158,7 +1189,7 @@ class OutboxProcessor:
     def _emit_cleanup_completed_event(
         self,
         execution_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         result: Any,  # FileCleanupResult
         backup_dir: Optional[str] = None,
     ) -> None:
@@ -1193,13 +1224,9 @@ class OutboxProcessor:
             )
             
             # Save to outbox for audit/verification
-            with self._get_session() as session:
-                from wtb.infrastructure.database.repositories.outbox_repository import (
-                    SQLAlchemyOutboxRepository,
-                )
-                repo = SQLAlchemyOutboxRepository(session)
-                repo.add(event)
-                session.commit()
+            with SQLAlchemyUnitOfWork(self._wtb_db_url) as uow:
+                uow.outbox.add(event)
+                uow.commit()
             
             logger.debug(f"Emitted FILE_CLEANUP_COMPLETED event for {execution_id}")
             
@@ -1236,7 +1263,7 @@ class OutboxProcessor:
         # Verify file commit link exists
         if checkpoint_id:
             with SQLAlchemyUnitOfWork(self._wtb_db_url) as uow:
-                link = uow.checkpoint_files.find_by_checkpoint(checkpoint_id)
+                link = uow.checkpoint_file_links.get_by_checkpoint(checkpoint_id)
                 if not link and restored_files_count > 0:
                     errors.append(
                         f"No file commit linked to checkpoint {checkpoint_id} "

@@ -409,7 +409,7 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         results = self._session.execute(stmt).scalars().all()
         return [self._orm_to_domain(orm, load_mementos=False) for orm in results]
     
-    def get_by_checkpoint_id(self, checkpoint_id: int) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
         """Get commit linked to checkpoint."""
         stmt = (
             select(FileCommitORM)
@@ -494,7 +494,7 @@ class SQLAlchemyCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         
         logger.debug(f"Linked checkpoint {link.checkpoint_id} to commit {link.commit_id.short}...")
     
-    def get_by_checkpoint(self, checkpoint_id: int) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
         """Get link by checkpoint ID."""
         link_orm = self._session.get(CheckpointFileLinkORM, checkpoint_id)
         if not link_orm:
@@ -512,7 +512,7 @@ class SQLAlchemyCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         results = self._session.execute(stmt).scalars().all()
         return [self._orm_to_domain(orm) for orm in results]
     
-    def delete_by_checkpoint(self, checkpoint_id: int) -> bool:
+    def delete_by_checkpoint(self, checkpoint_id: str) -> bool:
         """Delete link by checkpoint ID."""
         link_orm = self._session.get(CheckpointFileLinkORM, checkpoint_id)
         if not link_orm:
@@ -645,7 +645,7 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
             if c.execution_id == execution_id
         ]
     
-    def get_by_checkpoint_id(self, checkpoint_id: int) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
         for commit in self._commits.values():
             if commit.checkpoint_id == checkpoint_id:
                 return commit
@@ -672,7 +672,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
     def add(self, link: CheckpointFileLink) -> None:
         self._links[link.checkpoint_id] = link
     
-    def get_by_checkpoint(self, checkpoint_id: int) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
         return self._links.get(checkpoint_id)
     
     def get_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
@@ -681,7 +681,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
             if link.commit_id.value == commit_id.value
         ]
     
-    def delete_by_checkpoint(self, checkpoint_id: int) -> bool:
+    def delete_by_checkpoint(self, checkpoint_id: str) -> bool:
         if checkpoint_id in self._links:
             del self._links[checkpoint_id]
             return True

@@ -29,7 +29,7 @@ class NodeStartedEvent(NodeEvent):
     """Published when a node starts execution."""
     node_type: str = ""
     context: Dict[str, Any] = field(default_factory=dict)
-    entry_checkpoint_id: Optional[int] = None
+    entry_checkpoint_id: Optional[str] = None
 
 
 @dataclass
@@ -38,7 +38,7 @@ class NodeCompletedEvent(NodeEvent):
     result: Any = None
     duration_ms: float = 0.0
     tool_invocations: int = 0
-    exit_checkpoint_id: Optional[int] = None
+    exit_checkpoint_id: Optional[str] = None
     output_variables: Dict[str, Any] = field(default_factory=dict)
 
 

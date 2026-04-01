@@ -350,7 +350,7 @@ class RayVariantFilesTrackedEvent(RayEvent):
     combination_name: str = ""
     files_tracked: int = 0
     file_commit_id: str = ""
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     
     # File details
     file_paths: List[str] = field(default_factory=list)

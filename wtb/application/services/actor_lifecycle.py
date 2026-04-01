@@ -125,7 +125,7 @@ class PausedActorState:
     execution_id: str
     workspace_id: str
     thread_id: str
-    checkpoint_id: int
+    checkpoint_id: str
     strategy: PauseStrategy
     paused_at: datetime
     actor_config: ActorConfig
@@ -426,9 +426,14 @@ class ActorLifecycleManager:
                     "working_dir": str(workspace.root_path),
                 })
         
-        # We need to reference the actual VariantExecutionActor class
-        # For now, return a placeholder that will be set by the batch runner
-        return None  # Actual actor created by RayBatchTestRunner
+        # Ray actor creation via ActorLifecycleManager is not fully wired;
+        # RayBatchTestRunner._create_actor() handles the real remote actors.
+        # Return None so the lifecycle manager tracks metadata without a Ray handle.
+        logger.warning(
+            f"_create_ray_actor: returning None handle for actor {actor_id}. "
+            "Real Ray actors are created by RayBatchTestRunner."
+        )
+        return None
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Actor Reset
@@ -490,7 +495,7 @@ class ActorLifecycleManager:
         strategy: Optional[PauseStrategy] = None,
         expected_duration: Optional[timedelta] = None,
         session_type: SessionType = SessionType.INTERACTIVE,
-        checkpoint_id: int = 0,
+        checkpoint_id: str = "",
     ) -> PausedActorState:
         """
         Pause actor with specified strategy.
@@ -692,7 +697,7 @@ class ActorLifecycleManager:
     def handle_rollback(
         self,
         handle: ActorHandle,
-        checkpoint_id: int,
+        checkpoint_id: str,
         strategy: Optional[RollbackStrategy] = None,
     ) -> ActorHandle:
         """
@@ -721,7 +726,7 @@ class ActorLifecycleManager:
     def _rollback_reset(
         self,
         handle: ActorHandle,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> ActorHandle:
         """
         Reset actor state for rollback (fast, same actor).
@@ -751,7 +756,7 @@ class ActorLifecycleManager:
     def _rollback_recreate(
         self,
         handle: ActorHandle,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> ActorHandle:
         """
         Kill and recreate actor for rollback (clean, new actor).
@@ -785,7 +790,7 @@ class ActorLifecycleManager:
     
     def fork_actor(
         self,
-        source_checkpoint_id: int,
+        source_checkpoint_id: str,
         new_workspace_id: str,
         new_execution_id: str,
         source_config: Optional[ActorConfig] = None,

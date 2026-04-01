@@ -700,7 +700,7 @@ class RayEventBridge:
         combination_name: str,
         files_tracked: int,
         file_commit_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_paths: List[str],
     ) -> None:
         """Emit event when variant files are tracked."""

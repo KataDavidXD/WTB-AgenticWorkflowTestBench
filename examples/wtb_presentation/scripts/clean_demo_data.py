@@ -9,7 +9,7 @@ Removes all generated demo data:
 - Checkpoint files
 
 Usage:
-    cd D:\12-22
+    cd <project-root>
     python examples/wtb_presentation/scripts/clean_demo_data.py
     
     # Clean specific directories only:

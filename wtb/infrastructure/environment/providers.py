@@ -308,7 +308,15 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             self._stub = None
     
     def _get_python_path(self, env_path: str) -> str:
-        """Get Python interpreter path for the environment."""
+        """Get Python interpreter path for the environment.
+        
+        When ``env_path`` is a Docker-internal Linux path (starts with
+        ``/``) we always return a Linux-style path regardless of the
+        host OS, because the venv lives inside the Docker container.
+        """
+        is_remote_linux = env_path.startswith("/")
+        if is_remote_linux:
+            return f"{env_path}/.venv/bin/python"
         if sys.platform == "win32":
             return f"{env_path}\\.venv\\Scripts\\python.exe"
         return f"{env_path}/.venv/bin/python"
@@ -692,6 +700,42 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def list_environments(self) -> Dict[str, Dict[str, Any]]:
         """List all created environments."""
         return dict(self._environments)
+    
+    def get_env_status(self, variant_id: str) -> Dict[str, Any]:
+        """
+        Query the Docker service for the real status of a provisioned
+        environment using the ``GetEnvStatus`` gRPC RPC.
+        
+        This is the canonical way to verify that a Docker-internal venv
+        was actually created, regardless of host OS.
+        
+        Returns:
+            {"status": str, "has_venv": bool, "has_pyproject": bool,
+             "has_uv_lock": bool, "env_path": str}
+        """
+        env_info = self._environments.get(variant_id)
+        if not env_info:
+            raise ValueError(f"No environment found for variant {variant_id}")
+        if self._stub is None:
+            raise RuntimeError("gRPC stub not initialized")
+        
+        from wtb.infrastructure.environment.uv_manager.grpc_generated import (
+            env_manager_pb2 as pb2,
+        )
+        
+        request = pb2.GetEnvStatusRequest(
+            workflow_id=env_info.get("workflow_id", ""),
+            node_id=env_info.get("node_id", ""),
+            version_id=env_info.get("version_id", ""),
+        )
+        response = self._stub.GetEnvStatus(request, timeout=self._timeout)
+        return {
+            "status": response.status,
+            "has_venv": response.has_venv,
+            "has_pyproject": response.has_pyproject,
+            "has_uv_lock": response.has_uv_lock,
+            "env_path": response.env_path,
+        }
     
     def close(self) -> None:
         """Close gRPC channel."""

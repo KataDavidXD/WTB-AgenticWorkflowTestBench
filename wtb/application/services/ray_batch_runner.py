@@ -44,6 +44,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
+import threading
 import time
 import uuid
 import copy
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
     from wtb.domain.interfaces.file_tracking import IFileTrackingService
     from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
     from wtb.config import WTBConfig
+    from wtb.domain.interfaces.batch_runner import IEnvironmentProvider
 
 logger = logging.getLogger(__name__)
 
@@ -239,15 +241,18 @@ def _create_variant_execution_actor_class():
                         LangGraphConfig,
                         CheckpointerType,
                     )
-                    # Use per-actor SQLite checkpointer to avoid locking conflicts
-                    # Each actor gets its own DB file for checkpoint isolation
+                    # Shared checkpoint DB: all actors + coordinator + main bench
+                    # use the same file so checkpoints are visible everywhere.
+                    # LangGraph partitions by thread_id so no data collision.
+                    # SQLite WAL mode handles concurrent access.
+                    import os as _os
                     base_path = (
                         self._wtb_db_url.replace("sqlite:///", "") 
                         if self._wtb_db_url.startswith("sqlite:///")
                         else self._wtb_db_url
                     )
-                    # Include actor_id in path for isolation (SYSTEM FIX: SQLite locking)
-                    checkpoint_db_path = f"{base_path}_{self._actor_id}_checkpoints.db"
+                    data_dir = _os.path.dirname(base_path) or "."
+                    checkpoint_db_path = _os.path.join(data_dir, "wtb_checkpoints.db")
                     
                     config = LangGraphConfig(
                         checkpointer_type=CheckpointerType.SQLITE,
@@ -393,8 +398,10 @@ def _create_variant_execution_actor_class():
                 duration_ms = int((time.time() - start_time) * 1000)
                 self._executions_run += 1
                 
+                actual_exec_id = result.get("execution_id", execution_id)
+                
                 return {
-                    "execution_id": execution_id,
+                    "execution_id": actual_exec_id,
                     "combination_name": combination_name,
                     "combination_variants": variants,
                     "success": True,
@@ -402,10 +409,10 @@ def _create_variant_execution_actor_class():
                     "metrics": result.get("metrics", {}),
                     "error": None,
                     "checkpoint_count": result.get("checkpoint_count", 0),
-                    "last_checkpoint_id": result.get("last_checkpoint_id"),  # v1.8: For rollback
+                    "last_checkpoint_id": result.get("last_checkpoint_id"),
                     "node_count": result.get("node_count", 0),
                     "workspace_id": workspace.workspace_id if workspace else None,
-                    "file_commit_id": result.get("file_commit_id"),  # v1.8: For file restore
+                    "file_commit_id": result.get("file_commit_id"),
                 }
                 
             except Exception as e:
@@ -524,18 +531,20 @@ def _create_variant_execution_actor_class():
                     initial_state=variant_state,
                 )
                 
-                # Update execution ID to match expected value
-                execution.id = execution_id
+                # Use the DB-assigned ID; store the pre-generated one as alias
                 execution.metadata = {
                     "batch_test_id": batch_test_id,
                     "variants": variants,
                     "actor_id": self._actor_id,
+                    "requested_execution_id": execution_id,
                 }
                 # v1.9: Store actor checkpoint DB path for coordinator rollback/fork
                 if hasattr(self._state_adapter, '_config'):
                     adapter_config = self._state_adapter._config
                     if hasattr(adapter_config, 'connection_string') and adapter_config.connection_string:
                         execution.metadata["checkpoint_db_path"] = adapter_config.connection_string
+                # Update the execution_id variable to match the real persisted ID
+                execution_id = execution.id
                 uow.executions.update(execution)
                 uow.commit()
                 
@@ -544,9 +553,8 @@ def _create_variant_execution_actor_class():
                 langgraph_graph = None
                 if graph_factory_module and graph_factory_name:
                     try:
-                        import importlib
-                        module = importlib.import_module(graph_factory_module)
-                        factory = getattr(module, graph_factory_name)
+                        from wtb.application.services.graph_loader import load_graph_factory
+                        factory = load_graph_factory(graph_factory_module, graph_factory_name)
                         langgraph_graph = factory()
                         logger.info(
                             f"Actor {self._actor_id}: Created LangGraph graph from "
@@ -624,7 +632,7 @@ def _create_variant_execution_actor_class():
                             additional_paths=output_file_paths,
                         )
                         if output_files:
-                            # v1.6: checkpoint_id is now str (was agentgit_checkpoint_id: int)
+                            # v1.6: checkpoint_id is now str (legacy agent field was int)
                             cp_id = execution.checkpoint_id or ""
                             tracking_result = self._file_tracking_service.track_and_link(
                                 checkpoint_id=cp_id,
@@ -660,9 +668,10 @@ def _create_variant_execution_actor_class():
                         checkpoint_count = 1 if execution.checkpoint_id else 0
                 
                 return {
+                    "execution_id": execution_id,
                     "metrics": metrics,
                     "checkpoint_count": checkpoint_count,
-                    "last_checkpoint_id": last_checkpoint_id,  # v1.8: For rollback support
+                    "last_checkpoint_id": last_checkpoint_id,
                     "node_count": len(execution.state.execution_path),
                     "files_tracked": files_tracked,
                     "file_commit_id": file_commit_id,
@@ -921,6 +930,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         workspace_config: Optional[Dict[str, Any]] = None,
         event_bridge: Optional["RayEventBridge"] = None,
         enable_audit: bool = True,
+        environment_provider: Optional["IEnvironmentProvider"] = None,
     ):
         """
         Initialize Ray runner with optional FileTracker, Workspace, and event bridge integration.
@@ -934,6 +944,8 @@ class RayBatchTestRunner(IBatchTestRunner):
             workspace_config: Optional WorkspaceConfig dict for workspace isolation (2026-01-16)
             event_bridge: Optional RayEventBridge for event publishing (ACID compliant)
             enable_audit: Whether to create audit trails per batch test
+            environment_provider: Optional IEnvironmentProvider for UV venv provisioning
+                                  via gRPC Docker service (GrpcEnvironmentProvider)
         """
         if not RAY_AVAILABLE:
             raise BatchRunnerError(
@@ -951,8 +963,9 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._actors: List[Any] = []  # Ray actor handles
         self._actor_pool = None
         
-        # Running tests tracking
+        # Running tests tracking (thread-safe via lock)
         self._running_tests: Dict[str, _RayRunningTest] = {}
+        self._running_tests_lock = threading.Lock()
         
         # Ray state
         self._ray_initialized = False
@@ -1024,6 +1037,10 @@ class RayBatchTestRunner(IBatchTestRunner):
                 logger.warning(f"RayBatchTestRunner: WorkspaceManager init failed: {e}")
                 self._workspace_manager = None
                 self._workspace_enabled = False
+        
+        # UV Venv environment provider (gRPC Docker service)
+        self._environment_provider = environment_provider
+        self._provisioned_env_ids: List[str] = []
     
     @staticmethod
     def is_available() -> bool:
@@ -1063,42 +1080,120 @@ class RayBatchTestRunner(IBatchTestRunner):
         """
         Create actor pool with specified number of workers.
         
+        When an ``IEnvironmentProvider`` (e.g. ``GrpcEnvironmentProvider``)
+        is configured, each actor provisions an isolated UV venv through
+        the Docker gRPC service and receives a per-actor ``runtime_env``.
+        
         Args:
             num_workers: Number of actors to create
         """
         if self._actor_pool is not None:
-            # Pool already exists
             return
         
         self._ensure_ray_initialized()
         
         file_tracking_status = "enabled" if self._file_tracking_enabled else "disabled"
         workspace_status = "enabled" if self._workspace_enabled else "disabled"
+        env_status = type(self._environment_provider).__name__ if self._environment_provider else "none"
         logger.info(
             f"Creating actor pool with {num_workers} workers "
-            f"(FileTracking: {file_tracking_status}, Workspace: {workspace_status})"
+            f"(FileTracking: {file_tracking_status}, Workspace: {workspace_status}, "
+            f"EnvProvider: {env_status})"
         )
         
-        # Create actors with resource allocation and FileTracker/Workspace config
         self._actors = []
         for i in range(num_workers):
-            actor = VariantExecutionActor.options(
-                num_cpus=self._config.num_cpus_per_task,
-                memory=int(self._config.memory_per_task_gb * 1024 * 1024 * 1024),
-                max_restarts=self._config.max_retries,
-            ).remote(
+            actor_id = f"actor_{i}"
+            ray_runtime_env: Dict[str, Any] = {}
+            
+            if self._environment_provider is not None:
+                try:
+                    env_config = {"packages": [], "workflow_id": f"ray-batch-{actor_id}"}
+                    self._environment_provider.create_environment(actor_id, env_config)
+                    self._provisioned_env_ids.append(actor_id)
+                    raw_env = self._environment_provider.get_runtime_env(
+                        actor_id
+                    ) or {}
+                    ray_runtime_env = self._build_ray_runtime_env(actor_id, raw_env)
+                    logger.info(
+                        f"Actor {actor_id}: UV venv provisioned via "
+                        f"{type(self._environment_provider).__name__} - "
+                        f"env_path={raw_env.get('env_path', 'N/A')}, "
+                        f"python_path={raw_env.get('python_path', 'N/A')}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Actor {actor_id}: environment provisioning failed, "
+                        f"using default runtime_env: {e}"
+                    )
+                    ray_runtime_env = {}
+            
+            actor_options = {
+                "num_cpus": self._config.num_cpus_per_task,
+                "memory": int(self._config.memory_per_task_gb * 1024 * 1024 * 1024),
+                "max_restarts": self._config.max_retries,
+            }
+            if ray_runtime_env:
+                actor_options["runtime_env"] = ray_runtime_env
+            
+            actor = VariantExecutionActor.options(**actor_options).remote(
                 agentgit_db_url=self._agentgit_db_url,
                 wtb_db_url=self._wtb_db_url,
-                actor_id=f"actor_{i}",
+                actor_id=actor_id,
                 filetracker_config=self._filetracker_config,
-                workspace_config=self._workspace_config,  # Pass Workspace config (2026-01-16)
+                workspace_config=self._workspace_config,
             )
             self._actors.append(actor)
         
-        # Create ActorPool from actors
         self._actor_pool = ray.util.ActorPool(self._actors)
         
         logger.info(f"Actor pool created with {len(self._actors)} actors")
+    
+    @staticmethod
+    def _build_ray_runtime_env(
+        actor_id: str,
+        raw_env: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Translate a provider's raw environment response into a valid
+        Ray ``runtime_env`` dict.
+        
+        The ``GrpcEnvironmentProvider`` returns Docker-internal paths
+        (e.g. ``/data/envs/...``) that don't exist on the host when
+        the UV venv manager runs in a container.  We pass only the
+        subset of keys that Ray recognises *and* whose values are
+        valid on the current platform.  Metadata about the provisioned
+        environment is injected via ``env_vars`` prefixed with
+        ``WTB_UV_`` for traceability without breaking Ray workers.
+        """
+        import os as _os
+        
+        ray_env: Dict[str, Any] = {}
+        metadata_vars: Dict[str, str] = {
+            "WTB_UV_ENV_TYPE": raw_env.get("type", "unknown"),
+            "WTB_UV_ENV_PATH": raw_env.get("env_path", ""),
+            "WTB_UV_PYTHON_PATH": raw_env.get("python_path", ""),
+            "WTB_UV_ACTOR_ID": actor_id,
+        }
+        
+        py_exec = raw_env.get("py_executable", "")
+        venv_path = raw_env.get("venv_path", "")
+        
+        if py_exec and _os.path.isfile(py_exec):
+            metadata_vars["VIRTUAL_ENV"] = venv_path
+            logger.info(
+                f"Actor {actor_id}: local venv detected, "
+                f"setting VIRTUAL_ENV={venv_path}"
+            )
+        else:
+            logger.info(
+                f"Actor {actor_id}: venv is Docker-internal "
+                f"({raw_env.get('env_path', 'N/A')}), "
+                f"using host Python for Ray worker"
+            )
+        
+        ray_env["env_vars"] = metadata_vars
+        return ray_env
     
     def _load_workflow(self, workflow_id: str) -> Dict[str, Any]:
         """
@@ -1295,6 +1390,18 @@ class RayBatchTestRunner(IBatchTestRunner):
                         logger.warning(f"Failed to create workspace for {combo.name}: {ws_error}")
                         workspace = None
                         workspace_data = None
+                
+                # Emit variant execution started event (FLAW 8 fix)
+                if self._event_bridge:
+                    self._event_bridge.on_variant_execution_started(
+                        execution_id=execution_id,
+                        batch_test_id=batch_test.id,
+                        actor_id="",
+                        combination_name=combo.name,
+                        variants=combo.variants,
+                        queue_position=batch_test.variant_combinations.index(combo),
+                        total_in_queue=len(batch_test.variant_combinations),
+                    )
                 
                 # Emit variant execution started event (FLAW 8 fix)
                 if self._event_bridge:
@@ -1708,7 +1815,17 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._actor_pool = None
         self._running_tests.clear()
         
-        # Note: We don't call ray.shutdown() as other code might be using Ray
+        if self._environment_provider and self._provisioned_env_ids:
+            logger.info(
+                f"Cleaning up {len(self._provisioned_env_ids)} provisioned UV venvs"
+            )
+            for env_id in self._provisioned_env_ids:
+                try:
+                    self._environment_provider.cleanup_environment(env_id)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup env {env_id}: {e}")
+            self._provisioned_env_ids.clear()
+        
         logger.info("RayBatchTestRunner shutdown complete")
     
     def get_actor_stats(self) -> List[Dict[str, Any]]:
@@ -1799,6 +1916,9 @@ class RayBatchTestRunner(IBatchTestRunner):
         v1.9: Uses base wtb_db_url for default checkpoint path. For per-execution
         rollback, the coordinator should resolve the correct actor-specific
         checkpoint DB from execution.metadata["checkpoint_db_path"].
+        v1.9: Uses base wtb_db_url for default checkpoint path. For per-execution
+        rollback, the coordinator should resolve the correct actor-specific
+        checkpoint DB from execution.metadata["checkpoint_db_path"].
         
         Returns:
             IStateAdapter instance or None
@@ -1811,12 +1931,14 @@ class RayBatchTestRunner(IBatchTestRunner):
             )
             
             if LANGGRAPH_AVAILABLE:
+                import os as _os
                 base_path = (
                     self._wtb_db_url.replace("sqlite:///", "")
                     if self._wtb_db_url.startswith("sqlite:///")
                     else self._wtb_db_url
                 )
-                checkpoint_db = f"{base_path}_coordinator_checkpoints.db"
+                data_dir = _os.path.dirname(base_path) or "."
+                checkpoint_db = _os.path.join(data_dir, "wtb_checkpoints.db")
                 return LangGraphStateAdapter(LangGraphConfig.for_development(checkpoint_db))
             
         except ImportError:

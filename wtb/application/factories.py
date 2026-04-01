@@ -16,6 +16,7 @@ ACID Compliance (v1.7):
 - UoW lifecycle properly managed (enter/exit)
 """
 
+import warnings
 from typing import Optional, Callable, TYPE_CHECKING, Tuple
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -37,6 +38,7 @@ from wtb.infrastructure.database import (
 from wtb.infrastructure.adapters import InMemoryStateAdapter
 
 from .services.execution_controller import ExecutionController, DefaultNodeExecutor
+from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
 from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
 from .services.node_replacer import NodeReplacer
 
@@ -178,6 +180,11 @@ class ExecutionControllerFactory:
         WARNING: UoW lifecycle is NOT managed. Prefer create_isolated() for
         proper resource management.
         """
+        warnings.warn(
+            "ExecutionControllerFactory.create() leaks UoW. Use create_isolated() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if config is None:
             config = get_config()
         
@@ -214,7 +221,6 @@ class ExecutionControllerFactory:
                 
                 return LangGraphStateAdapter(lg_config)
             except ImportError:
-                import warnings
                 warnings.warn(
                     "LangGraph not available, falling back to InMemoryStateAdapter",
                     RuntimeWarning,
@@ -238,6 +244,11 @@ class ExecutionControllerFactory:
         WARNING: Calls uow.__enter__() but does NOT manage exit.
         For proper lifecycle, use create_isolated() instead.
         """
+        warnings.warn(
+            "ExecutionControllerFactory.create() leaks UoW. Use create_isolated() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         uow.__enter__()
         return ExecutionController(
             execution_repository=uow.executions,
@@ -288,6 +299,11 @@ class NodeReplacerFactory:
     @staticmethod
     def create(config: Optional[WTBConfig] = None) -> NodeReplacer:
         """Create NodeReplacer based on configuration."""
+        warnings.warn(
+            "NodeReplacerFactory.create() leaks UoW. Use create_with_dependencies() with a managed UnitOfWork instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if config is None:
             config = get_config()
         
@@ -378,7 +394,10 @@ class BatchTestRunnerFactory:
         """
         Create Ray-based batch test runner.
         
-        Note: Ray runner has its own Actor-based isolation pattern.
+        When ``config.environment_provider == "grpc"`` and
+        ``config.grpc_env_manager_url`` is set, a
+        ``GrpcEnvironmentProvider`` is created and injected so that
+        Ray actors provision isolated UV venvs via the Docker service.
         """
         from .services.ray_batch_runner import RayBatchTestRunner
         from wtb.config import RayConfig
@@ -390,10 +409,19 @@ class BatchTestRunnerFactory:
         if ray_config is None:
             ray_config = RayConfig.for_local_development()
         
+        env_provider = None
+        if (
+            getattr(config, "environment_provider", "inprocess") == "grpc"
+            and getattr(config, "grpc_env_manager_url", None)
+        ):
+            from wtb.infrastructure.environment import GrpcEnvironmentProvider
+            env_provider = GrpcEnvironmentProvider(config.grpc_env_manager_url)
+        
         return RayBatchTestRunner(
             config=ray_config,
             agentgit_db_url=config.agentgit_db_path,
             wtb_db_url=config.wtb_db_url or f"sqlite:///{config.data_dir}/wtb.db",
+            environment_provider=env_provider,
         )
     
     @staticmethod
@@ -585,6 +613,13 @@ class WTBTestBenchFactory:
         
         batch_runner = BatchTestRunnerFactory.create(config)
         
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create(config)
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -593,6 +628,8 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
         )
@@ -628,6 +665,13 @@ class WTBTestBenchFactory:
         
         batch_runner = BatchTestRunnerFactory.create_for_testing()
         
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create_for_testing()
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -638,17 +682,32 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
         )
     
     @staticmethod
     def create_for_development(
         data_dir: str = "data",
         enable_file_tracking: bool = False,
+        enable_ray: bool = False,
+        grpc_env_url: Optional[str] = None,
     ) -> "WTBTestBench":
         """
         Create WTBTestBench for development.
         
         Uses SQLite persistence for both UoW and LangGraph checkpoints.
+        
+        Args:
+            data_dir: Directory for database files
+            enable_file_tracking: Enable file tracking for rollback
+            enable_ray: Use Ray-based batch runner instead of thread pool.
+                        Requires ``ray`` to be installed and ``ray.init()``
+                        to have been called before invoking batch operations.
+            grpc_env_url: Optional gRPC URL for UV venv manager Docker
+                          service (e.g. ``localhost:50051``). When set
+                          alongside ``enable_ray=True``, each Ray actor
+                          gets an isolated virtual environment.
         """
         from wtb.sdk.test_bench import WTBTestBench
         from wtb.application.services import ProjectService, VariantService
@@ -712,7 +771,16 @@ class WTBTestBenchFactory:
             exec_ctrl, outbox_repo, commit_fn=uow.commit,
         )
         
-        batch_runner = BatchTestRunnerFactory.create_threadpool(config)
+        if enable_ray:
+            config.ray_enabled = True
+            from wtb.config import RayConfig as InternalRayConfig
+            config.ray_config = InternalRayConfig.for_local_development()
+            if grpc_env_url:
+                config.environment_provider = "grpc"
+                config.grpc_env_manager_url = grpc_env_url
+            batch_runner = BatchTestRunnerFactory.create_ray(config)
+        else:
+            batch_runner = BatchTestRunnerFactory.create_threadpool(config)
         
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
@@ -722,6 +790,8 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
         )
@@ -820,6 +890,17 @@ class WTBTestBenchFactory:
         
         batch_runner = BatchTestRunnerFactory.create_threadpool(lg_config)
         
+        lg_config = WTBConfig(
+            data_dir=data_dir,
+            state_adapter_mode="langgraph",
+        )
+        outbox_repo = getattr(uow, 'outbox', None)
+        wrapped_ctrl = OutboxExecutionControllerDecorator(
+            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+        )
+        
+        batch_runner = BatchTestRunnerFactory.create_threadpool(lg_config)
+        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -828,6 +909,8 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
+            execution_controller=wrapped_ctrl,
+            batch_runner=batch_runner,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
         )

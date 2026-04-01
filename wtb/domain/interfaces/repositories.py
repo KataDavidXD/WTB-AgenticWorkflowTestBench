@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from wtb.domain.models.node_boundary import NodeBoundary
     # CheckpointFile REMOVED (2026-01-27) - Use CheckpointFileLink from file_processing
     from wtb.domain.models.outbox import OutboxEvent
-    from wtb.infrastructure.events.wtb_audit_trail import WTBAuditEntry
+    from wtb.domain.models.audit import AuditEntry
 
 T = TypeVar('T')
 
@@ -308,11 +308,11 @@ class IEvaluationResultRepository(IRepository["EvaluationResult"]):
         pass
 
 
-class IAuditLogRepository(IRepository["WTBAuditEntry"]):
+class IAuditLogRepository(IRepository["AuditEntry"]):
     """Repository for WTB audit logs (persistence)."""
     
     @abstractmethod
-    def append_logs(self, execution_id: str, logs: List["WTBAuditEntry"]) -> None:
+    def append_logs(self, execution_id: str, logs: List["AuditEntry"]) -> None:
         """
         Append a batch of logs for an execution.
         
@@ -323,7 +323,7 @@ class IAuditLogRepository(IRepository["WTBAuditEntry"]):
         pass
     
     @abstractmethod
-    def find_by_execution(self, execution_id: str) -> List["WTBAuditEntry"]:
+    def find_by_execution(self, execution_id: str) -> List["AuditEntry"]:
         """
         Get all logs for an execution.
         

@@ -37,7 +37,7 @@ class ExecutionPausedEvent(WTBEvent):
     execution_id: str = ""
     paused_at_node: str = ""
     reason: str = ""  # "breakpoint", "manual", "error"
-    checkpoint_id: Optional[int] = None
+    checkpoint_id: Optional[str] = None
     elapsed_time_ms: float = 0.0
 
 
@@ -68,7 +68,7 @@ class ExecutionFailedEvent(WTBEvent):
     failed_at_node: str = ""
     error_message: str = ""
     error_type: str = ""
-    checkpoint_id: Optional[int] = None
+    checkpoint_id: Optional[str] = None
     duration_ms: float = 0.0
 
 

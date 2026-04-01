@@ -131,7 +131,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         elif self._config.checkpointer_type == CheckpointerType.SQLITE:
             from langgraph.checkpoint.sqlite import SqliteSaver
             self._checkpointer = SqliteSaver.from_conn_string(
-                self._config.db_path or ":memory:"
+                self._config.connection_string or ":memory:"
             )
         elif self._config.checkpointer_type == CheckpointerType.POSTGRES:
             # PostgreSQL requires async setup (deferred)
@@ -529,6 +529,11 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
             config["configurable"]["checkpoint_id"] = from_checkpoint_id
         
         source_state = await self._compiled_graph.aget_state(config)
+        
+        if not source_state or not source_state.values:
+            raise ValueError(
+                f"Cannot fork: checkpoint state is empty for thread {self._current_thread_id}"
+            )
         
         # Create fork adapter
         fork_adapter = AsyncLangGraphStateAdapter(self._config)

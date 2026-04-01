@@ -225,7 +225,7 @@ class IFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_checkpoint_id(self, checkpoint_id: int) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
         """
         Get commit linked to checkpoint.
         
@@ -289,7 +289,7 @@ class ICheckpointFileLinkRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_checkpoint(self, checkpoint_id: int) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
         """
         Get link by checkpoint ID.
         
@@ -317,7 +317,7 @@ class ICheckpointFileLinkRepository(ABC):
         pass
     
     @abstractmethod
-    def delete_by_checkpoint(self, checkpoint_id: int) -> bool:
+    def delete_by_checkpoint(self, checkpoint_id: str) -> bool:
         """
         Delete link by checkpoint ID.
         

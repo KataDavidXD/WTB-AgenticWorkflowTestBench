@@ -40,6 +40,7 @@ from wtb.domain.models import (
     ExecutionStatus,
     NodeVariant,
     NodeBoundary,
+    NodeStatus,
     CheckpointFileLink,  # 2026-01-27: Renamed from CheckpointFile
     BatchTest,
     BatchTestStatus,
@@ -111,6 +112,7 @@ __all__ = [
     "ExecutionStatus",
     "NodeVariant",
     "NodeBoundary",
+    "NodeStatus",
     "CheckpointFileLink",  # 2026-01-27: Renamed from CheckpointFile
     "BatchTest",
     "BatchTestStatus",

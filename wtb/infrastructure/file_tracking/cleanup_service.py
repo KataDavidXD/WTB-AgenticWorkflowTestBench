@@ -74,7 +74,7 @@ class FileCleanupService(IFileCleanupService):
     
     def identify_orphaned_files(
         self,
-        target_checkpoint_id: int,
+        target_checkpoint_id: str,
         execution_id: str,
         current_workspace_path: Path,
         track_patterns: List[str],
@@ -144,7 +144,7 @@ class FileCleanupService(IFileCleanupService):
     
     def cleanup_orphaned_files(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         execution_id: str,
         orphaned_paths: List[str],
         backup_dir: Optional[Path] = None,

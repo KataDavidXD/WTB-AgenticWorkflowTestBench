@@ -245,21 +245,13 @@ class GraphStructure:
             graph.add_node(node_id, node_info.node_fn)
         
         # Add edges
-        processed_conditional = set()
         for edge in self.edges:
             if edge.is_conditional:
-                if edge.source not in processed_conditional:
-                    # Collect all targets for this conditional source
-                    targets = {}
-                    for e in self.edges:
-                        if e.source == edge.source and e.is_conditional:
-                            # Target determination needs condition evaluation
-                            pass
-                    # For now, add as simple edges
-                    graph.add_edge(edge.source, edge.target)
-                    processed_conditional.add(edge.source)
-            else:
-                graph.add_edge(edge.source, edge.target)
+                raise NotImplementedError(
+                    f"Conditional edge routing for source '{edge.source}' is not yet implemented. "
+                    "Use simple edges or implement LangGraph add_conditional_edges."
+                )
+            graph.add_edge(edge.source, edge.target)
         
         # Set entry point
         if self.entry_point:

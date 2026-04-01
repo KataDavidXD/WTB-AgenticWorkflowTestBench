@@ -32,10 +32,8 @@ examples/wtb_presentation/
 ├── data/                       # System data (checkpoints, state)
 │   └── *.db                    # SQLite databases
 ├── scripts/                    # Demo scripts
-│   ├── 01_basic_execution.py   # Basic workflow run
-│   ├── 02_rollback_demo.py     # Rollback with file restore
-│   ├── 03_branch_demo.py       # A/B testing with branches
-│   ├── 04_pause_resume_demo.py # Human-in-the-loop
+│   ├── clean_demo_data.py      # Clean up demo data and artifacts
+│   ├── run_demo.py             # Quick demos (basic, rollback, fork, batch, pause/resume)
 │   └── 05_full_presentation.py # Complete guided demo
 ├── env.local.example           # Environment template
 └── README.md                   # This file
@@ -46,7 +44,12 @@ examples/wtb_presentation/
 ### 1. Install Dependencies
 
 ```bash
+# Windows
 cd D:\12-22
+uv pip install -e .
+
+# Linux / macOS
+cd /path/to/12-22
 uv pip install -e .
 ```
 

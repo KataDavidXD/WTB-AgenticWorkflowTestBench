@@ -8,16 +8,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from wtb.domain.interfaces.repositories import IAuditLogRepository
-from wtb.infrastructure.events.wtb_audit_trail import (
-    WTBAuditEntry,
-    WTBAuditEventType,
-    WTBAuditSeverity,
-)
+from wtb.domain.models.audit import AuditEntry
 from wtb.infrastructure.database.models import AuditLogORM
 from .base import BaseRepository
 
 
-class SQLAlchemyAuditLogRepository(BaseRepository[WTBAuditEntry, AuditLogORM], IAuditLogRepository):
+class SQLAlchemyAuditLogRepository(BaseRepository[AuditEntry, AuditLogORM], IAuditLogRepository):
     """
     SQLAlchemy implementation of Audit Log Repository.
     """
@@ -25,35 +21,36 @@ class SQLAlchemyAuditLogRepository(BaseRepository[WTBAuditEntry, AuditLogORM], I
     def __init__(self, session: Session):
         super().__init__(session, AuditLogORM)
     
-    def _to_domain(self, orm: AuditLogORM) -> WTBAuditEntry:
+    def _to_domain(self, orm: AuditLogORM) -> AuditEntry:
         """Convert ORM to domain entity."""
-        return WTBAuditEntry(
+        return AuditEntry(
+            id=str(orm.id) if orm.id is not None else None,
             timestamp=orm.timestamp,
-            event_type=WTBAuditEventType(orm.event_type),
-            severity=WTBAuditSeverity(orm.severity),
+            event_type=orm.event_type,
             message=orm.message,
             execution_id=orm.execution_id,
             node_id=orm.node_id,
-            details=json.loads(orm.details) if orm.details else {},
+            payload=json.loads(orm.details) if orm.details else {},
+            severity=orm.severity,
             error=orm.error,
             duration_ms=orm.duration_ms,
         )
     
-    def _to_orm(self, entity: WTBAuditEntry) -> AuditLogORM:
+    def _to_orm(self, entity: AuditEntry) -> AuditLogORM:
         """Convert domain entity to ORM."""
         return AuditLogORM(
             execution_id=entity.execution_id,
             node_id=entity.node_id,
             timestamp=entity.timestamp,
-            event_type=entity.event_type.value,
-            severity=entity.severity.value,
+            event_type=entity.event_type,
+            severity=entity.severity,
             message=entity.message,
-            details=json.dumps(entity.details) if entity.details else None,
+            details=json.dumps(entity.payload) if entity.payload else None,
             error=entity.error,
             duration_ms=entity.duration_ms,
         )
     
-    def append_logs(self, execution_id: str, logs: List[WTBAuditEntry]) -> None:
+    def append_logs(self, execution_id: str, logs: List[AuditEntry]) -> None:
         """
         Append a batch of logs for an execution.
         
@@ -71,7 +68,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[WTBAuditEntry, AuditLogORM], I
         
         self._session.add_all(orms)
     
-    def find_by_execution(self, execution_id: str) -> List[WTBAuditEntry]:
+    def find_by_execution(self, execution_id: str) -> List[AuditEntry]:
         """
         Get all logs for an execution.
         
@@ -89,7 +86,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[WTBAuditEntry, AuditLogORM], I
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def get(self, id: str) -> Optional[WTBAuditEntry]:
+    def get(self, id: str) -> Optional[AuditEntry]:
         """Get by ID (not typically used for logs, but required by interface)."""
         orm = self._session.query(AuditLogORM).filter(AuditLogORM.id == int(id)).first()
         return self._to_domain(orm) if orm else None
@@ -98,7 +95,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[WTBAuditEntry, AuditLogORM], I
         """Check if exists."""
         return self._session.query(AuditLogORM).filter(AuditLogORM.id == int(id)).count() > 0
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[WTBAuditEntry]:
+    def list(self, limit: int = 100, offset: int = 0) -> List[AuditEntry]:
         """List logs (recent first)."""
         orms = (
             self._session.query(AuditLogORM)
@@ -109,14 +106,14 @@ class SQLAlchemyAuditLogRepository(BaseRepository[WTBAuditEntry, AuditLogORM], I
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def add(self, entity: WTBAuditEntry) -> WTBAuditEntry:
+    def add(self, entity: AuditEntry) -> AuditEntry:
         """Add single log."""
         orm = self._to_orm(entity)
         self._session.add(orm)
         self._session.flush()
         return self._to_domain(orm)
     
-    def update(self, entity: WTBAuditEntry) -> WTBAuditEntry:
+    def update(self, entity: AuditEntry) -> AuditEntry:
         """Update log (not supported/needed)."""
         raise NotImplementedError("Audit logs are immutable")
     

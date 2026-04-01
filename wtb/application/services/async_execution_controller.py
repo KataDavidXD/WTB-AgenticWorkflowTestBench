@@ -24,6 +24,7 @@ Architecture:
            └──► IAsyncFileTrackingService (file tracking)
 """
 
+from contextvars import ContextVar
 from typing import Optional, Dict, Any, List, AsyncIterator, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 from datetime import datetime
@@ -125,7 +126,9 @@ class AsyncExecutionController:
         self._state_adapter = state_adapter
         self._uow_factory = uow_factory
         self._file_tracking = file_tracking_service
-        self._current_execution: Optional[Execution] = None
+        self._current_execution_var: ContextVar[Optional[Execution]] = ContextVar(
+            "async_exec_current_execution", default=None
+        )
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Main Execution Methods
@@ -163,7 +166,7 @@ class AsyncExecutionController:
             if not execution:
                 raise ValueError(f"Execution not found: {execution_id}")
             
-            self._current_execution = execution
+            self._current_execution_var.set(execution)
             
             # Set graph on adapter if provided
             if graph:
@@ -291,7 +294,7 @@ class AsyncExecutionController:
             if not execution:
                 raise ValueError(f"Execution not found: {execution_id}")
             
-            self._current_execution = execution
+            self._current_execution_var.set(execution)
             
             # Set graph
             if graph and hasattr(self._state_adapter, 'set_workflow_graph'):
@@ -381,7 +384,7 @@ class AsyncExecutionController:
         Returns:
             Checkpoint ID
         """
-        if not self._current_execution:
+        if not self._current_execution_var.get():
             raise RuntimeError("No active execution")
         
         async with self._uow_factory() as uow:
@@ -405,8 +408,8 @@ class AsyncExecutionController:
                 )
             
             # Update execution record
-            self._current_execution.checkpoint_id = checkpoint_id
-            await uow.executions.aupdate(self._current_execution)
+            self._current_execution_var.get().checkpoint_id = checkpoint_id
+            await uow.executions.aupdate(self._current_execution_var.get())
             
             await uow.acommit()
             
@@ -424,7 +427,7 @@ class AsyncExecutionController:
         Returns:
             ExecutionState after rollback
         """
-        if not self._current_execution:
+        if not self._current_execution_var.get():
             raise RuntimeError("No active execution")
         
         async with self._uow_factory() as uow:
@@ -432,9 +435,9 @@ class AsyncExecutionController:
             state = await self._state_adapter.arollback(checkpoint_id)
             
             # Update execution record
-            self._current_execution.state = state
-            self._current_execution.checkpoint_id = checkpoint_id
-            await uow.executions.aupdate(self._current_execution)
+            self._current_execution_var.get().state = state
+            self._current_execution_var.get().checkpoint_id = checkpoint_id
+            await uow.executions.aupdate(self._current_execution_var.get())
             
             await uow.acommit()
             
@@ -463,7 +466,7 @@ class AsyncExecutionController:
         Returns:
             New AsyncExecutionController for the fork
         """
-        if not self._current_execution:
+        if not self._current_execution_var.get():
             raise RuntimeError("No active execution")
         
         async with self._uow_factory() as uow:
@@ -481,11 +484,11 @@ class AsyncExecutionController:
             # Create new execution record
             fork_execution = Execution(
                 id=new_execution_id,
-                workflow_id=self._current_execution.workflow_id,
+                workflow_id=self._current_execution_var.get().workflow_id,
                 state=await self._state_adapter.aget_current_state() if not from_checkpoint_id else 
                       await self._state_adapter.aload_checkpoint(from_checkpoint_id),
                 status=ExecutionStatus.PENDING,
-                parent_execution_id=self._current_execution.id,
+                parent_execution_id=self._current_execution_var.get().id,
                 session_id=fork_thread_id,
             )
             
@@ -501,7 +504,7 @@ class AsyncExecutionController:
             fork_controller._current_execution = fork_execution
             
             logger.info(
-                f"Created async fork: {self._current_execution.id} -> {new_execution_id}"
+                f"Created async fork: {self._current_execution_var.get().id} -> {new_execution_id}"
             )
             
             return fork_controller
@@ -523,7 +526,7 @@ class AsyncExecutionController:
     @property
     def current_execution(self) -> Optional[Execution]:
         """Get current execution record."""
-        return self._current_execution
+        return self._current_execution_var.get()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

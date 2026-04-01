@@ -230,6 +230,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                 state_adapter=self._state_adapter,
                 file_tracking_service=self._file_tracking,
             )
+            controller.set_deferred_commit(True)
             
             execution = controller.rollback(execution_id, checkpoint_id)
             
@@ -354,6 +355,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                 state_adapter=self._state_adapter,
                 file_tracking_service=self._file_tracking,
             )
+            controller.set_deferred_commit(True)
             
             forked = controller.fork(execution_id, checkpoint_id, new_state)
             
@@ -505,6 +507,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                 state_adapter=self._state_adapter,
                 file_tracking_service=self._file_tracking,
             )
+            controller.set_deferred_commit(True)
             
             # Fork from checkpoint
             forked = controller.fork(execution_id, checkpoint_id, new_state)

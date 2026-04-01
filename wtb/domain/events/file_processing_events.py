@@ -235,7 +235,7 @@ class FileCleanupCompletedEvent(WTBEvent):
         errors: List of error messages (if any)
     """
     execution_id: str = ""
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     files_deleted: int = 0
     files_backed_up: int = 0
     files_skipped: int = 0
@@ -288,7 +288,7 @@ class CheckpointFileLinkCreatedEvent(WTBEvent):
         file_count: Number of files in linked commit
         total_size_bytes: Total size of files
     """
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     commit_id: str = ""
     file_count: int = 0
     total_size_bytes: int = 0
@@ -323,7 +323,7 @@ class CheckpointFileLinkVerifiedEvent(WTBEvent):
         commit_id: Verified commit ID
         blobs_verified: Number of blobs verified
     """
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     commit_id: str = ""
     blobs_verified: int = 0
     

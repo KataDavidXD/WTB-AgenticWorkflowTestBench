@@ -208,7 +208,7 @@ class FileCommit:
     # Metadata for audit
     created_by: Optional[str] = None
     execution_id: Optional[str] = None
-    checkpoint_id: Optional[int] = None
+    checkpoint_id: Optional[str] = None
     
     @classmethod
     def create(
@@ -250,7 +250,7 @@ class FileCommit:
         mementos: List[FileMemento],
         created_by: Optional[str] = None,
         execution_id: Optional[str] = None,
-        checkpoint_id: Optional[int] = None,
+        checkpoint_id: Optional[str] = None,
     ) -> "FileCommit":
         """
         Reconstitute commit from persistence.
@@ -399,7 +399,7 @@ class FileCommit:
                 return memento
         return None
     
-    def link_to_checkpoint(self, checkpoint_id: int) -> None:
+    def link_to_checkpoint(self, checkpoint_id: str) -> None:
         """
         Link this commit to a WTB checkpoint.
         

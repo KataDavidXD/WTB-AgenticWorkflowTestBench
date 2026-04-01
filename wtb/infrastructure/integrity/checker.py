@@ -17,6 +17,7 @@ from wtb.domain.models.integrity import (
     IntegritySeverity,
     RepairAction,
 )
+from wtb.domain.models.node_boundary import NodeStatus
 from wtb.domain.models.outbox import OutboxStatus
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
 
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class ICheckpointRepository(Protocol):
     """Protocol for AgentGit checkpoint repository access."""
     
-    def get_by_id(self, checkpoint_id: int) -> Optional[Any]:
+    def get_by_id(self, checkpoint_id: str) -> Optional[Any]:
         """Get checkpoint by ID."""
         ...
     
@@ -303,7 +304,7 @@ class IntegrityChecker:
                     # Clear invalid checkpoint references
                     if "exit" in issue.message.lower():
                         boundary.exit_checkpoint_id = None
-                        boundary.node_status = "incomplete"
+                        boundary.node_status = NodeStatus.FAILED
                     if "entry" in issue.message.lower():
                         boundary.entry_checkpoint_id = None
                     uow.node_boundaries.update(boundary)

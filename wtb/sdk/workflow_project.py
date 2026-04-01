@@ -846,11 +846,11 @@ class WorkflowProject:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         
-        # Import graph factory
+        # Import graph factory via centralized loader
+        from wtb.application.services.graph_loader import load_graph_factory
         module_name = data["workflow"]["module"]
         factory_name = data["workflow"]["factory"]
-        module = importlib.import_module(module_name)
-        graph_factory = getattr(module, factory_name)
+        graph_factory = load_graph_factory(module_name, factory_name)
         
         # Build project
         project = cls(

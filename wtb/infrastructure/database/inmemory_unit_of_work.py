@@ -10,7 +10,7 @@ Benefits:
 - Same interface as SQLAlchemyUnitOfWork (LSP compliant)
 """
 
-from typing import Dict, Optional, List
+from typing import Any, Dict, List, Optional
 from copy import deepcopy
 from datetime import datetime
 
@@ -25,7 +25,16 @@ from wtb.domain.interfaces.repositories import (
     IOutboxRepository,
     IAuditLogRepository,
 )
-from wtb.domain.interfaces.file_processing_repository import ICheckpointFileLinkRepository
+from wtb.domain.interfaces.file_processing_repository import (
+    ICheckpointFileLinkRepository,
+    IBlobRepository,
+    IFileCommitRepository,
+)
+from wtb.domain.models.file_processing import (
+    FileCommit,
+    BlobId,
+    CommitId,
+)
 from wtb.domain.models import (
     TestWorkflow,
     Execution,
@@ -38,7 +47,7 @@ from wtb.domain.models import (
 from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
 from wtb.domain.models.batch_test import BatchTest, BatchTestStatus
 from wtb.domain.models.evaluation import EvaluationResult
-from wtb.infrastructure.events.wtb_audit_trail import WTBAuditEntry
+from wtb.domain.models.audit import AuditEntry
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -348,7 +357,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         """Add a checkpoint-file link (upsert behavior)."""
         self._store[link.checkpoint_id] = deepcopy(link)
     
-    def get_by_checkpoint(self, checkpoint_id: int) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
         """Get link by checkpoint ID."""
         link = self._store.get(checkpoint_id)
         return deepcopy(link) if link else None
@@ -358,7 +367,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         return [deepcopy(link) for link in self._store.values() 
                 if link.commit_id.value == commit_id.value]
     
-    def delete_by_checkpoint(self, checkpoint_id: int) -> bool:
+    def delete_by_checkpoint(self, checkpoint_id: str) -> bool:
         """Delete link by checkpoint ID."""
         if checkpoint_id in self._store:
             del self._store[checkpoint_id]
@@ -456,39 +465,129 @@ class InMemoryAuditLogRepository(IAuditLogRepository):
     """In-memory audit log repository."""
     
     def __init__(self):
-        self._store: List[WTBAuditEntry] = []
+        self._store: List[AuditEntry] = []
     
-    def get(self, id: str) -> Optional[WTBAuditEntry]:
+    def get(self, id: str) -> Optional[AuditEntry]:
         # Not typically used for logs, but implemented for interface
         return None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[WTBAuditEntry]:
+    def list(self, limit: int = 100, offset: int = 0) -> List[AuditEntry]:
         return [deepcopy(e) for e in self._store[offset:offset + limit]]
     
     def exists(self, id: str) -> bool:
         return False
     
-    def add(self, entity: WTBAuditEntry) -> WTBAuditEntry:
+    def add(self, entity: AuditEntry) -> AuditEntry:
         self._store.append(deepcopy(entity))
         return entity
     
-    def update(self, entity: WTBAuditEntry) -> WTBAuditEntry:
+    def update(self, entity: AuditEntry) -> AuditEntry:
         raise NotImplementedError("Audit logs are immutable")
     
     def delete(self, id: str) -> bool:
         raise NotImplementedError("Audit logs are immutable")
     
-    def append_logs(self, execution_id: str, logs: List[WTBAuditEntry]) -> None:
+    def append_logs(self, execution_id: str, logs: List[AuditEntry]) -> None:
         for log in logs:
             if not log.execution_id:
                 log.execution_id = execution_id
             self._store.append(deepcopy(log))
     
-    def find_by_execution(self, execution_id: str) -> List[WTBAuditEntry]:
+    def find_by_execution(self, execution_id: str) -> List[AuditEntry]:
         return [
             deepcopy(e) for e in self._store 
             if e.execution_id == execution_id
         ]
+
+
+class InMemoryBlobRepository(IBlobRepository):
+    """In-memory blob repository for testing."""
+    
+    def __init__(self):
+        self._store: Dict[str, bytes] = {}
+    
+    def save(self, content: bytes) -> BlobId:
+        import hashlib
+        hash_hex = hashlib.sha256(content).hexdigest()
+        blob_id = BlobId(hash=hash_hex)
+        self._store[hash_hex] = content
+        return blob_id
+    
+    def get(self, blob_id: BlobId) -> Optional[bytes]:
+        return self._store.get(blob_id.hash)
+    
+    def exists(self, blob_id: BlobId) -> bool:
+        return blob_id.hash in self._store
+    
+    def delete(self, blob_id: BlobId) -> bool:
+        if blob_id.hash in self._store:
+            del self._store[blob_id.hash]
+            return True
+        return False
+    
+    def restore_to_file(self, blob_id: BlobId, output_path: str) -> None:
+        content = self._store.get(blob_id.hash)
+        if content is None:
+            raise FileNotFoundError(f"Blob not found: {blob_id.hash}")
+        import os
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "wb") as f:
+            f.write(content)
+    
+    def get_stats(self) -> Dict[str, Any]:
+        total = sum(len(v) for v in self._store.values())
+        return {
+            "blob_count": len(self._store),
+            "total_size_bytes": total,
+            "total_size_mb": round(total / (1024 * 1024), 2),
+        }
+
+
+class InMemoryFileCommitRepository(IFileCommitRepository):
+    """In-memory file commit repository for testing."""
+    
+    def __init__(self):
+        self._store: Dict[str, FileCommit] = {}
+    
+    def save(self, commit: FileCommit) -> None:
+        self._store[str(commit.id)] = deepcopy(commit)
+    
+    def get_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+        c = self._store.get(str(commit_id))
+        return deepcopy(c) if c else None
+    
+    def get_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+        return self.get_by_id(commit_id)
+    
+    def get_all(self, limit: int = 100, offset: int = 0) -> List[FileCommit]:
+        commits = sorted(
+            self._store.values(),
+            key=lambda c: c.timestamp if hasattr(c, "timestamp") else "",
+            reverse=True,
+        )
+        return [deepcopy(c) for c in commits[offset:offset + limit]]
+    
+    def get_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+        return [
+            deepcopy(c) for c in self._store.values()
+            if getattr(c, "execution_id", None) == execution_id
+        ]
+    
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
+        for c in self._store.values():
+            if getattr(c, "checkpoint_id", None) == checkpoint_id:
+                return deepcopy(c)
+        return None
+    
+    def delete(self, commit_id: CommitId) -> bool:
+        key = str(commit_id)
+        if key in self._store:
+            del self._store[key]
+            return True
+        return False
+    
+    def count(self) -> int:
+        return len(self._store)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -527,6 +626,8 @@ class InMemoryUnitOfWork(IUnitOfWork):
         self.checkpoint_file_links: ICheckpointFileLinkRepository = InMemoryCheckpointFileLinkRepository()
         self.outbox: IOutboxRepository = InMemoryOutboxRepository()
         self.audit_logs: IAuditLogRepository = InMemoryAuditLogRepository()
+        self.blobs: IBlobRepository = InMemoryBlobRepository()
+        self.file_commits: IFileCommitRepository = InMemoryFileCommitRepository()
         
         self._in_transaction = False
     
@@ -557,4 +658,6 @@ class InMemoryUnitOfWork(IUnitOfWork):
         self.checkpoint_file_links = InMemoryCheckpointFileLinkRepository()
         self.outbox = InMemoryOutboxRepository()
         self.audit_logs = InMemoryAuditLogRepository()
+        self.blobs = InMemoryBlobRepository()
+        self.file_commits = InMemoryFileCommitRepository()
 

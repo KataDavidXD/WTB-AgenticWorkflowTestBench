@@ -29,6 +29,7 @@ class ExecutionRepository(BaseRepository[Execution, ExecutionORM], IExecutionRep
             workflow_variables=current_state.get("workflow_variables", {}),
             execution_path=execution_path,
             node_results=current_state.get("node_results", {}),
+            node_boundaries=current_state.get("node_boundaries", {}),
         )
         
         # v1.6: ORM agentgit_* fields are now String(128), direct mapping
@@ -53,6 +54,7 @@ class ExecutionRepository(BaseRepository[Execution, ExecutionORM], IExecutionRep
         current_state = {
             "workflow_variables": domain.state.workflow_variables,
             "node_results": domain.state.node_results,
+            "node_boundaries": domain.state.node_boundaries,
         }
         
         # v1.6: ORM agentgit_* fields are now String(128), direct mapping

@@ -33,10 +33,10 @@ class VariantCombination:
     This enables distributed actors (Ray) to recreate LangGraph graphs locally
     for proper checkpoint support.
     
-    Graph Factory Pattern:
+    Graph Factory Pattern (data only, DIP-compliant):
     - graph_factory_module: Python module containing the factory function
     - graph_factory_name: Name of the factory function
-    - Actor imports module and calls factory() to get LangGraph graph
+    - Application layer uses graph_loader.load_graph_factory() to resolve these
     
     Example:
         vc = VariantCombination(
@@ -44,7 +44,6 @@ class VariantCombination:
             graph_factory_module="myapp.workflows",
             graph_factory_name="create_my_graph",
         )
-        # Actor can then: graph = importlib.import_module(...).create_my_graph()
     """
     name: str  # Human-readable name (e.g., "Config A")
     variants: Dict[str, str] = field(default_factory=dict)  # node_id -> variant_id
@@ -80,29 +79,6 @@ class VariantCombination:
     def has_graph_factory(self) -> bool:
         """Check if graph factory reference is set."""
         return bool(self.graph_factory_module and self.graph_factory_name)
-    
-    def create_graph(self) -> Any:
-        """
-        Create LangGraph graph from factory reference.
-        
-        Returns:
-            Compiled LangGraph graph
-            
-        Raises:
-            ValueError: If graph factory not configured
-            ImportError: If module not found
-            AttributeError: If function not found in module
-        """
-        if not self.has_graph_factory():
-            raise ValueError(
-                f"Graph factory not configured for variant '{self.name}'. "
-                f"Set graph_factory_module and graph_factory_name."
-            )
-        
-        import importlib
-        module = importlib.import_module(self.graph_factory_module)
-        factory = getattr(module, self.graph_factory_name)
-        return factory()
 
 
 @dataclass
@@ -204,6 +180,9 @@ class BatchTest:
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
     
+    # Transient: workflow object cache (not persisted, avoids UoW lookup)
+    _workflow: Optional[Any] = field(default=None, repr=False, compare=False)
+    
     # === Lifecycle Methods ===
     
     def start(self):
@@ -214,19 +193,40 @@ class BatchTest:
         self.started_at = datetime.now()
     
     def complete(self):
-        """Mark batch test as completed."""
+        """
+        Mark batch test as completed.
+        
+        Raises:
+            ValueError: If not in RUNNING status
+        """
+        if self.status != BatchTestStatus.RUNNING:
+            raise ValueError(f"Cannot complete batch test in status {self.status.value}")
         self.status = BatchTestStatus.COMPLETED
         self.completed_at = datetime.now()
         self._determine_best()
     
     def fail(self, error_message: str):
-        """Mark batch test as failed."""
+        """
+        Mark batch test as failed.
+        
+        Raises:
+            ValueError: If not in RUNNING or PENDING status
+        """
+        if self.status not in (BatchTestStatus.RUNNING, BatchTestStatus.PENDING):
+            raise ValueError(f"Cannot fail batch test in status {self.status.value}")
         self.status = BatchTestStatus.FAILED
         self.completed_at = datetime.now()
         self.metadata["error_message"] = error_message
     
     def cancel(self):
-        """Cancel the batch test."""
+        """
+        Cancel the batch test.
+        
+        Raises:
+            ValueError: If already in a terminal state
+        """
+        if self.status in (BatchTestStatus.COMPLETED, BatchTestStatus.FAILED, BatchTestStatus.CANCELLED):
+            raise ValueError(f"Cannot cancel batch test in status {self.status.value}")
         self.status = BatchTestStatus.CANCELLED
         self.completed_at = datetime.now()
     

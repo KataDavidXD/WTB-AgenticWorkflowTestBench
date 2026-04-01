@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import logging
+import threading
 import uuid
 
 from wtb.domain.interfaces.state_adapter import (
@@ -179,6 +180,7 @@ class LangGraphStateAdapter(IStateAdapter):
         # Session tracking (v1.6: string IDs)
         self._current_thread_id: Optional[str] = None
         self._current_execution_id: Optional[str] = None
+        self._session_lock = threading.Lock()
         
         # Node boundary tracking (per thread_id)
         self._node_boundaries: Dict[str, Dict[str, _NodeBoundaryTracker]] = {}
@@ -286,6 +288,10 @@ class LangGraphStateAdapter(IStateAdapter):
         """LangGraphStateAdapter always supports graph execution."""
         return True
     
+    def supports_graph_execution(self) -> bool:
+        """LangGraphStateAdapter always supports graph execution."""
+        return True
+    
     def has_graph(self) -> bool:
         """Check if graph is set."""
         return self._compiled_graph is not None
@@ -295,21 +301,22 @@ class LangGraphStateAdapter(IStateAdapter):
         return self._checkpointer
 
     def close(self) -> None:
-        """Close checkpointer and release database connections.
-
-        Strategy (ordered by abstraction level):
-        1. Context manager protocol (__exit__) -- MemorySaver and future savers
-        2. SqliteSaver.conn.close() -- conn is a documented public attribute
-        """
+        """Release checkpointer resources."""
         if self._checkpointer is None:
             return
         try:
-            if callable(getattr(self._checkpointer, '__exit__', None)):
+            if hasattr(self._checkpointer, "conn") and self._checkpointer.conn:
+                self._checkpointer.conn.close()
+            elif hasattr(self._checkpointer, "close"):
+                self._checkpointer.close()
+            elif callable(getattr(self._checkpointer, "__exit__", None)):
                 self._checkpointer.__exit__(None, None, None)
-                return
-            conn = getattr(self._checkpointer, 'conn', None)
-            if conn is not None:
-                conn.close()
+        except Exception:
+            pass
+
+    def __del__(self) -> None:
+        try:
+            self.close()
         except Exception:
             pass
 
@@ -459,18 +466,27 @@ class LangGraphStateAdapter(IStateAdapter):
             current_node = values.get("current_node_id")
             exec_path = values.get("execution_path", [])
             node_results = values.get("node_results", {})
-            workflow_vars = dict(values)
+            workflow_vars = values.get("workflow_variables", {})
+            node_boundaries = values.get("node_boundaries", {})
+            
+            # LangGraph stores state as a flat dict (e.g. {query, answer, _output_files})
+            # rather than nested under "workflow_variables". When the nested key is absent,
+            # use the full values dict so rollback preserves all state fields.
+            if not workflow_vars:
+                workflow_vars = dict(values)
         else:
             current_node = None
             exec_path = []
             node_results = {}
             workflow_vars = {}
+            node_boundaries = {}
         
         return ExecutionState(
             current_node_id=current_node,
             workflow_variables=workflow_vars,
             execution_path=exec_path,
             node_results=node_results,
+            node_boundaries=node_boundaries,
         )
     
     def rollback(self, to_checkpoint_id: str) -> ExecutionState:
@@ -651,9 +667,14 @@ class LangGraphStateAdapter(IStateAdapter):
     # ═══════════════════════════════════════════════════════════════════════════
     
     def execute(self, initial_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def execute(self, initial_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Execute workflow with automatic checkpointing.
         
+        Args:
+            initial_state: Initial state dict for fresh execution, or None to
+                          resume from the last checkpoint on the current thread
+                          (native LangGraph behavior via graph.invoke(None, config)).
         Args:
             initial_state: Initial state dict for fresh execution, or None to
                           resume from the last checkpoint on the current thread

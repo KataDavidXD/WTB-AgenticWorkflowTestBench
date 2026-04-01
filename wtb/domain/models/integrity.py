@@ -135,7 +135,7 @@ class IntegrityIssue:
     @classmethod
     def orphan_checkpoint(
         cls,
-        checkpoint_id: int,
+        checkpoint_id: str,
         message: str,
         **details
     ) -> "IntegrityIssue":

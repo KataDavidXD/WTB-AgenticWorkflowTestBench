@@ -236,7 +236,7 @@ class OutboxEvent:
     def create_checkpoint_verify(
         cls,
         execution_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         node_id: str,
         internal_session_id: int,
         is_entry: bool = False,
@@ -260,7 +260,7 @@ class OutboxEvent:
     def create_file_commit_verify(
         cls,
         execution_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_commit_id: str,
         node_id: str
     ) -> "OutboxEvent":
@@ -280,7 +280,7 @@ class OutboxEvent:
     def create_checkpoint_file_link_verify(
         cls,
         execution_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_commit_id: str
     ) -> "OutboxEvent":
         """Factory method for checkpoint-file link verification events."""
@@ -337,7 +337,7 @@ class OutboxEvent:
     def create_file_restore_verify(
         cls,
         execution_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: str,
         restored_paths: list,
     ) -> "OutboxEvent":
@@ -357,8 +357,8 @@ class OutboxEvent:
     def create_rollback_file_restore(
         cls,
         execution_id: str,
-        source_checkpoint_id: int,
-        target_checkpoint_id: int,
+        source_checkpoint_id: str,
+        target_checkpoint_id: str,
         source_commit_id: str,
     ) -> "OutboxEvent":
         """Factory method for rollback file restore events."""
@@ -377,7 +377,7 @@ class OutboxEvent:
     def create_rollback_verify(
         cls,
         execution_id: str,
-        checkpoint_id: int,
+        checkpoint_id: str,
         restored_files_count: int,
         state_verified: bool = False,
     ) -> "OutboxEvent":

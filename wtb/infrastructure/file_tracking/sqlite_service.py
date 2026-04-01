@@ -356,7 +356,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     
     def track_and_link(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_paths: List[str],
         message: Optional[str] = None,
     ) -> FileTrackingResult:
@@ -416,7 +416,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     
     def link_to_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: str,
     ) -> FileTrackingLink:
         """
@@ -481,7 +481,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     
     def restore_from_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> FileRestoreResult:
         """
         Restore files from checkpoint's linked commit.
@@ -575,7 +575,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     
     def get_commit_for_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> Optional[str]:
         """
         Get the file commit ID linked to a checkpoint.
@@ -661,7 +661,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     
     def get_files_at_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> List[str]:
         """
         Get file paths that existed at a specific checkpoint.

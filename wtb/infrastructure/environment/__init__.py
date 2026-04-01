@@ -12,10 +12,12 @@ Implementations:
 from .providers import (
     InProcessEnvironmentProvider,
     RayEnvironmentProvider,
+    GrpcEnvironmentProvider,
 )
 
 __all__ = [
     "InProcessEnvironmentProvider",
     "RayEnvironmentProvider",
+    "GrpcEnvironmentProvider",
 ]
 

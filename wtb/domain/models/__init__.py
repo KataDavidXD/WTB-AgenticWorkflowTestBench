@@ -11,7 +11,7 @@ from .workflow import (
     InvalidStateTransition,
 )
 
-from .node_boundary import NodeBoundary
+from .node_boundary import NodeBoundary, NodeStatus
 # CheckpointFile REMOVED (2026-01-27) - Use CheckpointFileLink from file_processing
 from .checkpoint import (
     Checkpoint,
@@ -37,6 +37,7 @@ from .outbox import (
     OutboxEventType,
     OutboxStatus,
 )
+from .audit import AuditEntry
 from .integrity import (
     IntegrityIssue,
     IntegrityIssueType,
@@ -82,6 +83,7 @@ __all__ = [
     "InvalidStateTransition",
     # Node boundary
     "NodeBoundary",
+    "NodeStatus",
     # Checkpoint-file link (2026-01-27: Consolidated to CheckpointFileLink)
     "CheckpointFileLink",
     # Checkpoint (DDD - 2026-01-15)
@@ -104,6 +106,8 @@ __all__ = [
     "OutboxEvent",
     "OutboxEventType",
     "OutboxStatus",
+    # Audit persistence
+    "AuditEntry",
     # Integrity Check
     "IntegrityIssue",
     "IntegrityIssueType",

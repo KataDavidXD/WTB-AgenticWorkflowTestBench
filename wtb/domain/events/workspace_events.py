@@ -127,7 +127,7 @@ class FileRestoreEvent(WTBEvent):
     Used during rollback and fork operations.
     """
     execution_id: str = ""
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     file_commit_id: str = ""
     workspace_id: str = ""
     files_restored: int = 0
@@ -143,7 +143,7 @@ class FileRestoreFailedEvent(WTBEvent):
     Published when file restore operation fails.
     """
     execution_id: str = ""
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     workspace_id: str = ""
     error_message: str = ""
     error_type: str = ""
@@ -239,7 +239,7 @@ class VenvMismatchWarningEvent(WTBEvent):
     
     Warning event - doesn't prevent rollback but logs incompatibility.
     """
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     expected_venv_hash: str = ""
     current_venv_hash: str = ""
     expected_packages: List[str] = field(default_factory=list)
@@ -252,7 +252,7 @@ class VenvRestoredEvent(WTBEvent):
     Published when venv is restored during rollback.
     """
     workspace_id: str = ""
-    checkpoint_id: int = 0
+    checkpoint_id: str = ""
     venv_path: str = ""
     restored_from: str = ""        # lock_snapshot | spec_recreation
     restore_time_ms: float = 0.0

@@ -306,7 +306,7 @@ class FileTrackerService(IFileTrackingService):
     
     def track_and_link(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_paths: List[str],
         message: Optional[str] = None,
     ) -> FileTrackingResult:
@@ -350,7 +350,7 @@ class FileTrackerService(IFileTrackingService):
     
     def _save_checkpoint_link(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: str,
         file_count: int,
         total_size: int,
@@ -378,7 +378,7 @@ class FileTrackerService(IFileTrackingService):
     
     def link_to_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: str,
     ) -> FileTrackingLink:
         """
@@ -422,7 +422,7 @@ class FileTrackerService(IFileTrackingService):
     
     def restore_from_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> FileRestoreResult:
         """
         Restore files from checkpoint's linked commit.
@@ -630,7 +630,7 @@ class FileTrackerService(IFileTrackingService):
     
     def restore_checkpoint_to_workspace(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         workspace_output_dir: str,
     ) -> FileRestoreResult:
         """
@@ -672,7 +672,7 @@ class FileTrackerService(IFileTrackingService):
     
     def get_commit_for_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> Optional[str]:
         """
         Get the file commit ID linked to a checkpoint.
@@ -746,7 +746,7 @@ class FileTrackerService(IFileTrackingService):
     
     def get_files_at_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> List[str]:
         """
         Get file paths that existed at a specific checkpoint.

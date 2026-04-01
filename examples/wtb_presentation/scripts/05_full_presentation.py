@@ -334,9 +334,9 @@ def demo_project_setup(bench: WTBTestBench) -> WorkflowProject:
         print("  - Project registered successfully!")
     except ValueError as e:
         if "already registered" in str(e):
-            print("  - Project already registered (reusing existing)")
-            # Manually add to cache so run() can find it
-            bench._project_cache[project.name] = project
+            bench.unregister_project(project.name)
+            bench.register_project(project)
+            print("  - Project re-registered successfully!")
         else:
             raise
     
@@ -631,63 +631,65 @@ def demo_forking(bench: WTBTestBench, execution_id: str, checkpoints: List):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def demo_batch_testing(bench: WTBTestBench, project: WorkflowProject):
-    """Demonstrate batch testing with multiple queries and variants."""
+    """Demonstrate batch testing with multiple queries and variants via SDK."""
     print_header("SECTION 6: BATCH TESTING")
     
     print("""
   Batch testing features:
-  - Run multiple test cases in parallel
+  - bench.run_batch_test() orchestrates parallel variant execution
   - Test variant combinations (model x retriever)
-  - Collect metrics for comparison
-  - Export results for analysis
+  - Comparison matrix for result analysis
+  - Rollback/fork individual batch results
     """)
     
     wait_for_input()
     
-    # Test cases
-    test_queries = [
-        "What is TechFlow's gross margin?",
-        "What is the market size for AI platforms?",
-        "List the investment risks for TechFlow",
+    test_cases = [
+        {"query": "What is TechFlow's gross margin?", "messages": []},
+        {"query": "What is the market size for AI platforms?", "messages": []},
+        {"query": "List the investment risks for TechFlow", "messages": []},
     ]
     
-    print_step(1, f"Running batch test with {len(test_queries)} queries...")
+    variant_matrix = [
+        {"retriever": "dense", "model": "gpt-4o-mini"},
+        {"retriever": "bm25", "model": "gpt-4o"},
+    ]
     
-    results = []
-    for i, query in enumerate(test_queries):
-        print(f"\n  [{i+1}/{len(test_queries)}] {query[:50]}...")
-        
-        start_time = time.time()
-        result = bench.run(
-            project=project.name,
-            initial_state={"query": query, "messages": []},
-        )
-        duration = time.time() - start_time
-        
-        results.append({
-            "query": query,
-            "status": str(result.status),
-            "duration": duration,
-            "execution_id": str(result.id),
-        })
-        status_str = result.status.value if hasattr(result.status, 'value') else str(result.status)
-        print(f"      Status: {status_str}, Duration: {format_duration(duration)}")
+    print_step(1, f"Running batch test: {len(test_cases)} queries x {len(variant_matrix)} variants...")
     
-    print_step(2, "Batch test summary...")
-    # ExecutionStatus is an enum - compare using string value
-    successful = sum(1 for r in results if "completed" in str(r["status"]).lower())
-    avg_duration = sum(r["duration"] for r in results) / len(results) if results else 0
+    start_time = time.time()
+    batch = bench.run_batch_test(
+        project=project.name,
+        variant_matrix=variant_matrix,
+        test_cases=test_cases,
+    )
+    total_duration = time.time() - start_time
     
-    print(f"  - Total queries: {len(results)}")
+    print_step(2, "Batch test results...")
+    successful = sum(1 for r in batch.results if r.success)
+    print(f"  - Total results: {len(batch.results)}")
     print(f"  - Successful: {successful}")
-    print(f"  - Average duration: {format_duration(avg_duration)}")
+    print(f"  - Total duration: {format_duration(total_duration)}")
     
-    # Save results
+    for r in batch.results:
+        status = "[OK]" if r.success else "[FAIL]"
+        cp = r.last_checkpoint_id[:8] if r.last_checkpoint_id else "none"
+        print(f"  {status} {r.combination_name}: exec={r.execution_id[:8]}... cp={cp}...")
+    
+    matrix = batch.build_comparison_matrix()
+    print(f"\n  Comparison matrix headers: {matrix.get('headers', [])}")
+    
     report_path = OUTPUTS_DIR / "batch_test_results.json"
-    report_path.write_text(json.dumps(results, indent=2, default=str))
+    report_data = [
+        {"variant": r.combination_name, "success": r.success, "execution_id": r.execution_id}
+        for r in batch.results
+    ]
+    report_path.write_text(
+        json.dumps(report_data, indent=2, default=str), encoding="utf-8"
+    )
     print(f"  - Results saved: {report_path}")
     
-    return results
+    return batch
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -821,26 +823,25 @@ def demo_ray_distribution(bench: WTBTestBench, project: WorkflowProject):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def demo_ray_batch_execution(bench: WTBTestBench, project: WorkflowProject):
-    """Demonstrate Ray-based parallel batch execution."""
+    """Demonstrate Ray-based parallel batch execution via run_batch_test()."""
     print_header("SECTION 9: RAY BATCH EXECUTION (Parallel Workflows)")
     
     print("""
   Ray Batch Execution enables:
-  - Parallel execution of multiple test cases
-  - Actor-based isolation per execution
-  - Resource management per variant
-  - Automatic result aggregation
+  - bench.run_batch_test() dispatched through Ray actors
+  - Actor-based isolation per execution (ACID per variant)
+  - Resource management per variant via RayConfig
+  - Automatic result aggregation with comparison matrix
   
   Architecture:
+  - WTBTestBench.create(enable_ray=True) wires RayBatchTestRunner
   - RayBatchTestRunner orchestrates ActorPool
   - VariantExecutionActor executes individual workflows
-  - ObjectRef tracking for progress monitoring
   - Backpressure to prevent resource exhaustion
     """)
     
     wait_for_input()
     
-    # Check Ray availability
     ray_available = False
     try:
         import ray
@@ -852,107 +853,77 @@ def demo_ray_batch_execution(bench: WTBTestBench, project: WorkflowProject):
         print("  [SKIP] Ray not available for batch execution demo")
         return {}
     
-    print_step(1, "Preparing parallel batch test...")
+    print_step(1, "Preparing Ray-parallel batch test...")
     
-    # Test queries for parallel execution
-    test_queries = [
-        {"query": "What is TechFlow's revenue?", "expected_type": "financial"},
-        {"query": "List the key products", "expected_type": "product"},
-        {"query": "Who are the competitors?", "expected_type": "competitive"},
-        {"query": "What is the market opportunity?", "expected_type": "market"},
-        {"query": "Describe the technology stack", "expected_type": "technical"},
-    ]
-    
-    print(f"  - Test cases: {len(test_queries)}")
-    print(f"  - Execution mode: Ray parallel")
-    
-    # Get cluster resources
     import ray
     resources = ray.cluster_resources()
     available_cpus = int(resources.get("CPU", 1))
-    max_parallel = min(len(test_queries), available_cpus)
+    
+    test_cases = [
+        {"query": "What is TechFlow's revenue?", "messages": []},
+        {"query": "List the key products", "messages": []},
+        {"query": "Who are the competitors?", "messages": []},
+        {"query": "What is the market opportunity?", "messages": []},
+        {"query": "Describe the technology stack", "messages": []},
+    ]
+    
+    variant_matrix = [
+        {"retriever": "dense"},
+        {"retriever": "bm25"},
+    ]
+    
+    print(f"  - Test cases: {len(test_cases)}")
+    print(f"  - Variant configs: {len(variant_matrix)}")
     print(f"  - Available CPUs: {available_cpus}")
-    print(f"  - Max parallelism: {max_parallel}")
+    print(f"  - Expected executions: {len(test_cases) * len(variant_matrix)}")
     
     wait_for_input()
     
-    print_step(2, f"Executing {len(test_queries)} queries in parallel...")
+    print_step(2, "Executing via bench.run_batch_test() (Ray actors)...")
     
-    # Track timing
     start_time = time.time()
-    results = []
-    
-    # Execute queries with timing
-    for i, test_case in enumerate(test_queries):
-        query_start = time.time()
-        print(f"\n  [{i+1}/{len(test_queries)}] {test_case['query'][:40]}...")
-        
-        result = bench.run(
-            project=project.name,
-            initial_state={"query": test_case["query"], "messages": []},
-        )
-        
-        query_duration = time.time() - query_start
-        status_str = result.status.value if hasattr(result.status, 'value') else str(result.status)
-        
-        results.append({
-            "query": test_case["query"],
-            "expected_type": test_case["expected_type"],
-            "status": status_str,
-            "duration": query_duration,
-            "execution_id": str(result.id),
-        })
-        
-        print(f"      Status: {status_str}, Time: {format_duration(query_duration)}")
-    
+    batch = bench.run_batch_test(
+        project=project.name,
+        variant_matrix=variant_matrix,
+        test_cases=test_cases,
+    )
     total_duration = time.time() - start_time
     
     print_step(3, "Ray batch execution summary...")
     
-    # Calculate metrics
-    successful = sum(1 for r in results if "completed" in r["status"].lower())
-    failed = len(results) - successful
-    avg_duration = sum(r["duration"] for r in results) / len(results) if results else 0
+    successful = sum(1 for r in batch.results if r.success)
+    failed = len(batch.results) - successful
     
-    # Estimated sequential time vs actual parallel
-    sequential_estimate = sum(r["duration"] for r in results)
-    speedup = sequential_estimate / total_duration if total_duration > 0 else 1.0
-    
-    print(f"  - Total queries: {len(results)}")
+    print(f"  - Total results: {len(batch.results)}")
     print(f"  - Successful: {successful}")
     print(f"  - Failed: {failed}")
-    print(f"  - Average per query: {format_duration(avg_duration)}")
     print(f"  - Total wall time: {format_duration(total_duration)}")
-    print(f"  - Sequential estimate: {format_duration(sequential_estimate)}")
-    print(f"  - Speedup factor: {speedup:.2f}x")
     
-    # Show per-type breakdown
-    print_step(4, "Results by query type...")
-    type_results = {}
-    for r in results:
-        qtype = r["expected_type"]
-        if qtype not in type_results:
-            type_results[qtype] = []
-        type_results[qtype].append(r)
+    for r in batch.results:
+        status = "[OK]" if r.success else "[FAIL]"
+        cp = r.last_checkpoint_id[:8] if r.last_checkpoint_id else "none"
+        print(f"  {status} {r.combination_name}: exec={r.execution_id[:8]}... cp={cp}...")
     
-    for qtype, type_data in type_results.items():
-        success_count = sum(1 for r in type_data if "completed" in r["status"].lower())
-        avg_time = sum(r["duration"] for r in type_data) / len(type_data)
-        print(f"    {qtype}: {success_count}/{len(type_data)} success, avg {format_duration(avg_time)}")
+    matrix = batch.build_comparison_matrix()
+    print(f"\n  Comparison matrix headers: {matrix.get('headers', [])}")
     
-    # Save results
     batch_results_path = OUTPUTS_DIR / "ray_batch_results.json"
-    batch_results_path.write_text(json.dumps({
-        "total_queries": len(results),
+    report = {
+        "total_results": len(batch.results),
         "successful": successful,
         "failed": failed,
         "total_duration": total_duration,
-        "speedup": speedup,
-        "results": results,
-    }, indent=2, default=str))
+        "results": [
+            {"variant": r.combination_name, "success": r.success, "execution_id": r.execution_id}
+            for r in batch.results
+        ],
+    }
+    batch_results_path.write_text(
+        json.dumps(report, indent=2, default=str), encoding="utf-8"
+    )
     print(f"\n  Results saved: {batch_results_path}")
     
-    return results
+    return batch
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -986,26 +957,27 @@ def run_full_presentation(sections: Optional[List[str]] = None):
     wait_for_input("Press Enter to begin the presentation...")
     
     # Initialize Ray cluster for distributed execution
+    ray_ok = False
     try:
         import ray
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
-            print("  - Ray initialized (local cluster)")
+        ray_ok = True
+        resources = ray.cluster_resources()
+        print(f"  - Ray initialized (CPUs: {resources.get('CPU', 0)}, "
+              f"Memory: {resources.get('memory', 0) / (1024**3):.1f} GB)")
     except ImportError:
-        print("  - Ray not available, using sequential execution")
+        print("  - Ray not available, using thread-pool execution")
     
-    # Initialize WTB with REAL SQLite checkpoints (not in-memory!)
-    # Uses WTBTestBenchFactory.create_for_development() which creates:
-    # - SQLite UoW at DATA_DIR/wtb.db
-    # - LangGraph SQLite checkpointer at DATA_DIR/wtb_checkpoints.db
-    # - File tracking SQLite at DATA_DIR/.filetrack/filetrack.db (2026-01-17)
     bench = WTBTestBench.create(
-        mode="development", 
+        mode="development",
         data_dir=str(DATA_DIR),
-        enable_file_tracking=True,  # Enable file tracking for rollback
+        enable_file_tracking=True,
+        enable_ray=ray_ok,
     )
-    print(f"  - WTB initialized with SQLite persistence in: {DATA_DIR}")
-    print(f"  - File tracking ENABLED: rollback will restore files")
+    runner_type = "Ray actors" if ray_ok else "thread pool"
+    print(f"  - WTB initialized (SQLite persistence, batch runner: {runner_type})")
+    print(f"  - Data directory: {DATA_DIR}")
     
     all_sections = {
         "setup": demo_project_setup,

@@ -440,7 +440,7 @@ class AsyncSQLAlchemyFileCommitRepository(IAsyncFileCommitRepository):
     async def aget_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
         """Get commit linked to checkpoint."""
         # Convert checkpoint_id to int if necessary (ORM uses int for now based on previous file)
-        # But wait, CheckpointFileLinkORM uses checkpoint_id: int?
+        # But wait, CheckpointFileLinkORM uses checkpoint_id: str?
         # Let's check FILE_TRACKING_ARCHITECTURE_DECISION.md or ORM.
         # file_processing_orm.py: checkpoint_id: Mapped[int]
         # But in LangGraph it's usually string. WTB uses int for SQL checkpoints?

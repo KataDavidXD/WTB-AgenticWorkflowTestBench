@@ -10,7 +10,7 @@ A production-ready presentation showcasing Workflow Test Bench SDK capabilities:
 
 Usage:
     cd examples/wtb_presentation
-    python scripts/09_full_presentation.py
+    python scripts/05_full_presentation.py
 """
 
 __version__ = "1.0.0"

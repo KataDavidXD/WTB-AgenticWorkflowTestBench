@@ -12,7 +12,7 @@ Demonstrates the key WTB SDK methods:
 Uses SYNCHRONOUS SDK methods (no async).
 
 Usage:
-    cd D:\12-22
+    cd <project-root>
     python examples/wtb_presentation/scripts/run_demo.py
     
     # Run specific demo:
@@ -128,7 +128,9 @@ def demo_basic_execution():
         print(f"  - Project '{project.name}' registered")
     except ValueError as e:
         if "already registered" in str(e).lower():
-            print(f"  - Project '{project.name}' already registered (reusing)")
+            bench.unregister_project(project.name)
+            bench.register_project(project)
+            print(f"  - Project '{project.name}' re-registered")
         else:
             raise
     
@@ -213,7 +215,7 @@ def demo_rollback():
     # Step 3: Rollback to earlier checkpoint
     print_step(3, "Rolling back to earlier checkpoint...")
     
-    target_cp = checkpoints[-1]  # Earliest checkpoint
+    target_cp = checkpoints[-1]  # Oldest checkpoint (list is newest-first)
     print(f"  - Target checkpoint: {target_cp.id}")
     print(f"  - Target step: {target_cp.step}")
     
@@ -278,7 +280,7 @@ def demo_forking():
         print("  - No checkpoints available for forking")
         return
     
-    fork_point = checkpoints[0]  # Latest checkpoint
+    fork_point = checkpoints[0]  # Newest checkpoint (list is newest-first)
     print(f"  - Fork point: {fork_point.id}")
     
     # Step 3: Create forks

@@ -16,7 +16,7 @@ Usage:
         def __init__(self, file_tracking: IFileTrackingService):
             self._file_tracking = file_tracking
         
-        def process_with_tracking(self, checkpoint_id: int, files: List[str]):
+        def process_with_tracking(self, checkpoint_id: str, files: List[str]):
             result = self._file_tracking.track_and_link(checkpoint_id, files)
             return result.commit_id
 """
@@ -173,7 +173,7 @@ class FileTrackingLink:
     - with domain model CheckpointFileLink in file_processing.py
     - Interface VOs use primitives; domain models use value objects
     """
-    checkpoint_id: int
+    checkpoint_id: str
     commit_id: str  # Primitive str for ACL boundary (not CommitId value object)
     linked_at: datetime
     file_count: int
@@ -203,7 +203,7 @@ class FileCleanupResult:
     - Uses tuples (not lists) for frozen=True compatibility
     - success property derived from errors for consistency
     """
-    checkpoint_id: int
+    checkpoint_id: str
     execution_id: str
     files_deleted: int = 0
     files_backed_up: int = 0
@@ -257,7 +257,7 @@ class FileCleanupResult:
         )
     
     @classmethod
-    def empty(cls, checkpoint_id: int, execution_id: str, dry_run: bool = False) -> "FileCleanupResult":
+    def empty(cls, checkpoint_id: str, execution_id: str, dry_run: bool = False) -> "FileCleanupResult":
         """Create empty result (no files to cleanup)."""
         return cls(
             checkpoint_id=checkpoint_id,
@@ -321,7 +321,7 @@ class IFileTrackingService(ABC):
     @abstractmethod
     def track_and_link(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_paths: List[str],
         message: Optional[str] = None,
     ) -> FileTrackingResult:
@@ -351,7 +351,7 @@ class IFileTrackingService(ABC):
     @abstractmethod
     def link_to_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: str,
     ) -> FileTrackingLink:
         """
@@ -376,7 +376,7 @@ class IFileTrackingService(ABC):
     @abstractmethod
     def restore_from_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> FileRestoreResult:
         """
         Restore files from checkpoint's linked commit.
@@ -420,7 +420,7 @@ class IFileTrackingService(ABC):
     @abstractmethod
     def get_commit_for_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> Optional[str]:
         """
         Get the file commit ID linked to a checkpoint.
@@ -465,7 +465,7 @@ class IFileTrackingService(ABC):
     @abstractmethod
     def get_files_at_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> List[str]:
         """
         Get file paths that existed at a specific checkpoint.
@@ -530,7 +530,7 @@ class IFileCleanupService(ABC):
     @abstractmethod
     def identify_orphaned_files(
         self,
-        target_checkpoint_id: int,
+        target_checkpoint_id: str,
         execution_id: str,
         current_workspace_path: Path,
         track_patterns: List[str],
@@ -560,7 +560,7 @@ class IFileCleanupService(ABC):
     @abstractmethod
     def cleanup_orphaned_files(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         execution_id: str,
         orphaned_paths: List[str],
         backup_dir: Optional[Path] = None,

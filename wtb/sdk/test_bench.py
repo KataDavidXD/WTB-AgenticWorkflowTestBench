@@ -157,6 +157,30 @@ class WTBTestBenchBuilder:
         self._config["connection_string"] = connection_string
         return self
     
+    def with_ray(
+        self,
+        data_dir: str = "data",
+        grpc_env_url: Optional[str] = None,
+    ) -> "WTBTestBenchBuilder":
+        """
+        Configure for development mode with Ray batch runner.
+        
+        Requires ``ray`` to be installed and ``ray.init()``
+        to have been called before invoking batch operations.
+        
+        Args:
+            data_dir: Directory for SQLite persistence
+            grpc_env_url: Optional gRPC URL for UV venv manager Docker
+                          service (e.g. ``localhost:50051``). When set,
+                          each Ray actor provisions an isolated venv.
+        """
+        self._mode = "development"
+        self._config["data_dir"] = data_dir
+        self._config["enable_ray"] = True
+        if grpc_env_url:
+            self._config["grpc_env_url"] = grpc_env_url
+        return self
+    
     # Dependency override methods (for advanced testing scenarios)
     def with_project_service(self, service: "ProjectService") -> "WTBTestBenchBuilder":
         """Override the project service (for testing)."""
@@ -182,7 +206,7 @@ class WTBTestBenchBuilder:
         """Build WTBTestBench - delegates to Application Factory."""
         from wtb.application.factories import WTBTestBenchFactory
         
-        # Check if user provided ALL custom dependencies (full manual wiring)
+        # Full manual wiring: all four deps provided
         if self._has_all_custom_dependencies():
             return WTBTestBench(
                 project_service=self._project_service,
@@ -193,26 +217,36 @@ class WTBTestBenchBuilder:
         
         # Delegate to Application Factory (proper composition root)
         if self._mode == "testing":
-            return WTBTestBenchFactory.create_for_testing()
+            bench = WTBTestBenchFactory.create_for_testing()
         elif self._mode == "development":
-            return WTBTestBenchFactory.create_for_development(
-                data_dir=self._config.get("data_dir", "data")
+            bench = WTBTestBenchFactory.create_for_development(
+                data_dir=self._config.get("data_dir", "data"),
+                enable_ray=self._config.get("enable_ray", False),
+                grpc_env_url=self._config.get("grpc_env_url"),
             )
         elif self._mode == "production":
-            return WTBTestBenchFactory.create_with_langgraph(
+            bench = WTBTestBenchFactory.create_with_langgraph(
                 checkpointer_type=self._config.get("checkpointer", "postgres"),
                 connection_string=self._config.get("connection_string"),
             )
         else:
-            return WTBTestBenchFactory.create_for_testing()
+            bench = WTBTestBenchFactory.create_for_testing()
+        
+        # Apply partial overrides from builder
+        if self._batch_runner is not None:
+            bench._batch_runner = self._batch_runner
+        if self._execution_controller is not None:
+            bench._execution_controller = self._execution_controller
+        return bench
     
     def _has_all_custom_dependencies(self) -> bool:
-        """Check if all dependencies are custom-provided."""
-        return (
-            self._project_service is not None and
-            self._variant_service is not None and
-            self._execution_controller is not None
-        )
+        """Check if all four dependencies are custom-provided."""
+        return all([
+            self._project_service is not None,
+            self._variant_service is not None,
+            self._execution_controller is not None,
+            self._batch_runner is not None,
+        ])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -272,6 +306,11 @@ class WTBTestBench:
             **kwargs:
                 - data_dir: Directory for database files (default: "data")
                 - enable_file_tracking: Enable file tracking for rollback
+                - enable_ray: Use Ray-based batch runner (requires ray installed
+                  and ``ray.init()`` called beforehand)
+                - grpc_env_url: Optional gRPC URL for UV venv manager Docker
+                  service (e.g. ``localhost:50051``). When set alongside
+                  ``enable_ray=True``, each Ray actor gets an isolated venv.
                 - checkpointer: "sqlite" or "postgres" (for production)
                 - connection_string: Database connection string (for production)
         """
@@ -283,6 +322,8 @@ class WTBTestBench:
             return WTBTestBenchFactory.create_for_development(
                 data_dir=kwargs.get("data_dir", "data"),
                 enable_file_tracking=kwargs.get("enable_file_tracking", False),
+                enable_ray=kwargs.get("enable_ray", False),
+                grpc_env_url=kwargs.get("grpc_env_url"),
             )
         elif mode == "production":
             return WTBTestBenchFactory.create_with_langgraph(
@@ -466,10 +507,23 @@ class WTBTestBench:
             self._batch_coordinator = self._create_batch_coordinator()
         return self._batch_coordinator
     
+    def _resolve_graph_for_result(self, graph: Optional[Any] = None) -> Optional[Any]:
+        """Resolve a compiled LangGraph graph from the project cache if not provided."""
+        if graph is not None:
+            return graph
+        for proj in self._project_cache.values():
+            if callable(getattr(proj, "graph_factory", None)):
+                try:
+                    return proj.graph_factory()
+                except Exception:
+                    continue
+        return None
+    
     def rollback_batch_result(
         self,
         result: BatchTestResult,
         checkpoint_id: Optional[str] = None,
+        graph: Optional[Any] = None,
     ) -> BatchRollbackResult:
         """
         Convenience: Rollback a batch test result to a checkpoint.
@@ -484,6 +538,8 @@ class WTBTestBench:
             result: BatchTestResult from run_batch_test()
             checkpoint_id: Checkpoint ID to rollback to.
                           Defaults to result.last_checkpoint_id if not provided.
+            graph: Optional compiled LangGraph. Auto-resolved from registered
+                   projects when not provided.
             
         Returns:
             BatchRollbackResult with execution and file restore status
@@ -501,7 +557,6 @@ class WTBTestBench:
         if not result.execution_id:
             raise ValueError("BatchTestResult has no execution_id")
         
-        # Use provided checkpoint_id or default to last_checkpoint_id
         cp_id = checkpoint_id or result.last_checkpoint_id
         if not cp_id:
             raise ValueError(
@@ -509,9 +564,11 @@ class WTBTestBench:
                 "Use get_batch_result_checkpoints() to list available checkpoints."
             )
         
+        resolved_graph = self._resolve_graph_for_result(graph)
+        
         try:
             coordinator = self.get_batch_coordinator()
-            execution = coordinator.rollback(result.execution_id, cp_id)
+            execution = coordinator.rollback(result.execution_id, cp_id, graph=resolved_graph)
             
             return BatchRollbackResult(
                 execution_id=result.execution_id,
@@ -533,6 +590,7 @@ class WTBTestBench:
         result: BatchTestResult,
         checkpoint_id: Optional[str] = None,
         new_state: Optional[Dict[str, Any]] = None,
+        graph: Optional[Any] = None,
     ) -> BatchForkResult:
         """
         Convenience: Fork a batch test result from a checkpoint.
@@ -550,6 +608,8 @@ class WTBTestBench:
             checkpoint_id: Checkpoint ID to fork from.
                           Defaults to result.last_checkpoint_id if not provided.
             new_state: Optional state to merge with checkpoint state
+            graph: Optional compiled LangGraph. Auto-resolved from registered
+                   projects when not provided.
             
         Returns:
             BatchForkResult with new execution details
@@ -568,7 +628,6 @@ class WTBTestBench:
         if not result.execution_id:
             raise ValueError("BatchTestResult has no execution_id")
         
-        # Use provided checkpoint_id or default to last_checkpoint_id
         cp_id = checkpoint_id or result.last_checkpoint_id
         if not cp_id:
             raise ValueError(
@@ -576,9 +635,11 @@ class WTBTestBench:
                 "Use get_batch_result_checkpoints() to list available checkpoints."
             )
         
+        resolved_graph = self._resolve_graph_for_result(graph)
+        
         try:
             coordinator = self.get_batch_coordinator()
-            forked = coordinator.fork(result.execution_id, cp_id, new_state)
+            forked = coordinator.fork(result.execution_id, cp_id, new_state, graph=resolved_graph)
             
             return BatchForkResult(
                 source_execution_id=result.execution_id,
@@ -687,20 +748,55 @@ class WTBTestBench:
         if not workflow:
             raise ValueError(f"Project '{project}' not found")
         
-        # Create domain BatchTest
-        batch_test = BatchTest(workflow_id=workflow.id)
+        # Extract graph_factory reference so Ray actors can recreate the graph.
+        # When the script is the entry point, __module__ is "__main__" which
+        # is not importable in a Ray actor process.  Resolve to the real
+        # module name via __spec__ when possible.
+        proj = self._project_cache.get(project)
+        gf_module: Optional[str] = None
+        gf_name: Optional[str] = None
+        if proj and callable(getattr(proj, "graph_factory", None)):
+            gf = proj.graph_factory
+            gf_module = getattr(gf, "__module__", None)
+            gf_name = getattr(gf, "__qualname__", None) or getattr(gf, "__name__", None)
+            if gf_module == "__main__":
+                import sys
+                main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+                if main_spec and main_spec.name:
+                    gf_module = main_spec.name
+        
+        # Create domain BatchTest with workflow cache for batch runner
+        batch_test = BatchTest(workflow_id=workflow.id, _workflow=workflow)
         
         from wtb.domain.models.batch_test import VariantCombination
         for i, variant_config in enumerate(variant_matrix):
             batch_test.variant_combinations.append(
-                VariantCombination(name=f"variant_{i}", variants=variant_config)
+                VariantCombination(
+                    name=f"variant_{i}",
+                    variants=variant_config,
+                    graph_factory_module=gf_module,
+                    graph_factory_name=gf_name,
+                )
             )
         
-        for test_case in test_cases:
-            batch_test.initial_state = test_case
+        if not test_cases:
+            return self._batch_runner.run_batch_test(batch_test)
         
-        # Execute via domain interface
-        return self._batch_runner.run_batch_test(batch_test)
+        all_results = []
+        for test_case in test_cases:
+            case_batch = BatchTest(workflow_id=batch_test.workflow_id, _workflow=workflow)
+            case_batch.variant_combinations = batch_test.variant_combinations
+            case_batch.initial_state = test_case
+            all_results.append(self._batch_runner.run_batch_test(case_batch))
+        
+        if len(all_results) == 1:
+            return all_results[0]
+        
+        # Aggregate: return first batch with all results combined
+        combined = all_results[0]
+        for extra in all_results[1:]:
+            combined.results.extend(extra.results)
+        return combined
     
     def _run_batch_sequential(
         self,

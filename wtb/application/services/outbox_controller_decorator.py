@@ -4,14 +4,23 @@ Outbox Execution Controller Decorator.
 OCP-compliant decorator that wraps IExecutionController and emits outbox events
 for all lifecycle operations. Keeps the controller SRP-clean (orchestration only).
 
+ACID Guarantee:
+    The decorator uses deferred-commit mode on the inner controller so that
+    outbox events are written to the same UoW session *before* the single
+    commit happens.  This ensures outbox rows and business data are atomically
+    committed in one transaction (core Outbox Pattern requirement).
+
 Architecture:
     WTBTestBench / BatchRunner
         |
         v
     OutboxExecutionControllerDecorator (IExecutionController)
-        |--- emits OutboxEvent for lifecycle ops
+        |--- sets inner.set_deferred_commit(True)
+        |--- delegates to inner (no commit inside inner)
+        |--- emits OutboxEvent into shared UoW outbox repo
+        |--- calls commit_fn() once  (ACID: single commit)
         v
-    ExecutionController (real orchestration)
+    ExecutionController (real orchestration, commit deferred)
 """
 
 import logging
@@ -42,8 +51,9 @@ class OutboxExecutionControllerDecorator(IExecutionController):
     - LSP: Fully substitutable for IExecutionController
     - DIP: Depends on IExecutionController and IOutboxRepository abstractions
 
-    ACID: Outbox events are committed via commit_fn so they persist
-    in the same (or immediately following) transaction as business data.
+    ACID: The inner controller's commit is deferred. Outbox events are added
+    to the same UoW, then a single commit_fn() persists both business data
+    and outbox rows atomically.
     """
 
     def __init__(
@@ -55,6 +65,8 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         self._inner = inner
         self._outbox = outbox_repo
         self._commit_fn = commit_fn
+        if hasattr(inner, "set_deferred_commit"):
+            inner.set_deferred_commit(True)
 
     def _emit(
         self,
@@ -73,15 +85,19 @@ class OutboxExecutionControllerDecorator(IExecutionController):
             )
             self._outbox.add(event)
         except Exception as e:
-            logger.warning(f"Outbox event emission failed (non-fatal): {e}")
+            logger.error(
+                f"Outbox event emission failed for {event_type.value}: {e}",
+                exc_info=True,
+            )
 
     def _commit_outbox(self) -> None:
-        """Commit outbox events so they are persisted (ACID guarantee)."""
+        """Single atomic commit for business data + outbox events."""
         if self._commit_fn:
             try:
                 self._commit_fn()
             except Exception as e:
-                logger.warning(f"Outbox commit failed (non-fatal): {e}")
+                logger.error(f"Outbox commit failed: {e}", exc_info=True)
+                raise
 
     # -- Delegated IExecutionController methods with outbox events --
 
@@ -178,6 +194,25 @@ class OutboxExecutionControllerDecorator(IExecutionController):
             execution_id,
             {
                 "execution_id": execution_id,
+                "checkpoint_id": checkpoint_id,
+            },
+        )
+        self._commit_outbox()
+        return result
+
+    def fork(
+        self,
+        execution_id: str,
+        checkpoint_id: str,
+        new_initial_state: Optional[Dict[str, Any]] = None,
+    ) -> Execution:
+        result = self._inner.fork(execution_id, checkpoint_id, new_initial_state)
+        self._emit(
+            OutboxEventType.EXECUTION_FORKED,
+            result.id,
+            {
+                "source_execution_id": execution_id,
+                "fork_execution_id": result.id,
                 "checkpoint_id": checkpoint_id,
             },
         )

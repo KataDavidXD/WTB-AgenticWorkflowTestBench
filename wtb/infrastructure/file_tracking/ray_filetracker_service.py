@@ -24,7 +24,7 @@ Usage:
             if filetracker_config and filetracker_config.get("enabled"):
                 self._file_tracking = RayFileTrackerService(filetracker_config)
         
-        def _track_output_files(self, checkpoint_id: int, files: List[str]):
+        def _track_output_files(self, checkpoint_id: str, files: List[str]):
             if self._file_tracking:
                 return self._file_tracking.track_and_link(checkpoint_id, files)
 """
@@ -143,7 +143,7 @@ class RayFileTrackerService(IFileTrackingService):
     
     def track_and_link(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         file_paths: List[str],
         message: Optional[str] = None,
     ) -> FileTrackingResult:
@@ -162,7 +162,7 @@ class RayFileTrackerService(IFileTrackingService):
     
     def link_to_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: str,
     ) -> FileTrackingLink:
         """
@@ -182,7 +182,7 @@ class RayFileTrackerService(IFileTrackingService):
     
     def restore_from_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> FileRestoreResult:
         """
         Restore files from checkpoint's linked commit.
@@ -244,7 +244,7 @@ class RayFileTrackerService(IFileTrackingService):
     
     def get_commit_for_checkpoint(
         self,
-        checkpoint_id: int,
+        checkpoint_id: str,
     ) -> Optional[str]:
         """
         Get the file commit ID linked to a checkpoint.
@@ -279,7 +279,7 @@ class RayFileTrackerService(IFileTrackingService):
         
         return self._service.get_tracked_files(commit_id)
     
-    def get_files_at_checkpoint(self, checkpoint_id: int) -> List[str]:
+    def get_files_at_checkpoint(self, checkpoint_id: str) -> List[str]:
         """Get file paths that existed at a specific checkpoint."""
         if not self.enabled:
             return []
@@ -294,6 +294,7 @@ class RayFileTrackerService(IFileTrackingService):
         """
         if not self.enabled:
             return False
+
 
         try:
             self._ensure_initialized()

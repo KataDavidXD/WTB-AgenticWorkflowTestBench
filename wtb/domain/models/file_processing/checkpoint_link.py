@@ -53,7 +53,7 @@ class CheckpointFileLink:
         >>> link = repo.get_by_checkpoint(42)
         >>> print(link.commit_id)
     """
-    checkpoint_id: int
+    checkpoint_id: str
     commit_id: CommitId
     linked_at: datetime
     file_count: int
@@ -62,7 +62,7 @@ class CheckpointFileLink:
     @classmethod
     def create(
         cls,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit: "FileCommit",
     ) -> "CheckpointFileLink":
         """
@@ -72,7 +72,7 @@ class CheckpointFileLink:
         denormalized summary data from commit.
         
         Args:
-            checkpoint_id: WTB checkpoint ID
+            checkpoint_id: WTB checkpoint ID (UUID string)
             commit: FileCommit to link
             
         Returns:
@@ -89,7 +89,7 @@ class CheckpointFileLink:
     @classmethod
     def create_from_values(
         cls,
-        checkpoint_id: int,
+        checkpoint_id: str,
         commit_id: CommitId,
         file_count: int,
         total_size_bytes: int,

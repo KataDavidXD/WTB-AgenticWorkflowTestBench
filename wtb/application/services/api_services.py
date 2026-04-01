@@ -59,6 +59,8 @@ from wtb.domain.interfaces.api_services import (
     BatchTestProgressDTO,
     WorkflowDTO,
 )
+import threading
+
 from wtb.domain.interfaces import IExecutionController, IUnitOfWork
 from wtb.domain.models.workflow import ExecutionStatus
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
@@ -833,7 +835,10 @@ class BatchTestAPIService(IBatchTestAPIService):
         self._uow = uow
         self._event_bus = event_bus
         self._batch_runner = batch_runner
+        # WARNING: in-memory cache only; lost on restart.
+        # TODO: Back with repository for durable persistence.
         self._batch_tests: Dict[str, BatchTestDTO] = {}
+        self._batch_tests_lock = threading.Lock()
     
     async def create_batch_test(
         self,
@@ -989,7 +994,10 @@ class WorkflowAPIService(IWorkflowAPIService):
             uow: Unit of Work for transactions
         """
         self._uow = uow
+        # WARNING: in-memory cache only; lost on restart.
+        # TODO: Back with repository for durable persistence.
         self._workflows: Dict[str, WorkflowDTO] = {}
+        self._workflows_lock = threading.Lock()
     
     async def create_workflow(
         self,

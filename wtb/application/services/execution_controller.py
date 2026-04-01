@@ -12,7 +12,9 @@ Orchestrates workflow execution with support for:
 - Fork operations (moved from SDK)
 """
 
+import ast
 import logging
+import operator
 import uuid
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
@@ -34,6 +36,101 @@ from wtb.domain.models import (
     TestWorkflow,
     WorkflowNode,
 )
+
+
+_SAFE_COMPARE_OPS = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Is: operator.is_,
+    ast.IsNot: operator.is_not,
+    ast.In: lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+
+_SAFE_BOOL_OPS = {ast.And: all, ast.Or: any}
+
+_SAFE_UNARY_OPS = {ast.Not: operator.not_, ast.USub: operator.neg}
+
+_SAFE_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+}
+
+
+def _safe_eval_node(node: ast.AST, ctx: Dict[str, Any]) -> Any:
+    """Recursively evaluate an AST node against *ctx* without exec/eval."""
+    if isinstance(node, ast.Expression):
+        return _safe_eval_node(node.body, ctx)
+
+    if isinstance(node, ast.Constant):
+        return node.value
+
+    if isinstance(node, ast.Name):
+        if node.id in ctx:
+            return ctx[node.id]
+        raise NameError(f"Name '{node.id}' is not defined in condition context")
+
+    if isinstance(node, ast.UnaryOp):
+        op_fn = _SAFE_UNARY_OPS.get(type(node.op))
+        if op_fn is None:
+            raise ValueError(f"Unsupported unary op: {type(node.op).__name__}")
+        return op_fn(_safe_eval_node(node.operand, ctx))
+
+    if isinstance(node, ast.BoolOp):
+        fn = _SAFE_BOOL_OPS.get(type(node.op))
+        if fn is None:
+            raise ValueError(f"Unsupported bool op: {type(node.op).__name__}")
+        return fn(_safe_eval_node(v, ctx) for v in node.values)
+
+    if isinstance(node, ast.BinOp):
+        op_fn = _SAFE_BIN_OPS.get(type(node.op))
+        if op_fn is None:
+            raise ValueError(f"Unsupported binary op: {type(node.op).__name__}")
+        return op_fn(
+            _safe_eval_node(node.left, ctx), _safe_eval_node(node.right, ctx)
+        )
+
+    if isinstance(node, ast.Compare):
+        left = _safe_eval_node(node.left, ctx)
+        for op, comparator in zip(node.ops, node.comparators):
+            op_fn = _SAFE_COMPARE_OPS.get(type(op))
+            if op_fn is None:
+                raise ValueError(f"Unsupported compare op: {type(op).__name__}")
+            right = _safe_eval_node(comparator, ctx)
+            if not op_fn(left, right):
+                return False
+            left = right
+        return True
+
+    if isinstance(node, ast.IfExp):
+        if _safe_eval_node(node.test, ctx):
+            return _safe_eval_node(node.body, ctx)
+        return _safe_eval_node(node.orelse, ctx)
+
+    if isinstance(node, ast.Attribute):
+        value = _safe_eval_node(node.value, ctx)
+        return getattr(value, node.attr)
+
+    if isinstance(node, ast.Subscript):
+        value = _safe_eval_node(node.value, ctx)
+        sl = _safe_eval_node(node.slice, ctx)
+        return value[sl]
+
+    raise ValueError(
+        f"Unsupported expression node: {type(node).__name__}. "
+        "Only comparisons, boolean logic, constants, and variable lookups are allowed."
+    )
+
+
+def safe_eval_condition(expr: str, context: Dict[str, Any]) -> bool:
+    """Evaluate a condition expression safely without eval()."""
+    tree = ast.parse(expr, mode="eval")
+    return bool(_safe_eval_node(tree.body, context))
 
 
 class DefaultNodeExecutor(INodeExecutor):
@@ -97,12 +194,12 @@ class DefaultNodeExecutor(INodeExecutor):
         return result
     
     def _evaluate_decision(self, node: WorkflowNode, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Evaluate a decision node."""
+        """Evaluate a decision node using safe AST-based evaluator."""
         condition = node.config.get("condition", "True")
         
         try:
-            result = eval(condition, {"__builtins__": {}}, context)
-            return {"decision": bool(result), "condition": condition}
+            result = safe_eval_condition(condition, context)
+            return {"decision": result, "condition": condition}
         except Exception:
             return {"decision": False, "condition": condition, "error": "evaluation_failed"}
     
@@ -168,9 +265,16 @@ class ExecutionController(IExecutionController):
         self._uow = unit_of_work
         self._file_tracking = file_tracking_service
         self._output_dir = output_dir
+        self._deferred_commit = False
+    
+    def set_deferred_commit(self, deferred: bool) -> None:
+        """When True, _commit() becomes a no-op so the caller owns the commit."""
+        self._deferred_commit = deferred
     
     def _commit(self) -> None:
         """Commit UoW transaction if available (ACID: Durability)."""
+        if self._deferred_commit:
+            return
         if self._uow is not None:
             self._uow.commit()
     
@@ -277,7 +381,13 @@ class ExecutionController(IExecutionController):
             
         except Exception as e:
             logger.error(f"LangGraph execution failed: {e}")
-            execution.fail(str(e), execution.state.current_node_id)
+            if execution.status == ExecutionStatus.RUNNING:
+                execution.fail(str(e), execution.state.current_node_id)
+            elif execution.status not in (
+                ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED
+            ):
+                execution.status = ExecutionStatus.FAILED
+                execution.error_message = str(e)
         
         self._exec_repo.update(execution)
         self._commit()
@@ -759,10 +869,10 @@ class ExecutionController(IExecutionController):
         variables: Dict[str, Any],
         last_result: Any
     ) -> bool:
-        """Evaluate an edge condition."""
+        """Evaluate an edge condition using safe AST-based evaluator."""
         context = {**variables, "_last_result": last_result}
         try:
-            return bool(eval(condition, {"__builtins__": {}}, context))
+            return safe_eval_condition(condition, context)
         except Exception:
             return False
     

@@ -239,6 +239,7 @@ class ExecutionState:
     workflow_variables: Dict[str, Any] = field(default_factory=dict)
     execution_path: List[str] = field(default_factory=list)
     node_results: Dict[str, Any] = field(default_factory=dict)
+    node_boundaries: Dict[str, Any] = field(default_factory=dict)
     
     def clone(self) -> "ExecutionState":
         """Create a deep copy of the state."""
@@ -246,7 +247,8 @@ class ExecutionState:
             current_node_id=self.current_node_id,
             workflow_variables=dict(self.workflow_variables),
             execution_path=list(self.execution_path),
-            node_results=dict(self.node_results)
+            node_results=dict(self.node_results),
+            node_boundaries=dict(self.node_boundaries),
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -255,7 +257,8 @@ class ExecutionState:
             "current_node_id": self.current_node_id,
             "workflow_variables": self.workflow_variables,
             "execution_path": self.execution_path,
-            "node_results": self.node_results
+            "node_results": self.node_results,
+            "node_boundaries": self.node_boundaries,
         }
     
     @classmethod
@@ -265,7 +268,8 @@ class ExecutionState:
             current_node_id=data.get("current_node_id"),
             workflow_variables=data.get("workflow_variables", {}),
             execution_path=data.get("execution_path", []),
-            node_results=data.get("node_results", {})
+            node_results=data.get("node_results", {}),
+            node_boundaries=data.get("node_boundaries", {}),
         )
 
 
@@ -395,21 +399,78 @@ class Execution:
         self.status = ExecutionStatus.RUNNING
     
     def complete(self) -> None:
-        """Transition to COMPLETED state."""
+        """
+        Transition to COMPLETED state.
+        
+        Raises:
+            InvalidStateTransition: If not RUNNING
+        """
+        if self.status != ExecutionStatus.RUNNING:
+            raise InvalidStateTransition(
+                f"Cannot complete execution in status {self.status.value}",
+                current_status=self.status,
+                attempted_action="complete",
+            )
         self.status = ExecutionStatus.COMPLETED
         self.completed_at = datetime.now()
     
     def fail(self, error_message: str, node_id: Optional[str] = None) -> None:
-        """Transition to FAILED state with error details."""
+        """
+        Transition to FAILED state with error details.
+        
+        Raises:
+            InvalidStateTransition: If not RUNNING or PAUSED
+        """
+        if self.status not in (ExecutionStatus.RUNNING, ExecutionStatus.PAUSED):
+            raise InvalidStateTransition(
+                f"Cannot fail execution in status {self.status.value}",
+                current_status=self.status,
+                attempted_action="fail",
+            )
         self.status = ExecutionStatus.FAILED
         self.error_message = error_message
         self.error_node_id = node_id
         self.completed_at = datetime.now()
     
     def cancel(self) -> None:
-        """Transition to CANCELLED state."""
+        """
+        Transition to CANCELLED state.
+        
+        Raises:
+            InvalidStateTransition: If already in a terminal state
+        """
+        if self.status in (ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED):
+            raise InvalidStateTransition(
+                f"Cannot cancel execution in status {self.status.value}",
+                current_status=self.status,
+                attempted_action="cancel",
+            )
         self.status = ExecutionStatus.CANCELLED
         self.completed_at = datetime.now()
+    
+    def reset_for_retry(self) -> None:
+        """
+        Reset a failed or cancelled execution for another run attempt.
+        
+        Clears volatile run state but preserves node_boundaries on ExecutionState
+        (e.g. checkpoint markers for rollback scope).
+        
+        Raises:
+            InvalidStateTransition: If not in FAILED or CANCELLED status
+        """
+        if self.status not in (ExecutionStatus.FAILED, ExecutionStatus.CANCELLED):
+            raise InvalidStateTransition(
+                f"Can only reset for retry from failed or cancelled, got {self.status.value}",
+                current_status=self.status,
+                attempted_action="reset_for_retry",
+            )
+        preserved = dict(self.state.node_boundaries) if self.state.node_boundaries else {}
+        self.state = ExecutionState()
+        self.state.node_boundaries = preserved
+        self.status = ExecutionStatus.PENDING
+        self.error_message = None
+        self.error_node_id = None
+        self.completed_at = None
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Business Logic Methods (Rich Domain Model)

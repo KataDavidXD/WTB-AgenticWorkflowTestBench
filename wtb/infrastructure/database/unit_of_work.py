@@ -4,11 +4,11 @@ SQLAlchemy Unit of Work Implementation.
 Manages transaction boundaries across multiple repositories.
 """
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Optional
 
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+from .engine_cache import get_engine
 from .models import Base
 from .repositories import (
     WorkflowRepository,
@@ -48,7 +48,7 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
         """
         self._db_url = db_url
         self._blob_storage_path = blob_storage_path
-        self._engine = create_engine(db_url, echo=echo)
+        self._engine = get_engine(db_url, echo)
         self._session_factory = sessionmaker(bind=self._engine)
         self._session: Optional[Session] = None
         
@@ -108,15 +108,14 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
     
     def dispose(self):
         """
-        Dispose the engine and release all resources.
+        Close the session and drop references.
         
-        Call this when the UoW is no longer needed to properly release
-        database file locks (especially important on Windows with SQLite).
+        Engines are shared via get_engine(); do not dispose them here or other
+        UoW instances using the same URL would break. To fully release the DB
+        file, clear the process-wide engine cache (see engine_cache).
         """
         if self._session:
             self._session.close()
             self._session = None
-        if self._engine:
-            self._engine.dispose()
-            self._engine = None
+        self._engine = None
 

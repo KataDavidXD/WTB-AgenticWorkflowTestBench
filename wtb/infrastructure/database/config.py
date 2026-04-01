@@ -20,8 +20,9 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
+from .engine_cache import get_engine
 
 
 @dataclass
@@ -168,7 +169,7 @@ def create_wtb_engine(echo: bool = False):
         SQLAlchemy Engine
     """
     config = get_database_config()
-    return create_engine(config.wtb_db_url, echo=echo)
+    return get_engine(config.wtb_db_url, echo)
 
 
 def create_wtb_session_factory(engine=None):

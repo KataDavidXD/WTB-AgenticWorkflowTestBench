@@ -106,7 +106,7 @@ SQL_AGENT_ENV = EnvSpec(
     dependencies=[
         "langchain-community>=0.0.20",
         "sqlalchemy>=2.0.0",
-        "sqlite3",  # Built-in, but listed for documentation
+        # sqlite3 is a stdlib module -- no pip install needed
     ],
     env_vars={},
 )

@@ -178,6 +178,9 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         if not batch_test.variant_combinations:
             raise BatchRunnerError("No variant combinations to execute")
         
+        # Cache workflow for thread-safe access by executor threads
+        self._current_workflow = getattr(batch_test, '_workflow', None)
+        
         batch_test.start()
         
         # Ensure executor exists
@@ -324,6 +327,9 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         v1.9: Imports graph from graph_factory if workflow_graph is None
         (mirrors Ray actor pattern for LangGraph execution with checkpoints).
         
+        v1.9: Imports graph from graph_factory if workflow_graph is None
+        (mirrors Ray actor pattern for LangGraph execution with checkpoints).
+        
         ACID Compliance: Each execution gets isolated controller + UoW.
         """
         # Import graph from factory if not provided (mirror Ray pattern)
@@ -336,9 +342,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 graph_factory_name = (combo.metadata or {}).get("graph_factory_name")
             if graph_factory_module and graph_factory_name:
                 try:
-                    import importlib
-                    module = importlib.import_module(graph_factory_module)
-                    factory_fn = getattr(module, graph_factory_name)
+                    from wtb.application.services.graph_loader import load_graph_factory
+                    factory_fn = load_graph_factory(graph_factory_module, graph_factory_name)
                     workflow_graph = factory_fn()
                     logger.info(
                         f"ThreadPool: Imported graph from "
@@ -354,13 +359,22 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             controller = managed.controller
             uow = managed.uow
             
-            workflow = uow.workflows.get(workflow_id)
+            # Use cached workflow from BatchTest if available, else lookup
+            workflow = getattr(self, '_current_workflow', None)
+            if workflow is None:
+                workflow = uow.workflows.get(workflow_id)
             if workflow is None:
                 raise BatchRunnerExecutionError(
                     f"Workflow {workflow_id} not found",
                     batch_test_id="",
                     failed_variant=combo.name,
                 )
+            
+            # Ensure workflow is in this UoW for consistency
+            try:
+                uow.workflows.add(workflow)
+            except Exception:
+                pass  # Already exists in this UoW
             
             variant_state = initial_state.copy()
             variant_state["_variant_config"] = combo.variants
@@ -387,6 +401,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 metrics=result_metrics,
                 overall_score=result_metrics.get("overall_score", 0.0),
                 error_message=error_msg,
+                last_checkpoint_id=execution.checkpoint_id,
+                checkpoint_count=len(execution.state.execution_path) if execution.state else 0,
                 last_checkpoint_id=execution.checkpoint_id,
                 checkpoint_count=len(execution.state.execution_path) if execution.state else 0,
             )
@@ -417,14 +433,20 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             # Import here to avoid circular imports
             from .execution_controller import ExecutionController, DefaultNodeExecutor
             
-            # Get workflow
-            workflow = uow.workflows.get(workflow_id)
+            # Use cached workflow from BatchTest if available, else lookup
+            workflow = getattr(self, '_current_workflow', None)
+            if workflow is None:
+                workflow = uow.workflows.get(workflow_id)
             if workflow is None:
                 raise BatchRunnerExecutionError(
                     f"Workflow {workflow_id} not found",
                     batch_test_id="",
                     failed_variant=combo.name,
                 )
+            try:
+                uow.workflows.add(workflow)
+            except Exception:
+                pass
             
             # Create controller for this execution
             controller = ExecutionController(

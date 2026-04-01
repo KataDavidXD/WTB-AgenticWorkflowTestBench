@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import text, inspect
 from sqlalchemy.orm import sessionmaker
 
 from .config import get_database_config, redirect_agentgit_database
+from .engine_cache import get_engine
 from .models import Base
 
 
@@ -41,7 +42,7 @@ def setup_wtb_database(echo: bool = False) -> bool:
     """
     config = get_database_config()
     
-    engine = create_engine(config.wtb_db_url, echo=echo)
+    engine = get_engine(config.wtb_db_url, echo)
     
     # Create all tables from ORM models
     Base.metadata.create_all(engine)
@@ -79,7 +80,7 @@ def setup_agentgit_database(echo: bool = False) -> bool:
     """
     config = get_database_config()
     
-    engine = create_engine(config.agentgit_db_url, echo=echo)
+    engine = get_engine(config.agentgit_db_url, echo)
     
     # AgentGit schema (matches their internal structure)
     with engine.connect() as conn:
@@ -226,7 +227,7 @@ def get_wtb_session():
         SQLAlchemy Session
     """
     config = get_database_config()
-    engine = create_engine(config.wtb_db_url)
+    engine = get_engine(config.wtb_db_url, False)
     Session = sessionmaker(bind=engine)
     return Session()
 
