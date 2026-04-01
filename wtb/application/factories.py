@@ -630,8 +630,6 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
-            execution_controller=wrapped_ctrl,
-            batch_runner=batch_runner,
         )
     
     @staticmethod
@@ -680,8 +678,6 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=wrapped_ctrl,
-            batch_runner=batch_runner,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
         )
@@ -790,8 +786,6 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=wrapped_ctrl,
-            batch_runner=batch_runner,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
         )
@@ -909,8 +903,6 @@ class WTBTestBenchFactory:
         return WTBTestBench(
             project_service=project_service,
             variant_service=variant_service,
-            execution_controller=wrapped_ctrl,
-            batch_runner=batch_runner,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
         )

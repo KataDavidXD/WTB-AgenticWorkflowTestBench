@@ -667,7 +667,6 @@ class LangGraphStateAdapter(IStateAdapter):
     # ═══════════════════════════════════════════════════════════════════════════
     
     def execute(self, initial_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    def execute(self, initial_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Execute workflow with automatic checkpointing.
         

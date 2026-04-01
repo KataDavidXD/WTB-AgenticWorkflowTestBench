@@ -403,8 +403,6 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 error_message=error_msg,
                 last_checkpoint_id=execution.checkpoint_id,
                 checkpoint_count=len(execution.state.execution_path) if execution.state else 0,
-                last_checkpoint_id=execution.checkpoint_id,
-                checkpoint_count=len(execution.state.execution_path) if execution.state else 0,
             )
     
     def _execute_with_legacy_factories(
