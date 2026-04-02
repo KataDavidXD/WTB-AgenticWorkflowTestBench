@@ -52,6 +52,15 @@ from wtb.sdk import EnvSpec
 # Node Environment Specifications
 # ═══════════════════════════════════════════════════════════════════════════════
 
+LLM_ENV_VARS = {
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+    "LLM_API_KEY": "${LLM_API_KEY}",
+    "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
+    "LLM_BASE_URL": "${LLM_BASE_URL}",
+    "WTB_LLM_CACHE_PATH": "${WTB_LLM_CACHE_PATH}",
+    "WTB_LLM_RESPONSE_CACHE_ENABLED": "${WTB_LLM_RESPONSE_CACHE_ENABLED}",
+}
+
 # Embedding node - requires ML libraries
 RAG_EMBED_ENV = EnvSpec(
     python_version="3.12",
@@ -60,9 +69,12 @@ RAG_EMBED_ENV = EnvSpec(
         "torch>=2.0.0",
         "numpy>=1.24.0",
         "transformers>=4.30.0",
+        "openai>=1.0.0",
+        "langchain-openai>=0.0.5",
     ],
     env_vars={
         "TOKENIZERS_PARALLELISM": "false",
+        **LLM_ENV_VARS,
     },
 )
 
@@ -95,9 +107,7 @@ RAG_GENERATE_ENV = EnvSpec(
         "langchain-openai>=0.0.5",
         "openai>=1.0.0",
     ],
-    env_vars={
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}",  # Inherit from parent
-    },
+    env_vars=LLM_ENV_VARS,
 )
 
 # SQL Agent node - database tools
@@ -106,9 +116,11 @@ SQL_AGENT_ENV = EnvSpec(
     dependencies=[
         "langchain-community>=0.0.20",
         "sqlalchemy>=2.0.0",
+        "langchain-openai>=0.0.5",
+        "openai>=1.0.0",
         # sqlite3 is a stdlib module -- no pip install needed
     ],
-    env_vars={},
+    env_vars=LLM_ENV_VARS,
 )
 
 # Document loading node - minimal deps
@@ -126,8 +138,10 @@ RAG_GRADE_ENV = EnvSpec(
     python_version="3.12",
     dependencies=[
         "langchain-core>=0.1.0",
+        "langchain-openai>=0.0.5",
+        "openai>=1.0.0",
     ],
-    env_vars={},
+    env_vars=LLM_ENV_VARS,
 )
 
 
@@ -140,6 +154,8 @@ NODE_ENVIRONMENTS: Dict[str, EnvSpec] = {
     "rag_load_docs": RAG_LOAD_ENV,
     "rag_chunk_split": RAG_CHUNK_ENV,
     "rag_embed": RAG_EMBED_ENV,
+    "rag_embed_docs": RAG_EMBED_ENV,
+    "rag_embed_query": RAG_EMBED_ENV,
     "rag_retrieve": RAG_RETRIEVE_ENV,
     "rag_grade": RAG_GRADE_ENV,
     "rag_generate": RAG_GENERATE_ENV,

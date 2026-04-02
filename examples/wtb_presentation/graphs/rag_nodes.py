@@ -97,9 +97,9 @@ OUTPUTS_DIR = WORKSPACE_DIR / "outputs"
 try:
     from examples.wtb_presentation.config.llm_config import (
         generate_embeddings,
-        generate_text,
-        grade_document_relevance,
-        generate_answer as llm_generate_answer,
+        generate_text_result,
+        grade_document_relevance_result,
+        generate_answer_result,
         DEFAULT_LLM,
         ALT_LLM,
         EMBEDDING_MODEL,
@@ -112,6 +112,16 @@ except ImportError:
     ALT_LLM = "gpt-4o"
     EMBEDDING_MODEL = "text-embedding-3-small"
     ALT_EMBEDDING_MODEL = "text-embedding-3-large"
+
+
+def _cache_state_update(cache_refs: Dict[str, str], cache_hits: Dict[str, bool]) -> Dict[str, Dict[str, Any]]:
+    """Return lightweight cache metadata updates for workflow state."""
+    updates: Dict[str, Dict[str, Any]] = {}
+    if cache_refs:
+        updates["llm_cache_refs"] = cache_refs
+    if cache_hits:
+        updates["llm_cache_hits"] = cache_hits
+    return updates
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -811,6 +821,8 @@ def rag_grade(state: Dict[str, Any]) -> Dict[str, Any]:
     
     graded_docs = []
     relevant_count = 0
+    llm_cache_refs: Dict[str, str] = {}
+    llm_cache_hits: Dict[str, bool] = {}
     
     # Check for SQL keywords
     sql_keywords = ["table", "database", "sql", "select", "query db", "schema", "rows"]
@@ -827,13 +839,15 @@ def rag_grade(state: Dict[str, Any]) -> Dict[str, Any]:
             # Try LLM-based grading
             if LLM_AVAILABLE:
                 try:
-                    grade_result = grade_document_relevance(
+                    grade_result = grade_document_relevance_result(
                         query=query,
                         document=doc["content"],
                         model=DEFAULT_LLM,
                     )
                     is_relevant = grade_result.get("is_relevant", False)
                     grade_reason = grade_result.get("reason", "LLM grading")
+                    llm_cache_refs[f"rag_grade:{doc['chunk_id']}"] = grade_result["cache_key"]
+                    llm_cache_hits[f"rag_grade:{doc['chunk_id']}"] = bool(grade_result["cache_hit"])
                 except Exception as e:
                     print(f"[rag_grade] LLM grading failed: {e}")
                     is_relevant = score >= 0.4
@@ -874,17 +888,21 @@ def rag_grade(state: Dict[str, Any]) -> Dict[str, Any]:
         "messages": [f"[rag_grade] Decision: {grade_decision} - {reason} ({duration_ms:.1f}ms)"],
         "current_node": "rag_grade",
     }
+    result.update(_cache_state_update(llm_cache_refs, llm_cache_hits))
     
     # Handle rewrite with LLM
     if grade_decision == "rewrite":
         if LLM_AVAILABLE:
             try:
-                rewritten = generate_text(
+                rewrite_result = generate_text_result(
                     prompt=f"Rewrite this query to be more specific and detailed for document retrieval:\n{query}",
                     model=DEFAULT_LLM,
                     temperature=0.3,
                     max_tokens=100,
                 )
+                rewritten = rewrite_result.text
+                result.setdefault("llm_cache_refs", {})["rag_rewrite"] = rewrite_result.cache_key
+                result.setdefault("llm_cache_hits", {})["rag_rewrite"] = bool(rewrite_result.cache_hit)
             except Exception:
                 rewritten = f"{query} (expanded: detailed explanation)"
         else:
@@ -953,16 +971,23 @@ def _generate_answer(state: Dict[str, Any], model: str) -> Dict[str, Any]:
     # Try real API generation first
     if LLM_AVAILABLE:
         try:
-            answer = llm_generate_answer(
+            answer_result = generate_answer_result(
                 query=query,
                 context=context,
                 model=api_model,
             )
+            answer = answer_result.text
+            cache_refs = {"rag_generate": answer_result.cache_key}
+            cache_hits = {"rag_generate": bool(answer_result.cache_hit)}
         except Exception as e:
             print(f"[rag_generate] Real API failed, using fallback: {e}")
             answer = _fallback_generate(query, context, model)
+            cache_refs = {}
+            cache_hits = {}
     else:
         answer = _fallback_generate(query, context, model)
+        cache_refs = {}
+        cache_hits = {}
     
     duration_ms = (time.time() - start_time) * 1000
     
@@ -982,6 +1007,7 @@ def _generate_answer(state: Dict[str, Any], model: str) -> Dict[str, Any]:
         "messages": [f"[rag_generate:{api_model}] Generated answer ({len(answer)} chars) in {duration_ms:.1f}ms"],
         "current_node": "rag_generate",
         "_output_files": {"answer.json": json.dumps(answer_output, indent=2)},
+        **_cache_state_update(cache_refs, cache_hits),
     }
 
 
