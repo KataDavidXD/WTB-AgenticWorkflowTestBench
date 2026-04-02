@@ -13,6 +13,7 @@ the optional LLM dependencies are not installed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from contextlib import closing
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -144,11 +145,19 @@ class _SQLiteTextResponseCache:
         return self._path
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
+        conn = sqlite3.connect(
+            self._path,
+            timeout=30.0,
+            check_same_thread=False,
+        )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
 
     def _ensure_schema(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS text_generation_cache (
@@ -163,7 +172,7 @@ class _SQLiteTextResponseCache:
             conn.commit()
 
     def get(self, cache_key: str) -> Optional[str]:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT response_text FROM text_generation_cache WHERE cache_key = ?",
                 (cache_key,),
@@ -173,10 +182,10 @@ class _SQLiteTextResponseCache:
         return str(row[0])
 
     def set(self, cache_key: str, request_json: str, response_text: str, model: str) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO text_generation_cache (
+                INSERT OR IGNORE INTO text_generation_cache (
                     cache_key,
                     request_json,
                     response_text,
@@ -189,12 +198,12 @@ class _SQLiteTextResponseCache:
             conn.commit()
 
     def count(self) -> int:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             row = conn.execute("SELECT COUNT(*) FROM text_generation_cache").fetchone()
         return int(row[0]) if row is not None else 0
 
     def clear(self) -> None:
-        with self._lock, self._connect() as conn:
+        with self._lock, closing(self._connect()) as conn:
             conn.execute("DELETE FROM text_generation_cache")
             conn.commit()
 
