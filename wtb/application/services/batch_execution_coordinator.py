@@ -144,6 +144,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         state_adapter: Optional["IStateAdapter"] = None,
         file_tracking: Optional["IFileTrackingService"] = None,
         config: Optional["WTBConfig"] = None,
+        environment_provider: Optional[Any] = None,
     ):
         """
         Initialize coordinator with dependencies.
@@ -157,6 +158,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                           Must be thread-safe if used concurrently.
             file_tracking: Optional FileTrackingService for file restore operations.
             config: Optional WTBConfig for rollback cleanup options (v1.9).
+            environment_provider: Optional IEnvironmentProvider for venv
+                compatibility checks on rollback.
         
         Design Decision:
             StateAdapter is REUSED across operations because:
@@ -175,6 +178,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self._state_adapter = state_adapter
         self._file_tracking = file_tracking
         self._config = config
+        self._environment_provider = environment_provider
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Single Operations
@@ -233,6 +237,9 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             controller.set_deferred_commit(True)
             
             execution = controller.rollback(execution_id, checkpoint_id)
+            
+            # Check venv compatibility post-rollback and emit warning if drifted
+            self._check_venv_compat_after_rollback(execution, checkpoint_id)
             
             # Extract file_commit_id from execution state if available
             file_commit_id = self._extract_file_commit_id(execution)
@@ -426,6 +433,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                 state_adapter=self._state_adapter,
                 file_tracking_service=self._file_tracking,
             )
+            controller.set_deferred_commit(True)
             
             # Rollback state
             execution = controller.rollback(execution_id, checkpoint_id)
@@ -716,6 +724,46 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
     # ═══════════════════════════════════════════════════════════════════════════
     # Private Helpers
     # ═══════════════════════════════════════════════════════════════════════════
+    
+    def _check_venv_compat_after_rollback(
+        self,
+        execution: "Execution",
+        checkpoint_id: str,
+    ) -> None:
+        """Emit a warning event if the venv spec has drifted since the checkpoint."""
+        if not self._environment_provider:
+            return
+        check_fn = getattr(self._environment_provider, "check_venv_compatibility", None)
+        if not callable(check_fn):
+            return
+        
+        workflow_vars = getattr(
+            getattr(execution, "state", None), "workflow_variables", {}
+        ) or {}
+        expected_hash = workflow_vars.get("_venv_spec_hash")
+        workspace_id = workflow_vars.get("_workspace_id", execution.id if execution else "")
+        if not expected_hash:
+            return
+        
+        compatible = check_fn(workspace_id, expected_hash)
+        if not compatible:
+            logger.warning(
+                f"Venv spec drifted after rollback to checkpoint {checkpoint_id}. "
+                f"Expected spec hash {expected_hash}."
+            )
+            try:
+                from wtb.domain.events.workspace_events import VenvMismatchWarningEvent
+                if hasattr(self, "_config") and self._config:
+                    event_bus = getattr(self._config, "event_bus", None)
+                    if event_bus:
+                        event_bus.publish(VenvMismatchWarningEvent(
+                            node_id=workspace_id,
+                            expected_spec_hash=expected_hash,
+                            actual_spec_hash="",
+                            checkpoint_id=checkpoint_id,
+                        ))
+            except Exception as e:
+                logger.debug(f"Could not emit VenvMismatchWarningEvent: {e}")
     
     def _extract_file_commit_id(self, execution: "Execution") -> Optional[str]:
         """Extract file_commit_id from execution state if available."""

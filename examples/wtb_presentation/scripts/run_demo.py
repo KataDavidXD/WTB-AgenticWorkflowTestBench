@@ -27,7 +27,6 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -54,10 +53,6 @@ from wtb.sdk import (
 WORKSPACE_DIR = Path(__file__).parent.parent / "workspace"
 DATA_DIR = Path(__file__).parent.parent / "data"
 OUTPUTS_DIR = WORKSPACE_DIR / "outputs"
-
-# Ensure directories exist
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -162,6 +157,7 @@ def demo_basic_execution():
     for i, cp in enumerate(checkpoints[:5]):  # Show first 5
         print(f"    [{i}] Step {cp.step}, Next: {cp.next_nodes[:2] if cp.next_nodes else '(end)'}")
     
+    bench.close()
     return bench, project, result
 
 
@@ -233,6 +229,7 @@ def demo_rollback():
     
     state = bench.get_state(result.id)
     print(f"  - State retrieved: {state is not None}")
+    bench.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -305,6 +302,7 @@ def demo_forking():
             print(f"  - Fork failed: {e}")
     
     print(f"\n  Total forks created: {len(forks)}")
+    bench.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -374,6 +372,7 @@ def demo_batch_testing():
     for i, result in enumerate(batch_result.results[:5]):
         status = "SUCCESS" if result.success else "FAILED"
         print(f"    [{i}] {result.combination_name}: {status}")
+    bench.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -430,11 +429,21 @@ def demo_pause_resume():
         print(f"  - Resumed status: {resumed.status}")
     else:
         print("  - Execution completed without pausing (breakpoint may not be supported)")
+    bench.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main Entry Point
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _clean_data_dir() -> None:
+    """Remove stale data directory to start fresh."""
+    import shutil
+    if DATA_DIR.exists():
+        shutil.rmtree(DATA_DIR, ignore_errors=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def main():
@@ -447,8 +456,16 @@ def main():
         default="all",
         help="Run specific demo",
     )
+    parser.add_argument(
+        "--keep-data",
+        action="store_true",
+        help="Keep existing data directory (skip cleanup)",
+    )
     
     args = parser.parse_args()
+    
+    if not args.keep_data:
+        _clean_data_dir()
     
     print_header("WTB SDK DEMO", char="*")
     print("""
@@ -479,11 +496,15 @@ def main():
                 demo_func()
             except Exception as e:
                 print(f"\n[ERROR] Demo {name} failed: {e}")
+                import traceback
+                traceback.print_exc()
     else:
         try:
             demos[args.demo]()
         except Exception as e:
             print(f"\n[ERROR] Demo {args.demo} failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     print_header("DEMO COMPLETE", char="*")
 

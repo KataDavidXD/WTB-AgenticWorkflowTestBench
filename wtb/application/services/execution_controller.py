@@ -352,8 +352,12 @@ class ExecutionController(IExecutionController):
         - PAUSED: execution.resume() + adapter.execute(None) to resume from checkpoint
         
         Graph must already be set on adapter (done by run() before dispatching).
-        Session is initialized in create_execution(), not duplicated here.
         """
+        if execution.session_id:
+            self._state_adapter.set_current_session(
+                execution.session_id, execution_id=execution.id
+            )
+
         try:
             if execution.status == ExecutionStatus.PENDING:
                 execution.start()
@@ -376,6 +380,17 @@ class ExecutionController(IExecutionController):
             
             if self._file_tracking and self._file_tracking.is_available():
                 self._track_output_files(execution, final_state)
+            
+            if hasattr(self._state_adapter, 'get_config'):
+                try:
+                    cfg = self._state_adapter.get_config()
+                    snap = self._state_adapter._compiled_graph.get_state(cfg)
+                    if snap and snap.config:
+                        execution.checkpoint_id = snap.config.get(
+                            "configurable", {}
+                        ).get("checkpoint_id")
+                except Exception:
+                    pass
             
             execution.complete()
             
@@ -744,6 +759,17 @@ class ExecutionController(IExecutionController):
         
         # Create new execution ID
         fork_execution_id = str(uuid.uuid4())
+        
+        # Seed forked LangGraph thread with source checkpoint state so that
+        # time-travel / resume on the fork has the correct checkpoint history.
+        # Must happen while adapter is still pointed at the source thread.
+        fork_thread_id = f"wtb-{fork_execution_id}"
+        _create_fork = getattr(self._state_adapter, "create_fork", None)
+        if callable(_create_fork) and self._state_adapter.supports_graph_execution():
+            try:
+                _create_fork(fork_thread_id, from_checkpoint_id=checkpoint_id)
+            except Exception as e:
+                logger.warning(f"Could not seed fork checkpoint history: {e}")
         
         # Create new execution state
         forked_exec_state = ExecutionState(

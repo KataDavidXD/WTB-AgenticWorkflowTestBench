@@ -1826,6 +1826,14 @@ class RayBatchTestRunner(IBatchTestRunner):
                     logger.warning(f"Failed to cleanup env {env_id}: {e}")
             self._provisioned_env_ids.clear()
         
+        if self._environment_provider:
+            _close = getattr(self._environment_provider, "close", None)
+            if callable(_close):
+                try:
+                    _close()
+                except Exception as e:
+                    logger.warning(f"Failed to close environment provider: {e}")
+        
         logger.info("RayBatchTestRunner shutdown complete")
     
     def get_actor_stats(self) -> List[Dict[str, Any]]:

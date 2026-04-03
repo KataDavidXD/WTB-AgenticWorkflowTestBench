@@ -39,7 +39,6 @@ from wtb.infrastructure.adapters import InMemoryStateAdapter
 
 from .services.execution_controller import ExecutionController, DefaultNodeExecutor
 from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
-from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
 from .services.node_replacer import NodeReplacer
 
 
@@ -59,10 +58,11 @@ class ManagedController:
     uow: IUnitOfWork
     
     def __enter__(self) -> "ManagedController":
+        self.controller.set_deferred_commit(True)
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Properly close UoW on exit."""
+        """Commit (or rollback) and close the UoW."""
         try:
             if exc_type is None:
                 self.uow.commit()
@@ -102,28 +102,30 @@ class ExecutionControllerFactory:
         """
         self._config = config or get_config()
     
-    def create_isolated(self) -> ManagedController:
+    def create_isolated(
+        self,
+        file_tracking_service=None,
+        output_dir: Optional[str] = None,
+    ) -> ManagedController:
         """
         Create an isolated ExecutionController with its own UoW.
         
         CRITICAL: Each call creates NEW UoW for ACID Isolation.
         Use this for batch execution where each variant needs isolation.
         
+        Args:
+            file_tracking_service: Optional CAS file tracking service
+            output_dir: Optional output directory for tracked files
+        
         Returns:
             ManagedController with controller and managed UoW
-            
-        Usage:
-            factory = ExecutionControllerFactory(config)
-            with factory.create_isolated() as managed:
-                result = managed.controller.run(exec_id, graph)
-            # UoW automatically closed after context exit
         """
         uow = UnitOfWorkFactory.create(
             mode=self._config.wtb_storage_mode,
             db_url=self._config.wtb_db_url,
-            echo=self._config.log_sql,
+            echo=False, #=self._config.log_sql for sql details
         )
-        uow.__enter__()  # Start UoW context
+        uow.__enter__()
         
         state_adapter = self._create_state_adapter_instance()
         
@@ -133,6 +135,8 @@ class ExecutionControllerFactory:
             state_adapter=state_adapter,
             node_executor=DefaultNodeExecutor(),
             unit_of_work=uow,
+            file_tracking_service=file_tracking_service,
+            output_dir=output_dir,
         )
         
         return ManagedController(controller=controller, uow=uow)
@@ -387,6 +391,7 @@ class BatchTestRunnerFactory:
             controller_factory=controller_factory,
             max_workers=max_workers,
             execution_timeout_seconds=execution_timeout_seconds,
+            config=config,
         )
     
     @staticmethod
@@ -613,13 +618,6 @@ class WTBTestBenchFactory:
         
         batch_runner = BatchTestRunnerFactory.create(config)
         
-        outbox_repo = getattr(uow, 'outbox', None)
-        wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
-        )
-        
-        batch_runner = BatchTestRunnerFactory.create(config)
-        
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
         project_service = ProjectService(uow)
@@ -655,13 +653,6 @@ class WTBTestBenchFactory:
             uow=uow,
             state_adapter=state_adapter,
         )
-        
-        outbox_repo = getattr(uow, 'outbox', None)
-        wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
-        )
-        
-        batch_runner = BatchTestRunnerFactory.create_for_testing()
         
         outbox_repo = getattr(uow, 'outbox', None)
         wrapped_ctrl = OutboxExecutionControllerDecorator(
@@ -872,17 +863,6 @@ class WTBTestBenchFactory:
             file_tracking_service=file_tracking_service,
             output_dir=output_dir,
         )
-        
-        lg_config = WTBConfig(
-            data_dir=data_dir,
-            state_adapter_mode="langgraph",
-        )
-        outbox_repo = getattr(uow, 'outbox', None)
-        wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
-        )
-        
-        batch_runner = BatchTestRunnerFactory.create_threadpool(lg_config)
         
         lg_config = WTBConfig(
             data_dir=data_dir,

@@ -112,6 +112,12 @@ class ProjectService:
         """
         Unregister a workflow with ACID transaction.
         
+        Deletes all FK-dependent children in leaf-first order to satisfy
+        constraints, then deletes the workflow itself.
+        
+        Deletion order (leaves first):
+          evaluation_results -> executions -> node_variants -> batch_tests -> workflow
+        
         Args:
             name: Workflow name to unregister
             
@@ -122,8 +128,24 @@ class ProjectService:
         if not workflow:
             return False
         
-        self._uow.workflows.delete(workflow.id)
-        self._uow.commit()  # ACID: Commit at transaction boundary
+        wf_id = workflow.id
+
+        for exec_ in self._uow.executions.find_by_workflow(wf_id):
+            if hasattr(self._uow, "evaluation_results"):
+                for er in self._uow.evaluation_results.find_by_execution(exec_.id):
+                    self._uow.evaluation_results.delete(er.id)
+            self._uow.executions.delete(exec_.id)
+
+        if hasattr(self._uow, "variants"):
+            for v in self._uow.variants.find_by_workflow(wf_id):
+                self._uow.variants.delete(v.id)
+
+        if hasattr(self._uow, "batch_tests"):
+            for bt in self._uow.batch_tests.find_by_workflow(wf_id):
+                self._uow.batch_tests.delete(bt.id)
+
+        self._uow.workflows.delete(wf_id)
+        self._uow.commit()
         
         logger.debug(f"Unregistered workflow: {name}")
         return True

@@ -546,10 +546,9 @@ def compute_venv_spec_hash(
     """
     Compute hash for venv specification.
     
-    Used for:
-    - Detecting venv spec changes for invalidation
-    - Rollback venv compatibility checking
-    - Venv caching
+    Delegates to the canonical hash schema used by ``VenvSpec.compute_hash()``
+    so that cache lookups, storage, and domain code all produce identical
+    hashes for the same logical spec.
     
     Args:
         python_version: Python version string (e.g., "3.12")
@@ -558,11 +557,11 @@ def compute_venv_spec_hash(
         lock_file_content: Optional uv.lock content
         
     Returns:
-        SHA-256 hash of the venv specification
+        16-character hex SHA-256 hash of the venv specification
     """
     spec_data = {
         "python_version": python_version,
-        "dependencies": sorted(dependencies),
+        "packages": sorted(dependencies),
         "requirements": requirements_file_content,
         "lock": lock_file_content,
     }

@@ -49,7 +49,6 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -64,35 +63,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from wtb.sdk import (
     WTBTestBench,
     WorkflowProject,
-    FileTrackingConfig,
-    EnvironmentConfig,
-    ExecutionConfig,
-    EnvSpec,
-    RayConfig,
-    NodeResourceConfig,
-    WorkspaceIsolationConfig,
-    PauseStrategyConfig,
-    NodeVariant,
-    WorkflowVariant,
-    # Domain models re-exported from SDK
-    ExecutionStatus,
 )
 
-try:
-    from langgraph.graph import StateGraph, END
-    LANGGRAPH_AVAILABLE = True
-except ImportError:
-    LANGGRAPH_AVAILABLE = False
-    StateGraph = None
-    END = None
-
-# Import graph components
-from examples.wtb_presentation.graphs.unified_graph import create_unified_graph
-from examples.wtb_presentation.graphs.rag_nodes import (
-    rag_retrieve_bm25_v1,
-    rag_retrieve_hybrid_v1,
-    rag_generate_gpt4_v1,
-)
+# Import project factory (centralizes graph, env, ray, file-tracking config)
+from examples.wtb_presentation.config.project_config import create_demo_project
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Configuration
@@ -202,123 +176,13 @@ def demo_project_setup(bench: WTBTestBench) -> WorkflowProject:
     
     print_step(1, "Creating WorkflowProject configuration...")
     
-    # ═══════════════════════════════════════════════════════════════════════════
-    # FULL NODE CONFIGURATION FOR ALL RAG + SQL NODES
-    # ═══════════════════════════════════════════════════════════════════════════
-    #
-    # RAG Pipeline Nodes (7 nodes):
-    #   1. rag_load_docs     - Load documents from workspace
-    #   2. rag_chunk_split   - Split documents into chunks  
-    #   3. rag_embed_docs    - Embed document chunks (ONE TIME indexing)
-    #   4. rag_embed_query   - Embed query for retrieval (PER QUERY)
-    #   5. rag_retrieve      - Retrieve relevant chunks
-    #   6. rag_grade         - Grade document relevance
-    #   7. rag_generate      - Generate final answer
-    #
-    # SQL Pipeline Nodes (1 node):
-    #   8. sql_agent         - Natural language to SQL
-    #
-    # ═══════════════════════════════════════════════════════════════════════════
-    
-    project = WorkflowProject(
+    project = create_demo_project(
         name="wtb_full_presentation",
-        description="Unified RAG + SQL Workflow with Full WTB Features",
-        graph_factory=create_unified_graph,
-        
-        # File tracking for rollback/branch
-        file_tracking=FileTrackingConfig(
-            enabled=True,
-            tracked_paths=[str(WORKSPACE_DIR)],
-        ),
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # VENV CONFIGURATION - Per Node Virtual Environments
-        # Uses REAL UV Venv Manager service at localhost:10900
-        # ═══════════════════════════════════════════════════════════════════════
-        environment=EnvironmentConfig(
-            granularity="node",  # Per-node environment isolation
-            uv_manager_url="http://localhost:10900",  # REAL venv service
-            reuse_existing=True,  # Reuse existing environments for speed
-            default_env=EnvSpec(
-                python_version="3.12",
-                dependencies=["openai>=1.0.0", "python-dotenv"],
-            ),
-            node_environments={
-                # RAG Pipeline - Document Indexing Phase
-                "rag_load_docs": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0", "python-dotenv", "aiofiles"],
-                ),
-                "rag_chunk_split": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0", "tiktoken"],  # Token counting
-                ),
-                "rag_embed_docs": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0", "numpy", "faiss-cpu"],  # Vector storage
-                ),
-                # RAG Pipeline - Query Phase
-                "rag_embed_query": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0", "numpy"],
-                ),
-                "rag_retrieve": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0", "numpy", "faiss-cpu"],
-                ),
-                "rag_grade": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0"],  # LLM grading
-                ),
-                "rag_generate": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0"],  # LLM generation
-                ),
-                # SQL Pipeline
-                "sql_agent": EnvSpec(
-                    python_version="3.12",
-                    dependencies=["openai>=1.0.0", "sqlite-utils", "sqlparse"],
-                ),
-            },
-        ),
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # RAY CONFIGURATION - Per Node Resource Allocation
-        # Uses REAL Ray cluster (local or remote)
-        # ═══════════════════════════════════════════════════════════════════════
-        execution=ExecutionConfig(
-            batch_executor="ray",  # Use Ray for distributed execution
-            ray_config=RayConfig(
-                address="auto",  # Auto-connect to local Ray cluster
-                max_retries=3,
-            ),
-            node_resources={
-                # RAG - Document Indexing (heavier resources)
-                "rag_load_docs": NodeResourceConfig(num_cpus=1, memory="256MB"),
-                "rag_chunk_split": NodeResourceConfig(num_cpus=1, memory="256MB"),
-                "rag_embed_docs": NodeResourceConfig(num_cpus=2, memory="2GB"),  # Heavy: batch embeddings
-                # RAG - Query Phase
-                "rag_embed_query": NodeResourceConfig(num_cpus=1, memory="512MB"),
-                "rag_retrieve": NodeResourceConfig(num_cpus=2, memory="1GB"),  # Vector search
-                "rag_grade": NodeResourceConfig(num_cpus=1, memory="512MB"),
-                "rag_generate": NodeResourceConfig(num_cpus=1, memory="1GB"),  # LLM inference
-                # SQL
-                "sql_agent": NodeResourceConfig(num_cpus=1, memory="512MB"),
-            },
-            checkpoint_strategy="per_node",
-            checkpoint_storage="sqlite",  # REAL SQLite checkpoint persistence
-        ),
-        
-        # Pause configuration - pause after grade for human review
-        pause_strategy=PauseStrategyConfig(
-            mode="after_node",  # Pause after nodes complete
-        ),
-        
-        # Workspace isolation
-        workspace_isolation=WorkspaceIsolationConfig(
-            enabled=True,
-            mode="copy",
-        ),
+        enable_file_tracking=True,
+        enable_venv_isolation=True,
+        enable_ray=True,
+        data_dir=DATA_DIR,
+        uv_manager_url="http://localhost:10900",
     )
     
     print(f"  - Project name: {project.name}")

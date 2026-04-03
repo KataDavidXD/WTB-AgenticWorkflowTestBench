@@ -290,10 +290,63 @@ class WTBTestBench:
         self._variant_service = variant_service
         self._exec_ctrl = execution_controller
         self._batch_runner = batch_runner
+        self._closed = False
         
         # SDK-level caches
         self._project_cache: Dict[str, WorkflowProject] = {}
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Resource Lifecycle
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def close(self) -> None:
+        """Release all resources held by this bench.
+
+        Closes (in order): batch runner thread pool / Ray actors,
+        execution controller's state adapter (checkpointer),
+        and the underlying UoW session.  Safe to call multiple times.
+        """
+        if self._closed:
+            return
+        self._closed = True
+
+        if self._batch_runner is not None:
+            _shutdown = getattr(self._batch_runner, "shutdown", None)
+            if callable(_shutdown):
+                try:
+                    _shutdown()
+                except Exception:
+                    pass
+
+        inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+        adapter = getattr(inner, "_state_adapter", None)
+        if adapter is not None:
+            _close = getattr(adapter, "close", None)
+            if callable(_close):
+                try:
+                    _close()
+                except Exception:
+                    pass
+
+        uow = getattr(inner, "_uow", None)
+        if uow is not None:
+            try:
+                uow.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def __enter__(self) -> "WTBTestBench":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     @classmethod
     def create(cls, mode: str = "testing", **kwargs) -> "WTBTestBench":
         """
@@ -780,7 +833,9 @@ class WTBTestBench:
             )
         
         if not test_cases:
-            return self._batch_runner.run_batch_test(batch_test)
+            result = self._batch_runner.run_batch_test(batch_test)
+            self._expire_session()
+            return result
         
         all_results = []
         for test_case in test_cases:
@@ -796,6 +851,8 @@ class WTBTestBench:
         combined = all_results[0]
         for extra in all_results[1:]:
             combined.results.extend(extra.results)
+
+        self._expire_session()
         return combined
     
     def _run_batch_sequential(
@@ -804,7 +861,18 @@ class WTBTestBench:
         variant_matrix: List[Dict[str, str]],
         test_cases: List[Dict[str, Any]],
     ) -> BatchTest:
-        """Fallback sequential batch execution."""
+        """Fallback sequential batch execution.
+        
+        Pre-resolves the workflow once, then builds the graph per variant
+        inline and passes it explicitly to the controller.  Result fields
+        are populated to match the ThreadPoolBatchTestRunner output schema.
+        """
+        import time as _time
+        
+        if project not in self._project_cache:
+            raise KeyError(f"Project '{project}' not found")
+        proj = self._project_cache[project]
+        
         workflow = self._project_service.get_workflow_by_name(project)
         if not workflow:
             raise ValueError(f"Project '{project}' not found")
@@ -821,25 +889,51 @@ class WTBTestBench:
         
         for i, variant_config in enumerate(variant_matrix):
             variant_name = f"variant_{i}"
+            start_ms = _time.time()
             
             try:
+                graph = proj.build_graph(variant_config=variant_config)
+                
                 for test_case in test_cases:
-                    execution = self.run(project=project, initial_state=test_case, variant_config=variant_config)
+                    execution = self._exec_ctrl.create_execution(
+                        workflow=workflow,
+                        initial_state=test_case,
+                    )
+                    execution = self._exec_ctrl.run(execution.id, graph=graph)
+                    
+                    duration_ms = int((_time.time() - start_ms) * 1000)
+                    metrics = {}
+                    if execution.state:
+                        wv = getattr(execution.state, "workflow_variables", {}) or {}
+                        metrics = {
+                            k: v for k, v in wv.items()
+                            if isinstance(v, (int, float))
+                        }
                     
                     result = BatchTestResult(
                         combination_name=variant_name,
                         execution_id=execution.id,
                         success=execution.status == ExecutionStatus.COMPLETED,
                         error_message=execution.error_message,
+                        duration_ms=duration_ms,
+                        metrics=metrics,
+                        overall_score=metrics.get("overall_score", 0.0),
+                        last_checkpoint_id=getattr(execution, "checkpoint_id", None),
+                        checkpoint_count=(
+                            len(execution.state.execution_path)
+                            if execution.state else 0
+                        ),
                     )
                     batch_test.add_result(result)
                     
             except Exception as e:
+                duration_ms = int((_time.time() - start_ms) * 1000)
                 result = BatchTestResult(
                     combination_name=variant_name,
                     execution_id="",
                     success=False,
                     error_message=str(e),
+                    duration_ms=duration_ms,
                 )
                 batch_test.add_result(result)
         
@@ -847,6 +941,18 @@ class WTBTestBench:
         batch_test.build_comparison_matrix()
         return batch_test
     
+    def _expire_session(self) -> None:
+        """Expire the bench's ORM session cache so subsequent reads see
+        rows committed by isolated batch-worker sessions."""
+        inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+        uow = getattr(inner, "_uow", None)
+        session = getattr(uow, "_session", None)
+        if session is not None:
+            try:
+                session.expire_all()
+            except Exception:
+                pass
+
     # ═══════════════════════════════════════════════════════════════════════════
     # State Inspection - Returns domain models
     # ═══════════════════════════════════════════════════════════════════════════

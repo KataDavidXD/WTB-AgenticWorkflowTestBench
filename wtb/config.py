@@ -514,7 +514,7 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=f"sqlite:///{data_dir}/wtb.db",
             agentgit_db_path=f"{data_dir}/agentgit.db",
-            state_adapter_mode="agentgit",
+            state_adapter_mode="langgraph",
             data_dir=data_dir,
             filetracker_enabled=False,
             ide_sync_enabled=False,
