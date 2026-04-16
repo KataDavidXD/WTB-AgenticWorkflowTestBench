@@ -1,8 +1,30 @@
 """
-LLM configuration for the WTB presentation workflow.
+LLM Configuration for WTB Presentation Demo.
 
-This module keeps the original demo-facing API stable while routing the real
-work through the shared LangChain/OpenAI helper in WTB infrastructure.
+Configures OpenAI-compatible API for:
+- Text generation (gpt-4o-mini, gpt-4o)
+- Embeddings (text-embedding-3-small, text-embedding-3-large)
+
+Uses environment variables from .env file.
+
+Usage:
+    from config.llm_config import get_llm_client, get_embedding_client
+
+    # Get configured clients
+    llm = get_llm_client()
+    embeddings = get_embedding_client()
+
+    # Generate text
+    response = llm.chat.completions.create(
+        model=DEFAULT_LLM,
+        messages=[{"role": "user", "content": "Hello"}]
+    )
+
+    # Generate embeddings
+    response = embeddings.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=["text to embed"]
+    )
 """
 
 from __future__ import annotations
@@ -80,7 +102,7 @@ def _require_api_key() -> None:
 
 
 def _get_service_config() -> LangChainOpenAIConfig:
-    """Build the presentation workflow's shared LangChain/OpenAI config."""
+    """Build the LLM config used by the presentation workflow."""
     _require_api_key()
     return LangChainOpenAIConfig(
         api_key=LLM_API_KEY,
@@ -94,7 +116,7 @@ def _get_service_config() -> LangChainOpenAIConfig:
 
 
 def _get_service():
-    """Return the memoized shared service for this presentation config."""
+    """Return the configured LLM service for this presentation config."""
     return get_langchain_openai_service(_get_service_config())
 
 
@@ -114,14 +136,14 @@ def _parse_grade_response(response_text: str) -> Dict[str, Any]:
 
 def get_llm_client():
     """
-    Get the cached raw OpenAI client used by the presentation workflow.
+    Get configured OpenAI client for LLM operations.
     """
     return _get_service().get_openai_client()
 
 
 def get_embedding_client():
     """
-    Get the cached raw OpenAI client used for embeddings.
+    Get configured OpenAI client for embedding operations.
     """
     return get_llm_client()
 
@@ -191,7 +213,7 @@ def grade_document_relevance_result(
     model: str = None,
 ) -> Dict[str, Any]:
     """
-    Grade a document and include cache metadata for workflow nodes.
+    Grade a document and return a detailed result.
     """
     resolved_model = model or DEFAULT_LLM
     system_prompt = """You are a relevance grading assistant.
@@ -251,7 +273,7 @@ def generate_answer_result(
     model: str = None,
 ) -> TextGenerationResult:
     """
-    Generate an answer and include cache metadata for workflow nodes.
+    Generate an answer and return a detailed result.
     """
     resolved_model = model or DEFAULT_LLM
     system_prompt = """You are a helpful assistant that answers questions based on provided context.
