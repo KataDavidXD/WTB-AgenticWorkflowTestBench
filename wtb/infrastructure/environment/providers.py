@@ -30,6 +30,7 @@ import hashlib
 import json
 import logging
 import sys
+import threading
 
 from wtb.domain.interfaces.batch_runner import IEnvironmentProvider
 
@@ -281,6 +282,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         self._timeout = timeout_seconds
         self._default_python = default_python
         self._environments: Dict[str, Dict[str, Any]] = {}  # variant_id -> env_info
+        self._env_lock = threading.Lock()
         self._channel = None
         self._stub = None
         self._venv_cache = venv_cache
@@ -355,11 +357,13 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         """
         if self._stub is None:
             logger.warning(f"gRPC not available, returning stub response for {variant_id}")
-            self._environments[variant_id] = {
+            stub_info: Dict[str, Any] = {
                 "type": "grpc_uv_stub",
                 "variant_id": variant_id,
             }
-            return self._environments[variant_id]
+            with self._env_lock:
+                self._environments[variant_id] = stub_info
+            return stub_info
         
         try:
             from wtb.infrastructure.environment.uv_manager.grpc_generated import (
@@ -397,7 +401,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
                 "status": response.status,
             }
             
-            self._environments[variant_id] = env_info
+            with self._env_lock:
+                self._environments[variant_id] = env_info
             logger.info(f"Created gRPC environment for {variant_id}: {env_path}")
             
             return env_info
@@ -413,7 +418,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         Note: Actual cleanup is handled by service TTL.
         This just removes local tracking.
         """
-        env_info = self._environments.pop(variant_id, None)
+        with self._env_lock:
+            env_info = self._environments.pop(variant_id, None)
         
         if env_info and self._stub is not None:
             try:
@@ -565,11 +571,19 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         self,
         python_version: str,
         packages: List[str],
+        requirements_content: Optional[str] = None,
+        lock_file_content: Optional[str] = None,
     ) -> str:
-        """Compute hash for venv specification."""
+        """Compute hash for venv specification.
+        
+        Uses the same canonical schema as ``VenvSpec.compute_hash()``
+        so that cache lookups and storage produce identical hashes.
+        """
         spec_data = {
             "python_version": python_version,
             "packages": sorted(packages),
+            "requirements": requirements_content,
+            "lock": lock_file_content,
         }
         spec_json = json.dumps(spec_data, sort_keys=True)
         return hashlib.sha256(spec_json.encode()).hexdigest()[:16]
@@ -630,12 +644,26 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         Returns:
             True if invalidated, False if not found
         """
-        env_info = self._environments.pop(workspace_id, None)
+        with self._env_lock:
+            env_info = self._environments.pop(workspace_id, None)
         if not env_info:
             return False
         
-        # Also cleanup via gRPC if applicable
-        self.cleanup_environment(workspace_id)
+        # Delete remote environment via gRPC directly (not via cleanup_environment
+        # which would try to pop from _environments again and find nothing).
+        if self._stub is not None:
+            try:
+                from wtb.infrastructure.environment.uv_manager.grpc_generated import (
+                    env_manager_pb2 as pb2,
+                )
+                request = pb2.DeleteEnvRequest(
+                    workflow_id=env_info.get("workflow_id", ""),
+                    node_id=env_info.get("node_id", ""),
+                    version_id=env_info.get("version_id", ""),
+                )
+                self._stub.DeleteEnv(request, timeout=10)
+            except Exception as e:
+                logger.warning(f"gRPC cleanup failed for {workspace_id}: {e}")
         
         # Publish event
         if self._event_bus:

@@ -6,7 +6,7 @@ A comprehensive demonstration of the Workflow Test Bench (WTB) SDK, showcasing e
 
 This demo implements a unified RAG + SQL workflow with the following features:
 
-- **RAG Pipeline** (6 nodes): load_docs → chunk_split → embed → retrieve → grade → generate
+- **RAG Pipeline** (7 nodes): load_docs → chunk_split → embed_docs → embed_query → retrieve → grade → generate
 - **SQL Agent** (1 wrapped node): Natural language to SQL with validation
 - **Conditional Routing**: Routes queries to RAG or SQL based on content
 
@@ -16,7 +16,7 @@ This demo implements a unified RAG + SQL workflow with the following features:
 examples/wtb_presentation/
 ├── graphs/                     # LangGraph workflow definitions
 │   ├── state_schemas.py        # TypedDict state definitions
-│   ├── rag_nodes.py            # 6 RAG pipeline nodes + variants
+│   ├── rag_nodes.py            # 7 RAG pipeline nodes + variants
 │   ├── sql_agent_node.py       # SQL agent as single node
 │   └── unified_graph.py        # Combined RAG+SQL workflow
 ├── config/                     # Configuration modules
@@ -258,25 +258,33 @@ Uses content-addressed storage (SHA-256):
 │  │  - environment  │  │  - snapshots    │  │  - node_configs │         │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘         │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                        Unified Graph                                     │
+│                        Unified Graph (8 nodes)                           │
 │                                                                          │
-│  ┌──────────┐   ┌─────────────┐   ┌─────────┐   ┌───────────┐          │
-│  │load_docs │ → │ chunk_split │ → │  embed  │ → │ retrieve  │          │
-│  └──────────┘   └─────────────┘   └─────────┘   └─────┬─────┘          │
-│                                                        │                 │
-│                                 ┌──────────────────────┘                 │
-│                                 ▼                                        │
-│                           ┌───────────┐                                  │
-│                 ┌─────────│   grade   │─────────┐                       │
-│                 │         └───────────┘         │                       │
-│                 │               │               │                       │
-│            [rewrite]       [generate]        [sql]                      │
-│                 │               │               │                       │
-│                 ▼               ▼               ▼                       │
-│           ┌──────────┐   ┌──────────┐   ┌───────────┐                  │
-│           │ retrieve │   │ generate │   │ sql_agent │                  │
-│           │  (loop)  │   └──────────┘   └───────────┘                  │
-│           └──────────┘                                                  │
+│  INDEXING PHASE (cached):                                                │
+│  ┌──────────┐   ┌─────────────┐   ┌─────────────┐                      │
+│  │load_docs │ → │ chunk_split │ → │ embed_docs  │                      │
+│  └──────────┘   └─────────────┘   └──────┬──────┘                      │
+│                                          │                               │
+│  QUERY PHASE (per request):              ▼                               │
+│                                   ┌─────────────┐                       │
+│                                   │ embed_query │                       │
+│                                   └──────┬──────┘                       │
+│                                          ▼                               │
+│                                   ┌───────────┐                         │
+│                                   │ retrieve  │                         │
+│                                   └─────┬─────┘                         │
+│                                         ▼                                │
+│                                   ┌───────────┐                         │
+│                 ┌─────────────────│   grade   │─────────┐               │
+│                 │                 └───────────┘         │               │
+│                 │                       │               │               │
+│            [rewrite]              [generate]         [sql]             │
+│                 │                       │               │               │
+│                 ▼                       ▼               ▼               │
+│           ┌─────────────┐        ┌──────────┐   ┌───────────┐         │
+│           │ embed_query │        │ generate │   │ sql_agent │         │
+│           │   (loop)    │        └──────────┘   └───────────┘         │
+│           └─────────────┘                                              │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 

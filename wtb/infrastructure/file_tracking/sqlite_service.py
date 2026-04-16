@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS mementos (
 
 -- Checkpoint-commit links table
 CREATE TABLE IF NOT EXISTS checkpoint_links (
-    checkpoint_id INTEGER PRIMARY KEY,
+    checkpoint_id TEXT PRIMARY KEY,
     commit_id TEXT NOT NULL,
     linked_at TEXT NOT NULL,
     file_count INTEGER NOT NULL DEFAULT 0,
@@ -238,10 +238,17 @@ class SqliteFileTrackingService(IFileTrackingService):
         blob_path = self._get_blob_path(blob_hash)
         file_size = file_path.stat().st_size
         
-        # Only store if not already present (deduplication)
         if not blob_path.exists():
             blob_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(file_path), str(blob_path))
+            # Write to temp file first, then atomic replace to avoid
+            # truncated blobs on crash.
+            tmp_path = blob_path.with_suffix(".tmp")
+            try:
+                shutil.copy2(str(file_path), str(tmp_path))
+                os.replace(str(tmp_path), str(blob_path))
+            except BaseException:
+                tmp_path.unlink(missing_ok=True)
+                raise
             logger.debug(f"Stored blob {blob_hash[:8]}... ({file_size} bytes)")
         else:
             logger.debug(f"Blob {blob_hash[:8]}... already exists (dedup)")
@@ -361,58 +368,86 @@ class SqliteFileTrackingService(IFileTrackingService):
         message: Optional[str] = None,
     ) -> FileTrackingResult:
         """
-        Track files AND link to checkpoint in single atomic operation.
+        Track files AND link to checkpoint in a single atomic transaction.
         
-        Args:
-            checkpoint_id: WTB checkpoint ID to link to
-            file_paths: Files to track
-            message: Optional commit message
-            
-        Returns:
-            FileTrackingResult with commit info
+        Blobs are written to disk first (temp + atomic rename). Then a
+        single SQLite transaction records the commit, mementos, and
+        checkpoint link.  If the DB transaction fails the orphan blobs
+        are harmless (content-addressed, idempotent).
         """
         with self._lock:
-            # Track files first
-            result = self.track_files(file_paths, message)
+            for path in file_paths:
+                if not os.path.exists(path):
+                    raise FTFileNotFoundError(f"File not found: {path}")
             
-            # Link to checkpoint
             conn = self._get_connection()
             cursor = conn.cursor()
             
             try:
-                # Delete existing link if any (replace)
+                commit_id = str(uuid.uuid4())
+                created_at = datetime.now().isoformat()
+                file_hashes = {}
+                total_size = 0
+                mementos_data = []
+                
+                for path in file_paths:
+                    blob_hash, file_size = self._store_blob(path)
+                    file_hashes[path] = blob_hash
+                    total_size += file_size
+                    mementos_data.append((commit_id, path, blob_hash, file_size, created_at))
+                
+                cursor.execute(
+                    """
+                    INSERT INTO commits (commit_id, message, created_at, file_count, total_size_bytes)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (commit_id, message, created_at, len(file_paths), total_size)
+                )
+                
+                for memento in mementos_data:
+                    cursor.execute(
+                        """
+                        INSERT INTO mementos (commit_id, file_path, blob_hash, file_size, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        memento
+                    )
+                
                 cursor.execute(
                     "DELETE FROM checkpoint_links WHERE checkpoint_id = ?",
                     (checkpoint_id,)
                 )
-                
-                # Insert new link
                 cursor.execute(
                     """
-                    INSERT INTO checkpoint_links 
+                    INSERT INTO checkpoint_links
                     (checkpoint_id, commit_id, linked_at, file_count, total_size_bytes)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (
-                        checkpoint_id,
-                        result.commit_id,
-                        datetime.now().isoformat(),
-                        result.files_tracked,
-                        result.total_size_bytes,
-                    )
+                    (checkpoint_id, commit_id, datetime.now().isoformat(),
+                     len(file_paths), total_size)
                 )
                 
                 conn.commit()
                 
                 logger.info(
-                    f"Linked checkpoint {checkpoint_id} to commit {result.commit_id[:8]}..."
+                    f"Tracked {len(file_paths)} files and linked checkpoint "
+                    f"{checkpoint_id} to commit {commit_id[:8]}..."
                 )
                 
-                return result
+                return FileTrackingResult(
+                    commit_id=commit_id,
+                    files_tracked=len(file_paths),
+                    total_size_bytes=total_size,
+                    file_hashes=file_hashes,
+                    message=message,
+                    created_at=datetime.fromisoformat(created_at),
+                )
                 
             except Exception as e:
                 conn.rollback()
-                raise CheckpointLinkError(f"Failed to link checkpoint: {e}") from e
+                raise FileTrackingError(
+                    f"Failed to track and link files: {e}"
+                ) from e
     
     def link_to_checkpoint(
         self,

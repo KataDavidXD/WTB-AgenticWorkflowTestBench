@@ -13,8 +13,10 @@ Orchestrates workflow execution with support for:
 """
 
 import ast
+import copy
 import logging
 import operator
+import os
 import uuid
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
@@ -277,6 +279,43 @@ class ExecutionController(IExecutionController):
             return
         if self._uow is not None:
             self._uow.commit()
+
+    def _sync_external_cache_metadata(self, execution: Execution) -> None:
+        """Mirror cache references/hit flags into execution metadata."""
+        if execution is None:
+            return
+
+        metadata = execution.metadata
+        if not isinstance(metadata, dict):
+            metadata = {}
+            execution.metadata = metadata
+
+        workflow_vars = getattr(execution.state, "workflow_variables", {}) or {}
+        for key in ("llm_cache_refs", "llm_cache_hits"):
+            value = workflow_vars.get(key)
+            if value is not None:
+                metadata[key] = copy.deepcopy(value)
+
+        env_fallbacks = (
+            ("checkpoint_db_path", "WTB_CHECKPOINT_DB_PATH"),
+            ("llm_cache_path", "WTB_LLM_CACHE_PATH"),
+            ("actor_id", "WTB_CACHE_ACTOR_ID"),
+            ("cache_storage_scope", "WTB_CACHE_STORAGE_SCOPE"),
+        )
+        for field_name, env_name in env_fallbacks:
+            value = metadata.get(field_name) or os.getenv(env_name)
+            if value:
+                metadata[field_name] = value
+
+        if (
+            "cache_storage_scope" not in metadata
+            and (
+                metadata.get("checkpoint_db_path")
+                or metadata.get("llm_cache_path")
+                or metadata.get("actor_id")
+            )
+        ):
+            metadata["cache_storage_scope"] = "actor_local"
     
     def create_execution(
         self, 
@@ -352,8 +391,12 @@ class ExecutionController(IExecutionController):
         - PAUSED: execution.resume() + adapter.execute(None) to resume from checkpoint
         
         Graph must already be set on adapter (done by run() before dispatching).
-        Session is initialized in create_execution(), not duplicated here.
         """
+        if execution.session_id:
+            self._state_adapter.set_current_session(
+                execution.session_id, execution_id=execution.id
+            )
+
         try:
             if execution.status == ExecutionStatus.PENDING:
                 execution.start()
@@ -377,6 +420,17 @@ class ExecutionController(IExecutionController):
             if self._file_tracking and self._file_tracking.is_available():
                 self._track_output_files(execution, final_state)
             
+            if hasattr(self._state_adapter, 'get_config'):
+                try:
+                    cfg = self._state_adapter.get_config()
+                    snap = self._state_adapter._compiled_graph.get_state(cfg)
+                    if snap and snap.config:
+                        execution.checkpoint_id = snap.config.get(
+                            "configurable", {}
+                        ).get("checkpoint_id")
+                except Exception:
+                    pass
+            
             execution.complete()
             
         except Exception as e:
@@ -389,6 +443,7 @@ class ExecutionController(IExecutionController):
                 execution.status = ExecutionStatus.FAILED
                 execution.error_message = str(e)
         
+        self._sync_external_cache_metadata(execution)
         self._exec_repo.update(execution)
         self._commit()
         
@@ -557,6 +612,7 @@ class ExecutionController(IExecutionController):
             execution.fail(str(e), execution.state.current_node_id)
         
         # Persist final state
+        self._sync_external_cache_metadata(execution)
         self._exec_repo.update(execution)
         self._commit()
         
@@ -639,6 +695,7 @@ class ExecutionController(IExecutionController):
         # Domain model validates transition, clones state, clears errors, sets PAUSED
         execution.restore_from_checkpoint(restored_state)
         execution.checkpoint_id = checkpoint_id
+        self._sync_external_cache_metadata(execution)
         
         # File restore (reads from original restored_state, writes to cloned execution.state)
         if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
@@ -745,6 +802,17 @@ class ExecutionController(IExecutionController):
         # Create new execution ID
         fork_execution_id = str(uuid.uuid4())
         
+        # Seed forked LangGraph thread with source checkpoint state so that
+        # time-travel / resume on the fork has the correct checkpoint history.
+        # Must happen while adapter is still pointed at the source thread.
+        fork_thread_id = f"wtb-{fork_execution_id}"
+        _create_fork = getattr(self._state_adapter, "create_fork", None)
+        if callable(_create_fork) and self._state_adapter.supports_graph_execution():
+            try:
+                _create_fork(fork_thread_id, from_checkpoint_id=checkpoint_id)
+            except Exception as e:
+                logger.warning(f"Could not seed fork checkpoint history: {e}")
+        
         # Create new execution state
         forked_exec_state = ExecutionState(
             current_node_id=workflow.entry_point,
@@ -759,12 +827,9 @@ class ExecutionController(IExecutionController):
             workflow_id=source_execution.workflow_id,
             status=ExecutionStatus.PENDING,
             state=forked_exec_state,
-            metadata={
-                "forked_from": execution_id,
-                "source_checkpoint_id": checkpoint_id,
-                "fork_type": "checkpoint_fork",
-            },
+            metadata=copy.deepcopy(source_execution.metadata or {}),
         )
+        forked_execution.metadata.pop("requested_execution_id", None)
         
         # Initialize session for new execution
         session_id = self._state_adapter.initialize_session(
@@ -772,6 +837,14 @@ class ExecutionController(IExecutionController):
             initial_state=forked_exec_state,
         )
         forked_execution.session_id = session_id
+        forked_execution.metadata.update(
+            {
+                "forked_from": execution_id,
+                "source_checkpoint_id": checkpoint_id,
+                "fork_type": "checkpoint_fork",
+            }
+        )
+        self._sync_external_cache_metadata(forked_execution)
         
         # Persist forked execution
         self._exec_repo.add(forked_execution)

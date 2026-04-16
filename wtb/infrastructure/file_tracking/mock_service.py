@@ -76,7 +76,7 @@ class MockFileTrackingService(IFileTrackingService):
         
         # State storage
         self._commits: Dict[str, Dict] = {}  # commit_id -> commit data
-        self._checkpoint_links: Dict[int, str] = {}  # checkpoint_id -> commit_id
+        self._checkpoint_links: Dict[str, str] = {}  # checkpoint_id -> commit_id
         self._tracked_files: Dict[str, List[TrackedFile]] = {}  # commit_id -> files
         
         # Operation log for test verification

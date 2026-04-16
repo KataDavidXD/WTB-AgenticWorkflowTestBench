@@ -131,6 +131,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         state_adapter_factory: Optional[Callable[[], IStateAdapter]] = None,
         max_workers: int = 4,
         execution_timeout_seconds: float = 300.0,
+        config: Optional[Any] = None,
     ):
         """
         Initialize the runner.
@@ -141,6 +142,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             state_adapter_factory: Legacy factory to create isolated StateAdapter per thread
             max_workers: Maximum concurrent workers
             execution_timeout_seconds: Timeout for each variant execution
+            config: Optional WTBConfig for creating coordinators.
             
         Note:
             If controller_factory is provided, uow_factory and state_adapter_factory
@@ -151,6 +153,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         self._state_adapter_factory = state_adapter_factory
         self._max_workers = max_workers
         self._execution_timeout = execution_timeout_seconds
+        self._config = config
         
         self._executor: Optional[ThreadPoolExecutor] = None
         self._running_tests: Dict[str, _RunningTest] = {}
@@ -178,8 +181,9 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         if not batch_test.variant_combinations:
             raise BatchRunnerError("No variant combinations to execute")
         
-        # Cache workflow for thread-safe access by executor threads
-        self._current_workflow = getattr(batch_test, '_workflow', None)
+        # Resolve workflow locally (not on self) for thread safety when
+        # concurrent run_batch_test calls share the same runner instance.
+        batch_workflow = getattr(batch_test, '_workflow', None)
         
         batch_test.start()
         
@@ -207,6 +211,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                     batch_test.workflow_id,
                     combo,
                     batch_test.initial_state.copy(),
+                    None,  # workflow_graph
+                    batch_workflow,
                 )
                 futures_to_combo[future] = combo
                 running_test.futures.append(future)
@@ -215,8 +221,10 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             for future in as_completed(futures_to_combo.keys()):
                 combo = futures_to_combo[future]
                 
-                # Check for cancellation
-                if running_test.cancelled:
+                # Check for cancellation under lock for visibility
+                with self._lock:
+                    cancelled = running_test.cancelled
+                if cancelled:
                     break
                 
                 try:
@@ -264,6 +272,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         combo: VariantCombination,
         initial_state: Dict[str, Any],
         workflow_graph: Optional[Any] = None,
+        batch_workflow: Optional[Any] = None,
     ) -> BatchTestResult:
         """
         Execute a single variant combination.
@@ -293,12 +302,14 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             # v1.7: Use controller factory if available (preferred)
             if self._controller_factory is not None:
                 return self._execute_with_controller_factory(
-                    workflow_id, combo, initial_state, workflow_graph, start_time
+                    workflow_id, combo, initial_state, workflow_graph, start_time,
+                    batch_workflow,
                 )
             
             # Legacy path: use uow_factory + state_adapter_factory
             return self._execute_with_legacy_factories(
-                workflow_id, combo, initial_state, start_time, execution_id
+                workflow_id, combo, initial_state, start_time, execution_id,
+                batch_workflow,
             )
                 
         except Exception as e:
@@ -320,12 +331,10 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         initial_state: Dict[str, Any],
         workflow_graph: Optional[Any],
         start_time: float,
+        batch_workflow: Optional[Any] = None,
     ) -> BatchTestResult:
         """
         Execute variant using v1.7 controller factory pattern.
-        
-        v1.9: Imports graph from graph_factory if workflow_graph is None
-        (mirrors Ray actor pattern for LangGraph execution with checkpoints).
         
         v1.9: Imports graph from graph_factory if workflow_graph is None
         (mirrors Ray actor pattern for LangGraph execution with checkpoints).
@@ -359,8 +368,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             controller = managed.controller
             uow = managed.uow
             
-            # Use cached workflow from BatchTest if available, else lookup
-            workflow = getattr(self, '_current_workflow', None)
+            # Use workflow passed as argument, else lookup from UoW
+            workflow = batch_workflow
             if workflow is None:
                 workflow = uow.workflows.get(workflow_id)
             if workflow is None:
@@ -370,11 +379,11 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                     failed_variant=combo.name,
                 )
             
-            # Ensure workflow is in this UoW for consistency
-            try:
-                uow.workflows.add(workflow)
-            except Exception:
-                pass  # Already exists in this UoW
+            if not uow.workflows.exists(workflow.id):
+                try:
+                    uow.workflows.add(workflow)
+                except Exception:
+                    uow.rollback()
             
             variant_state = initial_state.copy()
             variant_state["_variant_config"] = combo.variants
@@ -412,6 +421,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         initial_state: Dict[str, Any],
         start_time: float,
         execution_id: str,
+        batch_workflow: Optional[Any] = None,
     ) -> BatchTestResult:
         """
         Execute variant using legacy uow_factory + state_adapter_factory.
@@ -431,8 +441,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             # Import here to avoid circular imports
             from .execution_controller import ExecutionController, DefaultNodeExecutor
             
-            # Use cached workflow from BatchTest if available, else lookup
-            workflow = getattr(self, '_current_workflow', None)
+            workflow = batch_workflow
             if workflow is None:
                 workflow = uow.workflows.get(workflow_id)
             if workflow is None:
@@ -441,10 +450,11 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                     batch_test_id="",
                     failed_variant=combo.name,
                 )
-            try:
-                uow.workflows.add(workflow)
-            except Exception:
-                pass
+            if not uow.workflows.exists(workflow.id):
+                try:
+                    uow.workflows.add(workflow)
+                except Exception:
+                    uow.rollback()
             
             # Create controller for this execution
             controller = ExecutionController(
@@ -571,6 +581,19 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             
             return True
     
+    def create_rollback_coordinator(
+        self,
+        config: Optional[Any] = None,
+    ) -> "BatchExecutionCoordinator":
+        """
+        Create a BatchExecutionCoordinator that shares this runner's DB.
+
+        Uses the stored WTBConfig so that rollback / fork operations
+        connect to the same SQLite DB used during batch execution.
+        """
+        from wtb.application.factories import BatchCoordinatorFactory
+        return BatchCoordinatorFactory.create_default(config=config or self._config)
+
     def shutdown(self) -> None:
         """Shutdown the executor."""
         self._shutdown = True

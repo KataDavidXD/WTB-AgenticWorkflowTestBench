@@ -30,7 +30,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import logging
-import threading
 import uuid
 
 from wtb.domain.interfaces.state_adapter import (
@@ -174,13 +173,13 @@ class LangGraphStateAdapter(IStateAdapter):
         
         self._config = config
         self._checkpointer = self._create_checkpointer()
+        self._owns_checkpointer = True
         self._compiled_graph: Optional[CompiledStateGraph] = None
         self._graph_builder: Optional[StateGraph] = None
         
         # Session tracking (v1.6: string IDs)
         self._current_thread_id: Optional[str] = None
         self._current_execution_id: Optional[str] = None
-        self._session_lock = threading.Lock()
         
         # Node boundary tracking (per thread_id)
         self._node_boundaries: Dict[str, Dict[str, _NodeBoundaryTracker]] = {}
@@ -302,10 +301,6 @@ class LangGraphStateAdapter(IStateAdapter):
         """LangGraphStateAdapter always supports graph execution."""
         return True
     
-    def supports_graph_execution(self) -> bool:
-        """LangGraphStateAdapter always supports graph execution."""
-        return True
-    
     def has_graph(self) -> bool:
         """Check if graph is set."""
         return self._compiled_graph is not None
@@ -315,8 +310,8 @@ class LangGraphStateAdapter(IStateAdapter):
         return self._checkpointer
 
     def close(self) -> None:
-        """Release checkpointer resources."""
-        if self._checkpointer is None:
+        """Release checkpointer resources (only if this adapter owns them)."""
+        if self._checkpointer is None or not self._owns_checkpointer:
             return
         try:
             if hasattr(self._checkpointer, "conn") and self._checkpointer.conn:
@@ -517,6 +512,11 @@ class LangGraphStateAdapter(IStateAdapter):
         if snapshot:
             current_config = self.get_config()
             self._compiled_graph.update_state(current_config, snapshot.values)
+        
+        # Reset node boundary tracking for this thread since we rolled
+        # back to an earlier point; stale boundaries would be misleading.
+        if self._current_thread_id and self._current_thread_id in self._node_boundaries:
+            self._node_boundaries[self._current_thread_id] = {}
         
         logger.info(f"Rolled back to checkpoint {to_checkpoint_id[:8]}...")
         return state
@@ -815,13 +815,20 @@ class LangGraphStateAdapter(IStateAdapter):
         """
         Create a fork adapter for variant execution.
         
-        Used by batch test runners to create isolated variant threads.
+        Uses ``object.__new__`` to avoid the ``__init__`` path which would
+        open a **new** checkpointer connection that is immediately discarded.
+        The fork shares the parent's checkpointer and graph; it does NOT
+        own the checkpointer, so ``close()`` is a no-op on this instance.
         """
-        fork_adapter = LangGraphStateAdapter(self._config)
-        fork_adapter._compiled_graph = self._compiled_graph
+        fork_adapter = object.__new__(LangGraphStateAdapter)
+        fork_adapter._config = self._config
         fork_adapter._checkpointer = self._checkpointer
+        fork_adapter._owns_checkpointer = False
+        fork_adapter._compiled_graph = self._compiled_graph
+        fork_adapter._graph_builder = self._graph_builder
         fork_adapter._current_thread_id = fork_thread_id
-        fork_adapter._node_boundaries[fork_thread_id] = {}
+        fork_adapter._current_execution_id = None
+        fork_adapter._node_boundaries = {fork_thread_id: {}}
         
         # If forking from specific checkpoint, copy state
         if from_checkpoint_id:
