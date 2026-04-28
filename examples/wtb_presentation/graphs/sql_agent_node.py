@@ -41,7 +41,7 @@ import sqlite3
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Constants
@@ -54,7 +54,7 @@ DEMO_DB_PATH = SQL_DIR / "demo.db"
 # LLM Configuration
 try:
     from examples.wtb_presentation.config.llm_config import (
-        generate_text,
+        generate_text_result,
         DEFAULT_LLM,
     )
     LLM_AVAILABLE = True
@@ -133,7 +133,7 @@ def sql_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         messages.append(f"[sql_agent] Loaded schema for: {', '.join(relevant_tables)}")
         
         # Step 3: Generate SQL from natural language
-        generated_sql = _generate_sql_from_query(query, tables_schema)
+        generated_sql, llm_cache_meta = _generate_sql_from_query(query, tables_schema)
         messages.append(f"[sql_agent] Generated SQL: {generated_sql}")
         
         # Step 4: Validate SQL
@@ -176,7 +176,7 @@ def sql_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "results": sql_result[:100],  # Limit saved results
         }
         
-        return {
+        result = {
             "sql_result": sql_result,
             "tables_schema": tables_schema,
             "generated_sql": generated_sql,
@@ -189,6 +189,10 @@ def sql_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "current_node": "sql_agent",
             "_output_files": {"sql_results.json": json.dumps(output_data, indent=2)},
         }
+        if llm_cache_meta:
+            result["llm_cache_refs"] = {"sql_generate": llm_cache_meta["cache_key"]}
+            result["llm_cache_hits"] = {"sql_generate": bool(llm_cache_meta["cache_hit"])}
+        return result
         
     except Exception as e:
         duration_ms = (time.time() - start_time) * 1000
@@ -237,7 +241,10 @@ def _find_relevant_tables(query: str, available_tables: List[str]) -> List[str]:
     return relevant if relevant else available_tables[:3]
 
 
-def _generate_sql_from_query(query: str, schema: Dict[str, List[Dict]]) -> str:
+def _generate_sql_from_query(
+    query: str,
+    schema: Dict[str, List[Dict]],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
     """
     Generate SQL from natural language query using LLM.
     
@@ -246,7 +253,7 @@ def _generate_sql_from_query(query: str, schema: Dict[str, List[Dict]]) -> str:
     tables = list(schema.keys())
     
     if not tables:
-        return "SELECT 1"
+        return "SELECT 1", None
     
     # Try LLM-based SQL generation
     if LLM_AVAILABLE:
@@ -268,7 +275,7 @@ Rules:
 
 SQL Query:"""
             
-            response = generate_text(
+            response = generate_text_result(
                 prompt=prompt,
                 model=DEFAULT_LLM,
                 temperature=0.1,
@@ -276,14 +283,18 @@ SQL Query:"""
             )
             
             # Extract SQL from response
-            sql = _extract_sql_from_response(response)
+            sql = _extract_sql_from_response(response.text)
             if sql and _validate_sql(sql):
-                return sql
+                return sql, {
+                    "cache_key": response.cache_key,
+                    "cache_hit": response.cache_hit,
+                    "model": response.model,
+                }
         except Exception as e:
             print(f"[sql_agent] LLM SQL generation failed: {e}")
     
     # Fallback to rule-based generation
-    return _rule_based_sql_generation(query, schema, tables)
+    return _rule_based_sql_generation(query, schema, tables), None
 
 
 def _format_schema_for_prompt(schema: Dict[str, List[Dict]]) -> str:

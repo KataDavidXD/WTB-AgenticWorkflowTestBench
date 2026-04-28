@@ -237,6 +237,16 @@ class LangGraphStateAdapter(IStateAdapter):
     # ═══════════════════════════════════════════════════════════════════════════
     # Graph Management
     # ═══════════════════════════════════════════════════════════════════════════
+
+    def _can_reuse_compiled_graph(self, graph: Any) -> bool:
+        """Return True when the adapter already holds a compatible compiled graph."""
+        if self._compiled_graph is None or not self._has_valid_checkpointer(self._compiled_graph):
+            return False
+        if graph is self._compiled_graph or graph is self._graph_builder:
+            return True
+        if hasattr(graph, 'invoke') and hasattr(graph, 'get_state'):
+            return getattr(graph, 'builder', None) is self._graph_builder
+        return False
     
     def set_workflow_graph(self, graph: "StateGraph", force_recompile: bool = True) -> None:
         """
@@ -244,6 +254,10 @@ class LangGraphStateAdapter(IStateAdapter):
         
         IMPORTANT: Always recompiles with our checkpointer for ACID compliance.
         """
+        if self._can_reuse_compiled_graph(graph):
+            logger.info("Reusing compiled graph with adapter's checkpointer")
+            return
+
         # Check if already compiled (CompiledStateGraph)
         if hasattr(graph, 'invoke') and hasattr(graph, 'get_state'):
             self._graph_builder = getattr(graph, 'builder', None)

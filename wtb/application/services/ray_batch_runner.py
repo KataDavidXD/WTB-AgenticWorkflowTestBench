@@ -72,6 +72,10 @@ from wtb.domain.interfaces.batch_runner import (
 )
 from wtb.domain.interfaces.state_adapter import IStateAdapter
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+from wtb.application.services.external_storage import (
+    ActorLocalStoragePaths,
+    resolve_actor_local_storage_paths,
+)
 
 # Workspace isolation imports (2026-01-16)
 from wtb.domain.models.workspace import (
@@ -196,6 +200,9 @@ def _create_variant_execution_actor_class():
             self._agentgit_db_url = agentgit_db_url
             self._wtb_db_url = wtb_db_url
             self._actor_id = actor_id
+            self._storage_paths: ActorLocalStoragePaths = resolve_actor_local_storage_paths(
+                actor_id
+            )
             self._filetracker_config = filetracker_config
             self._workspace_config = workspace_config
             
@@ -241,22 +248,9 @@ def _create_variant_execution_actor_class():
                         LangGraphConfig,
                         CheckpointerType,
                     )
-                    # Shared checkpoint DB: all actors + coordinator + main bench
-                    # use the same file so checkpoints are visible everywhere.
-                    # LangGraph partitions by thread_id so no data collision.
-                    # SQLite WAL mode handles concurrent access.
-                    import os as _os
-                    base_path = (
-                        self._wtb_db_url.replace("sqlite:///", "") 
-                        if self._wtb_db_url.startswith("sqlite:///")
-                        else self._wtb_db_url
-                    )
-                    data_dir = _os.path.dirname(base_path) or "."
-                    checkpoint_db_path = _os.path.join(data_dir, "wtb_checkpoints.db")
-                    
                     config = LangGraphConfig(
                         checkpointer_type=CheckpointerType.SQLITE,
-                        connection_string=checkpoint_db_path,
+                        connection_string=str(self._storage_paths.checkpoint_db_path),
                     )
                     self._state_adapter = LangGraphStateAdapter(config)
                     logger.info(f"Actor {self._actor_id}: Using LangGraphStateAdapter (PRIMARY)")
@@ -404,6 +398,10 @@ def _create_variant_execution_actor_class():
                     "execution_id": actual_exec_id,
                     "combination_name": combination_name,
                     "combination_variants": variants,
+                    "actor_id": self._actor_id,
+                    "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
+                    "llm_cache_path": str(self._storage_paths.llm_cache_path),
+                    "cache_storage_scope": self._storage_paths.cache_storage_scope,
                     "success": True,
                     "duration_ms": duration_ms,
                     "metrics": result.get("metrics", {}),
@@ -429,6 +427,10 @@ def _create_variant_execution_actor_class():
                     "execution_id": execution_id,
                     "combination_name": combination_name,
                     "combination_variants": variants,
+                    "actor_id": self._actor_id,
+                    "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
+                    "llm_cache_path": str(self._storage_paths.llm_cache_path),
+                    "cache_storage_scope": self._storage_paths.cache_storage_scope,
                     "success": False,
                     "duration_ms": duration_ms,
                     "metrics": {},
@@ -533,16 +535,15 @@ def _create_variant_execution_actor_class():
                 
                 # Use the DB-assigned ID; store the pre-generated one as alias
                 execution.metadata = {
+                    **(execution.metadata or {}),
                     "batch_test_id": batch_test_id,
                     "variants": variants,
                     "actor_id": self._actor_id,
                     "requested_execution_id": execution_id,
+                    "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
+                    "llm_cache_path": str(self._storage_paths.llm_cache_path),
+                    "cache_storage_scope": self._storage_paths.cache_storage_scope,
                 }
-                # v1.9: Store actor checkpoint DB path for coordinator rollback/fork
-                if hasattr(self._state_adapter, '_config'):
-                    adapter_config = self._state_adapter._config
-                    if hasattr(adapter_config, 'connection_string') and adapter_config.connection_string:
-                        execution.metadata["checkpoint_db_path"] = adapter_config.connection_string
                 # Update the execution_id variable to match the real persisted ID
                 execution_id = execution.id
                 uow.executions.update(execution)
@@ -1104,7 +1105,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._actors = []
         for i in range(num_workers):
             actor_id = f"actor_{i}"
-            ray_runtime_env: Dict[str, Any] = {}
+            ray_runtime_env: Dict[str, Any] = self._build_ray_runtime_env(actor_id, {})
             
             if self._environment_provider is not None:
                 try:
@@ -1168,13 +1169,34 @@ class RayBatchTestRunner(IBatchTestRunner):
         """
         import os as _os
         
-        ray_env: Dict[str, Any] = {}
+        ray_env: Dict[str, Any] = dict(raw_env or {})
+        env_vars: Dict[str, str] = dict(ray_env.get("env_vars", {}) or {})
         metadata_vars: Dict[str, str] = {
             "WTB_UV_ENV_TYPE": raw_env.get("type", "unknown"),
             "WTB_UV_ENV_PATH": raw_env.get("env_path", ""),
             "WTB_UV_PYTHON_PATH": raw_env.get("python_path", ""),
             "WTB_UV_ACTOR_ID": actor_id,
         }
+
+        storage_paths = resolve_actor_local_storage_paths(actor_id)
+        env_vars.update(storage_paths.to_env_vars())
+
+        for key in (
+            "OPENAI_API_KEY",
+            "LLM_API_KEY",
+            "OPENAI_BASE_URL",
+            "LLM_BASE_URL",
+            "DEFAULT_LLM",
+            "ALT_LLM",
+            "EMBEDDING_MODEL",
+            "ALT_EMBEDDING_MODEL",
+            "WTB_LLM_RESPONSE_CACHE_ENABLED",
+            "WTB_LLM_DEBUG",
+            "DEBUG",
+        ):
+            value = _os.getenv(key)
+            if value is not None and key not in env_vars:
+                env_vars[key] = value
         
         py_exec = raw_env.get("py_executable", "")
         venv_path = raw_env.get("venv_path", "")
@@ -1192,7 +1214,8 @@ class RayBatchTestRunner(IBatchTestRunner):
                 f"using host Python for Ray worker"
             )
         
-        ray_env["env_vars"] = metadata_vars
+        env_vars.update(metadata_vars)
+        ray_env["env_vars"] = env_vars
         return ray_env
     
     def _load_workflow(self, workflow_id: str) -> Dict[str, Any]:

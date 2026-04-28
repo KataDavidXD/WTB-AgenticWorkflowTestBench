@@ -62,16 +62,24 @@ from wtb.domain.interfaces import (
 )
 
 # Application Services
-from wtb.application import (
-    ExecutionController,
-    NodeReplacer,
-)
+try:
+    from wtb.application import (
+        ExecutionController,
+        NodeReplacer,
+    )
+except ImportError:
+    ExecutionController = None
+    NodeReplacer = None
 
 # Infrastructure
-from wtb.infrastructure import (
-    SQLAlchemyUnitOfWork,
-    InMemoryStateAdapter,
-)
+try:
+    from wtb.infrastructure import (
+        SQLAlchemyUnitOfWork,
+        InMemoryStateAdapter,
+    )
+except ImportError:
+    SQLAlchemyUnitOfWork = None
+    InMemoryStateAdapter = None
 
 # SDK (lazy import to avoid circular dependencies)
 def _get_sdk():

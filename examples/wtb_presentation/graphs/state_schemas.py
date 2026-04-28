@@ -26,17 +26,15 @@ Architecture:
     └─────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List, Optional
-from typing_extensions import TypedDict, Annotated
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from operator import add
 
 
-def merge_dicts(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
+def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     """
-    LangGraph reducer to merge _output_files dictionaries.
+    LangGraph reducer to merge shallow dictionaries.
     
-    Each node returns _output_files = {"filename": "content"}.
-    This reducer merges them so all node outputs are preserved.
+    Used for output file manifests and lightweight cache reference tracking.
     """
     if left is None:
         left = {}
@@ -130,6 +128,8 @@ class RAGState(TypedDict, total=False):
     # Node 7: Generate
     answer: str
     generator_model: str
+    llm_cache_refs: Annotated[Dict[str, str], merge_dicts]
+    llm_cache_hits: Annotated[Dict[str, bool], merge_dicts]
     
     # Rewrite loop
     rewrite_count: int
@@ -159,6 +159,8 @@ class SQLState(TypedDict, total=False):
     # Output
     sql_result: List[Dict[str, Any]]
     sql_error: Optional[str]
+    llm_cache_refs: Annotated[Dict[str, str], merge_dicts]
+    llm_cache_hits: Annotated[Dict[str, bool], merge_dicts]
     
     # Tracking
     tables_accessed: List[str]
@@ -228,6 +230,8 @@ class UnifiedState(TypedDict, total=False):
     # Node 7: Generate
     answer: str
     generator_model: str
+    llm_cache_refs: Annotated[Dict[str, str], merge_dicts]
+    llm_cache_hits: Annotated[Dict[str, bool], merge_dicts]
     
     # Rewrite loop
     rewrite_count: int
@@ -265,6 +269,8 @@ def create_initial_state(query: str) -> Dict[str, Any]:
         "metadata": {},
         "rewrite_count": 0,
         "grade_decision": "",
+        "llm_cache_refs": {},
+        "llm_cache_hits": {},
     }
 
 

@@ -66,11 +66,14 @@ from wtb.sdk import (
     BatchTestResult,
 )
 from wtb.config import WTBConfig
+from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LangGraph Workflow Definition
 # ═══════════════════════════════════════════════════════════════════════════════
+
+DEMO_OUTPUT_DIR_ENV = "WTB_FILE_CLEANUP_DEMO_OUTPUT_DIR"
 
 def create_file_creating_workflow(output_dir: Path):
     """
@@ -157,6 +160,92 @@ def create_file_creating_workflow(output_dir: Path):
     return builder
 
 
+def create_demo_workflow():
+    """Top-level graph factory so WTB/Ray can import it reliably."""
+    output_dir = os.getenv(DEMO_OUTPUT_DIR_ENV)
+    if not output_dir:
+        raise RuntimeError(f"{DEMO_OUTPUT_DIR_ENV} is not initialized")
+    return create_file_creating_workflow(Path(output_dir))
+
+
+def extract_checkpoint_file_paths(checkpoint: Any) -> List[str]:
+    """Read tracked file paths from checkpoint state, not from workspace discovery."""
+    state_values = checkpoint.state_values if isinstance(checkpoint.state_values, dict) else {}
+    workflow_vars = state_values.get("workflow_variables", state_values)
+    files_created = workflow_vars.get("files_created", [])
+    return [str(Path(file_path)) for file_path in files_created if file_path]
+
+
+def store_checkpoint_file_addresses(checkpoints: List[Any], file_tracking_service) -> Dict[str, str]:
+    """
+    Materialize checkpoint -> file snapshot links in FileTracker.
+
+    This keeps the file relationship in external storage rather than inferring it
+    from the current workspace contents later.
+    """
+    checkpoint_refs: Dict[str, str] = {}
+
+    for checkpoint in checkpoints:
+        file_paths = extract_checkpoint_file_paths(checkpoint)
+        if not file_paths:
+            continue
+
+        tracking_result = file_tracking_service.track_and_link(
+            checkpoint_id=str(checkpoint.id),
+            file_paths=file_paths,
+            message=f"Checkpoint step {checkpoint.step} files",
+        )
+        checkpoint_refs[str(checkpoint.id)] = tracking_result.commit_id
+
+    return checkpoint_refs
+
+
+def load_execution_specific_checkpoints(
+    wtb,
+    execution_id: str,
+    graph: Optional[Any] = None,
+) -> List[Checkpoint]:
+    """Read checkpoint history from the execution's own checkpoint DB."""
+    execution = wtb.get_execution(execution_id)
+    coordinator = wtb.get_batch_coordinator()
+    state_adapter = coordinator._build_state_adapter_for_execution(execution)
+
+    if graph is None:
+        resolver = getattr(wtb, "_resolve_graph_for_result", None)
+        if callable(resolver):
+            try:
+                graph = resolver()
+            except Exception:
+                graph = None
+
+    if graph is not None and hasattr(state_adapter, "set_workflow_graph"):
+        state_adapter.set_workflow_graph(graph, force_recompile=True)
+
+    if execution.session_id:
+        state_adapter.set_current_session(execution.session_id, execution_id=execution.id)
+
+    history = state_adapter.get_checkpoint_history()
+    checkpoints: List[Checkpoint] = []
+    for cp in history:
+        writes = cp.get("writes") or {}
+        source = cp.get("source", "")
+        if not writes and source and source not in ("input", "__start__", ""):
+            writes = {source: {}}
+
+        checkpoints.append(
+            Checkpoint(
+                id=CheckpointId(str(cp.get("checkpoint_id", cp.get("id", "")))),
+                execution_id=execution_id,
+                step=cp.get("step", 0),
+                node_writes=writes,
+                next_nodes=cp.get("next", []),
+                state_values=cp.get("values", {}),
+                created_at=cp.get("created_at") or datetime.now(),
+            )
+        )
+    return sorted(checkpoints, key=lambda checkpoint: checkpoint.step)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Demo Functions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -170,7 +259,7 @@ def setup_demo_environment(base_dir: Path) -> tuple[WTBConfig, Path]:
     """
     # Create directories
     data_dir = base_dir / "data"
-    output_dir = base_dir / "outputs"
+    output_dir = data_dir / "outputs"
     data_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -247,6 +336,8 @@ def run_demo():
     
     # Create temporary directory for demo
     tmp_dir = tempfile.mkdtemp()
+    started_ray = False
+    wtb = None
     try:
         base_dir = Path(tmp_dir)
         print(f"\nDemo directory: {base_dir}")
@@ -267,10 +358,11 @@ def run_demo():
         print("Step 2: Creating LangGraph workflow with file-creating nodes")
         print("-" * 50)
         
-        # Create a factory function that returns the workflow
-        def workflow_factory():
-            return create_file_creating_workflow(output_dir)
-        
+        os.environ[DEMO_OUTPUT_DIR_ENV] = str(output_dir)
+        module_alias = "examples.ray_file_cleanup_demo"
+        sys.modules.setdefault(module_alias, sys.modules[__name__])
+        create_demo_workflow.__module__ = module_alias
+
         print("  - Created workflow factory: node_a -> node_b -> node_c")
         print("  - Node A creates: setup.txt")
         print("  - Node B creates: data_0.json, data_1.json, data_2.json")
@@ -280,8 +372,8 @@ def run_demo():
         print("\n" + "-" * 50)
         print("Step 3: Creating WorkflowProject with FileTrackingConfig")
         print("-" * 50)
-        
-        project = create_sdk_project(output_dir, workflow_factory)
+
+        project = create_sdk_project(output_dir, create_demo_workflow)
         print(f"  - Project: {project.name}")
         print(f"  - File tracking enabled: {project.file_tracking.enabled}")
         print(f"  - Tracked paths: {project.file_tracking.tracked_paths}")
@@ -294,13 +386,27 @@ def run_demo():
         
         # Use factory to create properly wired WTBTestBench
         from wtb.application.factories import WTBTestBenchFactory
+
+        if RAY_AVAILABLE and not ray.is_initialized():
+            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+            started_ray = True
+            print("  - Local Ray runtime initialized")
         
         wtb = WTBTestBenchFactory.create_for_development(
             data_dir=str(base_dir / "data"),
             enable_file_tracking=True,
+            enable_ray=RAY_AVAILABLE,
         )
         print("  - WTBTestBench created")
         print("  - File tracking service initialized")
+
+        runner_config = getattr(getattr(wtb, "_batch_runner", None), "_config", None)
+        if runner_config is not None:
+            runner_config.rollback_cleanup_enabled = config.rollback_cleanup_enabled
+            runner_config.rollback_cleanup_dry_run = config.rollback_cleanup_dry_run
+            runner_config.rollback_cleanup_backup = config.rollback_cleanup_backup
+            runner_config.rollback_cleanup_max_files = config.rollback_cleanup_max_files
+            print("  - Rollback cleanup config applied to batch runner")
         
         # Register project
         wtb.register_project(project)
@@ -313,6 +419,7 @@ def run_demo():
         
         # Start execution
         initial_state = {"messages": [], "files_created": [], "step": 0}
+        result = None
         
         try:
             # Run batch test with single variant
@@ -325,8 +432,8 @@ def run_demo():
             print(f"  - Batch test completed")
             print(f"  - Results count: {len(batch_result.results)}")
             
-            if batch_result.results:
-                result = batch_result.results[0]
+            result = batch_result.results[0] if batch_result.results else None
+            if result is not None:
                 print(f"  - Execution ID: {result.execution_id}")
                 print(f"  - Checkpoint count: {result.checkpoint_count}")
                 print(f"  - Last checkpoint: {result.last_checkpoint_id}")
@@ -349,37 +456,102 @@ def run_demo():
             else:
                 print("  - (No files yet - workflow not fully executed)")
         
-        # Step 7: Demonstrate rollback with cleanup (conceptual)
+        # Step 7: Demonstrate rollback with cleanup
         print("\n" + "-" * 50)
-        print("Step 7: Rollback with auto-cleanup (architecture)")
+        print("Step 7: Rollback with auto-cleanup")
         print("-" * 50)
-        
-        print("""
-  When you call:
-    wtb.rollback_batch_result(result, to_checkpoint="cp-after-node-a")
-  
-  The following happens:
-  
-  1. BatchExecutionCoordinator creates ROLLBACK_FILE_RESTORE event
-     - Includes cleanup config from WTBConfig:
-       * cleanup_orphaned_files: True
-       * cleanup_dry_run: False  
-       * cleanup_backup: True
-       * cleanup_max_files: 50
-     
-  2. OutboxProcessor (running via OutboxLifecycleManager):
-     - Processes the event
-     - Restores files to checkpoint state
-     - Identifies orphaned files (created after checkpoint)
-     - Backs up orphaned files to .rollback_backup/
-     - Deletes orphaned files
-  
-  3. Result:
-     - setup.txt (from Node A): KEPT
-     - data_*.json (from Node B): DELETED (created after checkpoint)
-     - report.md (from Node C): DELETED (created after checkpoint)
-""")
-        
+
+        if result is None:
+            print("  - Skipping rollback cleanup check because the batch result was empty")
+        else:
+            checkpoints = load_execution_specific_checkpoints(
+                wtb,
+                result.execution_id,
+                graph=create_demo_workflow(),
+            )
+            print(f"  - Available checkpoints: {len(checkpoints)}")
+            for cp in checkpoints:
+                print(f"    * step={cp.step}, id={str(cp.id)[:12]}...")
+
+            if not checkpoints:
+                print("  - No checkpoints available for rollback cleanup check")
+            else:
+                inner_ctrl = getattr(getattr(wtb, "_exec_ctrl", None), "_inner", None)
+                file_tracking_service = getattr(inner_ctrl, "_file_tracking", None)
+                if file_tracking_service is None:
+                    raise RuntimeError("File tracking service is not available on the bench")
+
+                checkpoint_refs = store_checkpoint_file_addresses(checkpoints, file_tracking_service)
+                print("  - Stored checkpoint file addresses:")
+                for checkpoint in checkpoints:
+                    ref = checkpoint_refs.get(str(checkpoint.id))
+                    if ref:
+                        print(f"    * step={checkpoint.step} -> {ref[:12]}...")
+
+                target_checkpoint = next((cp for cp in checkpoints if cp.step == 1), checkpoints[0])
+
+                print(f"  - Rolling back to checkpoint step={target_checkpoint.step}")
+
+                rollback_result = wtb.rollback_batch_result(
+                    result,
+                    checkpoint_id=str(target_checkpoint.id),
+                )
+                print(f"  - Rollback success: {rollback_result.success}")
+                if not rollback_result.success:
+                    raise RuntimeError(rollback_result.error or "rollback failed")
+
+                restore_result = file_tracking_service.restore_from_checkpoint(str(target_checkpoint.id))
+                print(
+                    f"  - Restored files from stored address: "
+                    f"{restore_result.files_restored} files"
+                )
+
+                from wtb.infrastructure.file_tracking.cleanup_service import FileCleanupService
+
+                cleanup_service = FileCleanupService()
+                orphaned = cleanup_service.identify_orphaned_files(
+                    target_checkpoint_id=str(target_checkpoint.id),
+                    execution_id=result.execution_id,
+                    current_workspace_path=output_dir,
+                    track_patterns=["*.txt", "*.json", "*.md"],
+                    exclude_patterns=["*.tmp", "*.log", "__pycache__/*", ".rollback_backup/*"],
+                    file_tracking_service=file_tracking_service,
+                )
+                print(f"  - Orphaned files before cleanup: {orphaned}")
+
+                cleanup_result = cleanup_service.cleanup_orphaned_files(
+                    checkpoint_id=str(target_checkpoint.id),
+                    execution_id=result.execution_id,
+                    orphaned_paths=orphaned,
+                    backup_dir=output_dir / ".rollback_backup",
+                    dry_run=config.rollback_cleanup_dry_run,
+                    max_files=config.rollback_cleanup_max_files,
+                )
+                print(
+                    f"  - Cleanup success: deleted={cleanup_result.files_deleted}, "
+                    f"backed_up={cleanup_result.files_backed_up}, "
+                    f"skipped={cleanup_result.files_skipped}"
+                )
+
+                remaining = sorted(
+                    p.name for p in output_dir.iterdir()
+                    if p.is_file() or p.is_dir()
+                )
+                print(f"  - Files after rollback cleanup: {remaining}")
+                if (
+                    "setup.txt" in remaining
+                    and "report.md" not in remaining
+                    and "data_0.json" not in remaining
+                    and "data_1.json" not in remaining
+                    and "data_2.json" not in remaining
+                ):
+                    print("  - Cleanup verification passed: only checkpoint-state files remain")
+                else:
+                    print(
+                        "  - WARNING: cleanup removed checkpoint-state files too; "
+                        "the rollback cleanup linkage still needs a core fix"
+                    )
+
         # Step 8: Show how to enable cleanup in your code
         print("\n" + "-" * 50)
         print("Step 8: How to enable rollback cleanup in your code")
@@ -421,6 +593,14 @@ def run_demo():
         # This is expected behavior and doesn't affect the demo
         import gc
         gc.collect()  # Help release file handles
+        if wtb is not None:
+            try:
+                wtb.close()
+            except Exception:
+                pass
+        if started_ray and ray.is_initialized():
+            ray.shutdown()
+        os.environ.pop(DEMO_OUTPUT_DIR_ENV, None)
         try:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception:

@@ -13,8 +13,10 @@ Orchestrates workflow execution with support for:
 """
 
 import ast
+import copy
 import logging
 import operator
+import os
 import uuid
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
@@ -277,6 +279,43 @@ class ExecutionController(IExecutionController):
             return
         if self._uow is not None:
             self._uow.commit()
+
+    def _sync_external_cache_metadata(self, execution: Execution) -> None:
+        """Mirror cache references/hit flags into execution metadata."""
+        if execution is None:
+            return
+
+        metadata = execution.metadata
+        if not isinstance(metadata, dict):
+            metadata = {}
+            execution.metadata = metadata
+
+        workflow_vars = getattr(execution.state, "workflow_variables", {}) or {}
+        for key in ("llm_cache_refs", "llm_cache_hits"):
+            value = workflow_vars.get(key)
+            if value is not None:
+                metadata[key] = copy.deepcopy(value)
+
+        env_fallbacks = (
+            ("checkpoint_db_path", "WTB_CHECKPOINT_DB_PATH"),
+            ("llm_cache_path", "WTB_LLM_CACHE_PATH"),
+            ("actor_id", "WTB_CACHE_ACTOR_ID"),
+            ("cache_storage_scope", "WTB_CACHE_STORAGE_SCOPE"),
+        )
+        for field_name, env_name in env_fallbacks:
+            value = metadata.get(field_name) or os.getenv(env_name)
+            if value:
+                metadata[field_name] = value
+
+        if (
+            "cache_storage_scope" not in metadata
+            and (
+                metadata.get("checkpoint_db_path")
+                or metadata.get("llm_cache_path")
+                or metadata.get("actor_id")
+            )
+        ):
+            metadata["cache_storage_scope"] = "actor_local"
     
     def create_execution(
         self, 
@@ -404,6 +443,7 @@ class ExecutionController(IExecutionController):
                 execution.status = ExecutionStatus.FAILED
                 execution.error_message = str(e)
         
+        self._sync_external_cache_metadata(execution)
         self._exec_repo.update(execution)
         self._commit()
         
@@ -572,6 +612,7 @@ class ExecutionController(IExecutionController):
             execution.fail(str(e), execution.state.current_node_id)
         
         # Persist final state
+        self._sync_external_cache_metadata(execution)
         self._exec_repo.update(execution)
         self._commit()
         
@@ -654,6 +695,7 @@ class ExecutionController(IExecutionController):
         # Domain model validates transition, clones state, clears errors, sets PAUSED
         execution.restore_from_checkpoint(restored_state)
         execution.checkpoint_id = checkpoint_id
+        self._sync_external_cache_metadata(execution)
         
         # File restore (reads from original restored_state, writes to cloned execution.state)
         if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
@@ -785,12 +827,9 @@ class ExecutionController(IExecutionController):
             workflow_id=source_execution.workflow_id,
             status=ExecutionStatus.PENDING,
             state=forked_exec_state,
-            metadata={
-                "forked_from": execution_id,
-                "source_checkpoint_id": checkpoint_id,
-                "fork_type": "checkpoint_fork",
-            },
+            metadata=copy.deepcopy(source_execution.metadata or {}),
         )
+        forked_execution.metadata.pop("requested_execution_id", None)
         
         # Initialize session for new execution
         session_id = self._state_adapter.initialize_session(
@@ -798,6 +837,14 @@ class ExecutionController(IExecutionController):
             initial_state=forked_exec_state,
         )
         forked_execution.session_id = session_id
+        forked_execution.metadata.update(
+            {
+                "forked_from": execution_id,
+                "source_checkpoint_id": checkpoint_id,
+                "fork_type": "checkpoint_fork",
+            }
+        )
+        self._sync_external_cache_metadata(forked_execution)
         
         # Persist forked execution
         self._exec_repo.add(forked_execution)

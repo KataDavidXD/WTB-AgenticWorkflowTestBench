@@ -153,6 +153,8 @@ NODE_RESOURCES: Dict[str, NodeResourceConfig] = {
     "rag_load_docs": RAG_LOAD_RESOURCES,
     "rag_chunk_split": RAG_CHUNK_RESOURCES,
     "rag_embed": RAG_EMBED_RESOURCES,
+    "rag_embed_docs": RAG_EMBED_RESOURCES,
+    "rag_embed_query": RAG_EMBED_RESOURCES,
     "rag_retrieve": RAG_RETRIEVE_RESOURCES,
     "rag_grade": RAG_GRADE_RESOURCES,
     "rag_generate": RAG_GENERATE_RESOURCES,

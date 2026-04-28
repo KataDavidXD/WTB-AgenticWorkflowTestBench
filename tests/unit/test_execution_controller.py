@@ -259,6 +259,89 @@ class TestRollback:
         with pytest.raises(ValueError, match="Checkpoint not found"):
             ctrl.rollback("exec-1", "nonexistent")
 
+    def test_rollback_syncs_external_cache_metadata(self):
+        adapter = MagicMock()
+        adapter.rollback.return_value = ExecutionState(
+            current_node_id="node_a",
+            workflow_variables={
+                "llm_cache_refs": {"answer": "cache-123"},
+                "llm_cache_hits": {"answer": True},
+            },
+            execution_path=["start"],
+            node_results={},
+        )
+        adapter.initialize_session = MagicMock()
+
+        execution = _make_execution(status=ExecutionStatus.COMPLETED)
+        execution.metadata = {
+            "actor_id": "actor_1",
+            "checkpoint_db_path": "/tmp/ray_actors/actor_1/wtb_checkpoints.db",
+            "llm_cache_path": "/tmp/ray_actors/actor_1/llm_response_cache.db",
+        }
+        exec_repo = MagicMock()
+        exec_repo.get.return_value = execution
+
+        ctrl = _make_controller(state_adapter=adapter, exec_repo=exec_repo)
+        result = ctrl.rollback("exec-1", "cp-789")
+
+        assert result.metadata["llm_cache_refs"] == {"answer": "cache-123"}
+        assert result.metadata["llm_cache_hits"] == {"answer": True}
+        assert result.metadata["actor_id"] == "actor_1"
+        assert result.metadata["cache_storage_scope"] == "actor_local"
+
+
+class TestFork:
+
+    def test_fork_preserves_external_cache_metadata(self):
+        adapter = MagicMock()
+        adapter.load_checkpoint.return_value = ExecutionState(
+            current_node_id="node_a",
+            workflow_variables={
+                "llm_cache_refs": {"answer": "cache-456"},
+                "llm_cache_hits": {"answer": False},
+            },
+            execution_path=["start"],
+            node_results={},
+        )
+        adapter.initialize_session = MagicMock(return_value="session-2")
+        adapter.set_current_session = MagicMock()
+        adapter.supports_graph_execution = MagicMock(return_value=False)
+        adapter.create_fork = MagicMock()
+
+        source_execution = _make_execution(status=ExecutionStatus.PAUSED)
+        source_execution.metadata = {
+            "actor_id": "actor_2",
+            "checkpoint_db_path": "/tmp/ray_actors/actor_2/wtb_checkpoints.db",
+            "llm_cache_path": "/tmp/ray_actors/actor_2/llm_response_cache.db",
+            "cache_storage_scope": "actor_local",
+            "llm_cache_refs": {"answer": "cache-456"},
+            "llm_cache_hits": {"answer": False},
+            "requested_execution_id": "requested-1",
+        }
+
+        exec_repo = MagicMock()
+        exec_repo.get.return_value = source_execution
+
+        workflow = _make_workflow()
+        workflow_repo = MagicMock()
+        workflow_repo.get.return_value = workflow
+
+        ctrl = _make_controller(
+            state_adapter=adapter,
+            exec_repo=exec_repo,
+            workflow_repo=workflow_repo,
+        )
+        forked = ctrl.fork("exec-2", "cp-321")
+
+        assert forked.metadata["actor_id"] == "actor_2"
+        assert forked.metadata["checkpoint_db_path"] == "/tmp/ray_actors/actor_2/wtb_checkpoints.db"
+        assert forked.metadata["llm_cache_path"] == "/tmp/ray_actors/actor_2/llm_response_cache.db"
+        assert forked.metadata["llm_cache_refs"] == {"answer": "cache-456"}
+        assert forked.metadata["llm_cache_hits"] == {"answer": False}
+        assert forked.metadata["cache_storage_scope"] == "actor_local"
+        assert forked.metadata["forked_from"] == "exec-2"
+        assert "requested_execution_id" not in forked.metadata
+
 
 # ═══════════════════════════════════════════════════════════════
 # Negative cases
