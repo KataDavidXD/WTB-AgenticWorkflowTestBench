@@ -360,6 +360,30 @@ class IBatchExecutionCoordinator(ABC):
         pass
     
     # ═══════════════════════════════════════════════════════════════════════════
+    # Checkpoint Retrieval (execution-aware storage)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def get_checkpoints(
+        self,
+        execution_id: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve checkpoint history using execution-specific storage.
+
+        When an execution carries actor-local storage metadata (e.g. from a
+        Ray batch run), builds a state adapter targeting the correct checkpoint
+        DB.  Falls back to the shared state adapter otherwise.
+
+        Args:
+            execution_id: Execution whose checkpoints to list
+
+        Returns:
+            List of checkpoint dicts (same format as
+            ``ExecutionController.get_checkpoint_history``)
+        """
+        return []
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # Convenience Methods (Optional, may have default implementations)
     # ═══════════════════════════════════════════════════════════════════════════
     

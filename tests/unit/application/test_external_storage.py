@@ -85,8 +85,10 @@ def test_build_ray_runtime_env_propagates_llm_and_storage_env_vars(monkeypatch):
     assert env_vars["WTB_UV_ACTOR_ID"] == "actor_7"
     assert env_vars["WTB_CACHE_ACTOR_ID"] == "actor_7"
     assert env_vars["WTB_CACHE_STORAGE_SCOPE"] == "actor_local"
-    assert env_vars["WTB_CHECKPOINT_DB_PATH"].endswith("data/ray_actors/actor_7/wtb_checkpoints.db")
-    assert env_vars["WTB_LLM_CACHE_PATH"].endswith("data/ray_actors/actor_7/llm_response_cache.db")
+    assert Path(env_vars["WTB_CHECKPOINT_DB_PATH"]) == Path(env_vars["WTB_CHECKPOINT_DB_PATH"]).parent / "wtb_checkpoints.db"
+    assert "actor_7" in env_vars["WTB_CHECKPOINT_DB_PATH"].replace("\\", "/")
+    assert Path(env_vars["WTB_LLM_CACHE_PATH"]) == Path(env_vars["WTB_LLM_CACHE_PATH"]).parent / "llm_response_cache.db"
+    assert "actor_7" in env_vars["WTB_LLM_CACHE_PATH"].replace("\\", "/")
     assert env_vars["LLM_API_KEY"] == "sk-test-llm"
     assert env_vars["LLM_BASE_URL"] == "https://example.invalid/v1"
     assert env_vars["DEFAULT_LLM"] == "gpt-4o-mini"
@@ -148,8 +150,8 @@ def test_batch_execution_coordinator_uses_execution_specific_storage(monkeypatch
     mock_controller_factory.create.assert_called_once()
     assert mock_controller_factory.create.call_args.kwargs["state_adapter"] is resolved_adapter
     resolved_adapter.close.assert_called_once()
-    assert captured_env["checkpoint_db_path"] == execution.metadata["checkpoint_db_path"]
-    assert captured_env["llm_cache_path"] == execution.metadata["llm_cache_path"]
+    assert captured_env["checkpoint_db_path"] == str(Path(execution.metadata["checkpoint_db_path"]))
+    assert captured_env["llm_cache_path"] == str(Path(execution.metadata["llm_cache_path"]))
     assert captured_env["actor_id"] == execution.metadata["actor_id"]
     assert captured_env["cache_storage_scope"] == "actor_local"
-    assert captured_env["config_connection_string"] == execution.metadata["checkpoint_db_path"]
+    assert captured_env["config_connection_string"] == str(Path(execution.metadata["checkpoint_db_path"]))

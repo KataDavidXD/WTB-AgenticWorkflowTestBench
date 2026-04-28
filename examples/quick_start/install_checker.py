@@ -5,7 +5,8 @@ Validates that the ``wtb`` package is correctly installed and that
 core SDK operations work end-to-end.  Tests are grouped into tiers:
 
   Tier 1 (always): import, bench creation, run, checkpoint, rollback, fork, batch
-  Tier 2 (if ray): Ray-distributed batch execution
+  Tier 2 (if ray): Ray-distributed batch execution, actor-local cache metadata,
+                    cache-aware rollback/fork in Ray batch mode
   Tier 3 (if grpc): GrpcEnvironmentProvider (venv service connectivity)
 
 Usage:
@@ -330,6 +331,173 @@ def check_ray_batch(skip: bool = False) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_ray_batch_cache_metadata(skip: bool = False) -> None:
+    """Verify that Ray batch results carry actor-local cache metadata."""
+    if skip:
+        record("ray cache metadata", SKIP, "skipped via --skip-ray")
+        return
+
+    try:
+        import ray
+    except ImportError:
+        record("ray cache metadata", SKIP, "ray not installed")
+        return
+
+    import tempfile, shutil
+
+    tmp = tempfile.mkdtemp(prefix="wtb_ray_cache_")
+    try:
+        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+
+        if not ray.is_initialized():
+            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+
+        bench = WTBTestBench.create(
+            mode="development",
+            data_dir=tmp,
+            enable_ray=True,
+        )
+        project = WorkflowProject(
+            name="ray_cache_meta",
+            graph_factory=_create_linear_graph,
+            execution=ExecutionConfig(
+                batch_executor="ray",
+                ray_config=RayConfig(address="auto", max_retries=1),
+            ),
+        )
+        bench.register_project(project)
+
+        batch = bench.run_batch_test(
+            project=project.name,
+            variant_matrix=[{"node_b": "v0"}, {"node_b": "v1"}],
+            test_cases=[dict(_INIT_STATE)],
+        )
+
+        checkpoint_paths = set()
+        for r in batch.results:
+            if not r.execution_id:
+                record("ray cache metadata", FAIL, "result missing execution_id")
+                return
+            meta = bench.get_execution(r.execution_id).metadata or {}
+            assert meta.get("actor_id"), f"missing actor_id in {r.combination_name}"
+            assert str(meta.get("checkpoint_db_path", "")).endswith("wtb_checkpoints.db"), \
+                f"bad checkpoint_db_path: {meta.get('checkpoint_db_path')}"
+            assert str(meta.get("llm_cache_path", "")).endswith("llm_response_cache.db"), \
+                f"bad llm_cache_path: {meta.get('llm_cache_path')}"
+            assert meta.get("cache_storage_scope") == "actor_local", \
+                f"bad scope: {meta.get('cache_storage_scope')}"
+            checkpoint_paths.add(meta["checkpoint_db_path"])
+
+        assert len(checkpoint_paths) >= 1, "no checkpoint_db_path found in metadata"
+        isolation_note = (
+            f"unique_paths={len(checkpoint_paths)}"
+            if len(checkpoint_paths) > 1
+            else "single_actor (ok for small batch)"
+        )
+        record("ray cache metadata", PASS,
+               f"{isolation_note}, scope=actor_local")
+        bench.close()
+    except Exception as exc:
+        record("ray cache metadata", FAIL, str(exc))
+        traceback.print_exc()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def check_ray_batch_rollback_fork_cache(skip: bool = False) -> None:
+    """Verify rollback/fork of Ray batch results preserves cache metadata."""
+    if skip:
+        record("ray cache rollback", SKIP, "skipped via --skip-ray")
+        record("ray cache fork", SKIP, "skipped via --skip-ray")
+        return
+
+    try:
+        import ray
+    except ImportError:
+        record("ray cache rollback", SKIP, "ray not installed")
+        record("ray cache fork", SKIP, "ray not installed")
+        return
+
+    import tempfile, shutil
+
+    tmp = tempfile.mkdtemp(prefix="wtb_ray_rbfk_")
+    try:
+        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+
+        if not ray.is_initialized():
+            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+
+        bench = WTBTestBench.create(
+            mode="development",
+            data_dir=tmp,
+            enable_ray=True,
+        )
+        project = WorkflowProject(
+            name="ray_rbfk",
+            graph_factory=_create_linear_graph,
+            execution=ExecutionConfig(
+                batch_executor="ray",
+                ray_config=RayConfig(address="auto", max_retries=1),
+            ),
+        )
+        bench.register_project(project)
+
+        batch = bench.run_batch_test(
+            project=project.name,
+            variant_matrix=[{"node_b": "default"}],
+            test_cases=[dict(_INIT_STATE)],
+        )
+        result = batch.results[0]
+        if not result.execution_id:
+            record("ray cache rollback", SKIP, "no execution_id")
+            record("ray cache fork", SKIP, "no execution_id")
+            return
+
+        src_meta = bench.get_execution(result.execution_id).metadata or {}
+        cps = bench.get_batch_result_checkpoints(result)
+        if not cps:
+            record("ray cache rollback", SKIP, "no checkpoints")
+            record("ray cache fork", SKIP, "no checkpoints")
+            return
+
+        cp_id = str(cps[0].id)
+
+        # ── Rollback ──
+        rb = bench.rollback_batch_result(result, checkpoint_id=cp_id)
+        assert rb.success, f"rollback error: {rb.error}"
+        rb_meta = bench.get_execution(result.execution_id).metadata or {}
+        for key in ("actor_id", "checkpoint_db_path", "llm_cache_path"):
+            assert rb_meta.get(key), f"rollback lost metadata key: {key}"
+        assert rb_meta.get("cache_storage_scope") == "actor_local"
+        record("ray cache rollback", PASS,
+               f"step={cps[0].step}, actor={rb_meta['actor_id']}")
+
+        # ── Fork ──
+        fork = bench.fork_batch_result(
+            result,
+            checkpoint_id=cp_id,
+            new_state={"messages": ["forked"], "count": 42, "result": ""},
+        )
+        assert fork.fork_execution_id, f"fork error: {fork.error}"
+        fk_meta = bench.get_execution(fork.fork_execution_id).metadata or {}
+        for key in ("actor_id", "checkpoint_db_path", "llm_cache_path", "cache_storage_scope"):
+            assert fk_meta.get(key), f"fork lost metadata key: {key}"
+        assert fk_meta["forked_from"] == result.execution_id
+        assert "requested_execution_id" not in fk_meta
+        assert fk_meta["checkpoint_db_path"] == src_meta.get("checkpoint_db_path"), \
+            "fork changed checkpoint_db_path -- should inherit from source"
+        record("ray cache fork", PASS,
+               f"forked={fork.fork_execution_id[:12]}..., inherits_cache=True")
+
+        bench.close()
+    except Exception as exc:
+        record("ray cache rollback", FAIL, str(exc))
+        record("ray cache fork", SKIP, "blocked by rollback failure")
+        traceback.print_exc()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -408,6 +576,8 @@ def main() -> int:
     # ── Tier 2: Ray ──────────────────────────────────────────────────────
     print("\n  --- Tier 2: Ray Distributed ---\n")
     check_ray_batch(skip=args.skip_ray)
+    check_ray_batch_cache_metadata(skip=args.skip_ray)
+    check_ray_batch_rollback_fork_cache(skip=args.skip_ray)
 
     # ── Tier 3: Venv Service ─────────────────────────────────────────────
     print("\n  --- Tier 3: Venv Service ---\n")

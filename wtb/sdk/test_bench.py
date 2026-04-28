@@ -709,14 +709,41 @@ class WTBTestBench:
                 error=str(e),
             )
     
+    def _checkpoint_dicts_to_domain(
+        self,
+        execution_id: str,
+        history: List[Dict[str, Any]],
+    ) -> List[Checkpoint]:
+        """Convert raw checkpoint dicts to domain Checkpoint objects."""
+        checkpoints = []
+        for cp in history:
+            writes = cp.get("writes") or {}
+            source = cp.get("source", "")
+            
+            if not writes and source and source not in ("input", "__start__", ""):
+                writes = {source: {}}
+            
+            checkpoints.append(Checkpoint(
+                id=CheckpointId(str(cp.get("checkpoint_id", cp.get("id", "")))),
+                execution_id=execution_id,
+                step=cp.get("step", 0),
+                node_writes=writes,
+                next_nodes=cp.get("next", []),
+                state_values=cp.get("values", {}),
+                created_at=cp.get("created_at") or datetime.now(timezone.utc),
+            ))
+        return checkpoints
+
     def get_batch_result_checkpoints(
         self,
         result: BatchTestResult,
     ) -> List[Checkpoint]:
         """
         Get checkpoints for a batch test result.
-        
-        Convenience method to list available checkpoints for rollback/fork.
+
+        Uses the BatchExecutionCoordinator to resolve execution-specific
+        storage (actor-local checkpoint DBs) before falling back to the
+        bench's own state adapter.
         
         Args:
             result: BatchTestResult from run_batch_test()
@@ -731,6 +758,15 @@ class WTBTestBench:
         """
         if not result.execution_id:
             return []
+
+        try:
+            coordinator = self.get_batch_coordinator()
+            history = coordinator.get_checkpoints(result.execution_id)
+            if history:
+                return self._checkpoint_dicts_to_domain(result.execution_id, history)
+        except Exception:
+            pass
+
         return self.get_checkpoints(result.execution_id)
     
     def _create_batch_coordinator(self) -> "BatchExecutionCoordinator":
@@ -971,24 +1007,7 @@ class WTBTestBench:
             return []
         
         history = self._exec_ctrl.get_checkpoint_history(execution_id)
-        checkpoints = []
-        for cp in history:
-            writes = cp.get("writes") or {}
-            source = cp.get("source", "")
-            
-            if not writes and source and source not in ("input", "__start__", ""):
-                writes = {source: {}}
-            
-            checkpoints.append(Checkpoint(
-                id=CheckpointId(str(cp.get("checkpoint_id", cp.get("id", "")))),
-                execution_id=execution_id,
-                step=cp.get("step", 0),
-                node_writes=writes,
-                next_nodes=cp.get("next", []),
-                state_values=cp.get("values", {}),
-                created_at=cp.get("created_at") or datetime.now(timezone.utc),
-            ))
-        return checkpoints
+        return self._checkpoint_dicts_to_domain(execution_id, history)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Capability Checks

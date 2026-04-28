@@ -21,7 +21,7 @@ data/
 infra_tests/
 docs_archive/
 file_processing/
-#docs/
+docs/
 #tests/
 
 

@@ -185,6 +185,34 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self._environment_provider = environment_provider
 
     # ═══════════════════════════════════════════════════════════════════════════
+    # Checkpoint Retrieval (execution-aware storage)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def get_checkpoints(
+        self,
+        execution_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve checkpoint history using execution-specific storage.
+
+        Opens a UoW, resolves the execution's storage metadata, builds an
+        adapter pointing at the correct checkpoint DB, and delegates to
+        ``ExecutionController.get_checkpoint_history``.
+        """
+        uow = self._uow_factory()
+        try:
+            uow.__enter__()
+            with self._controller_for_execution(uow, execution_id) as controller:
+                return controller.get_checkpoint_history(execution_id)
+        except Exception as e:
+            logger.debug(f"get_checkpoints via coordinator failed for {execution_id}: {e}")
+            return []
+        finally:
+            try:
+                uow.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # Single Operations
     # ═══════════════════════════════════════════════════════════════════════════
 
