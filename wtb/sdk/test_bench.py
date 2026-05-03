@@ -844,6 +844,7 @@ class WTBTestBench:
         proj = self._project_cache.get(project)
         gf_module: Optional[str] = None
         gf_name: Optional[str] = None
+        gf_pickled: Optional[bytes] = None
         if proj and callable(getattr(proj, "graph_factory", None)):
             gf = proj.graph_factory
             gf_module = getattr(gf, "__module__", None)
@@ -853,9 +854,17 @@ class WTBTestBench:
                 main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
                 if main_spec and main_spec.name:
                     gf_module = main_spec.name
+                else:
+                    try:
+                        import cloudpickle
+                        gf_pickled = cloudpickle.dumps(gf)
+                    except Exception:
+                        pass
         
         # Create domain BatchTest with workflow cache for batch runner
         batch_test = BatchTest(workflow_id=workflow.id, _workflow=workflow)
+        if gf_pickled is not None:
+            batch_test.metadata["_graph_factory_pickled"] = gf_pickled
         
         from wtb.domain.models.batch_test import VariantCombination
         for i, variant_config in enumerate(variant_matrix):

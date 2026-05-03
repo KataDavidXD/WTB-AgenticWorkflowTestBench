@@ -314,7 +314,15 @@ class LangGraphStateAdapter(IStateAdapter):
         if self._checkpointer is None or not self._owns_checkpointer:
             return
         try:
+            # Finalize WAL so the DB file is self-contained and no stale
+            # .wal/.shm files are left behind for the next process.
             if hasattr(self._checkpointer, "conn") and self._checkpointer.conn:
+                try:
+                    self._checkpointer.conn.execute(
+                        "PRAGMA wal_checkpoint(TRUNCATE)"
+                    )
+                except Exception:
+                    pass
                 self._checkpointer.conn.close()
             elif hasattr(self._checkpointer, "close"):
                 self._checkpointer.close()

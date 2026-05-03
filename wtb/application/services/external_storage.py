@@ -15,7 +15,14 @@ import os
 
 
 def _default_ray_storage_root() -> Path:
-    """Return the repo-local base directory for Ray actor storage."""
+    """Return the base directory for Ray actor storage.
+
+    Checks ``WTB_RAY_STORAGE_ROOT`` first so that tests can isolate each run
+    in its own temp directory.  Falls back to the repo-local default.
+    """
+    env = os.getenv("WTB_RAY_STORAGE_ROOT")
+    if env:
+        return Path(env).expanduser()
     return Path(__file__).resolve().parents[3] / "data" / "ray_actors"
 
 

@@ -51,7 +51,8 @@ grpc = [
     "protobuf>=4.25.0",
 ]
 venv = [
-    "uv-venv-manager>=0.1.0",
+    "grpcio>=1.60.0",
+    "protobuf>=4.25.0",
 ]
 observability = [
     "opentelemetry-api>=1.22.0",

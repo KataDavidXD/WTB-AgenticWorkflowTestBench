@@ -204,7 +204,10 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             with self._controller_for_execution(uow, execution_id) as controller:
                 return controller.get_checkpoint_history(execution_id)
         except Exception as e:
-            logger.debug(f"get_checkpoints via coordinator failed for {execution_id}: {e}")
+            logger.warning(
+                f"get_checkpoints via coordinator failed for {execution_id}: {e}",
+                exc_info=True,
+            )
             return []
         finally:
             try:

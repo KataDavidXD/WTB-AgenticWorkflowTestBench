@@ -322,6 +322,7 @@ def _create_variant_execution_actor_class():
             initial_state: Dict[str, Any],
             batch_test_id: str,
             workspace_data: Optional[Dict[str, Any]] = None,
+            graph_factory_pickled: Optional[bytes] = None,
         ) -> Dict[str, Any]:
             """
             Execute a single variant combination with optional workspace isolation.
@@ -387,6 +388,7 @@ def _create_variant_execution_actor_class():
                     workspace=workspace,  # Pass workspace for output file writing
                     graph_factory_module=graph_factory_module,
                     graph_factory_name=graph_factory_name,
+                    graph_factory_pickled=graph_factory_pickled,
                 )
                 
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -463,6 +465,7 @@ def _create_variant_execution_actor_class():
             workspace: Optional[Workspace] = None,
             graph_factory_module: Optional[str] = None,
             graph_factory_name: Optional[str] = None,
+            graph_factory_pickled: Optional[bytes] = None,
         ) -> Dict[str, Any]:
             """
             Run workflow execution with variants applied.
@@ -479,6 +482,9 @@ def _create_variant_execution_actor_class():
                 workspace: Optional workspace for output file isolation
                 graph_factory_module: Optional module containing graph factory (v1.8)
                 graph_factory_name: Optional name of graph factory function (v1.8)
+                graph_factory_pickled: Optional cloudpickle bytes of the factory
+                    function, used as fallback when module import fails (e.g.
+                    factory defined in __main__).
             
             Returns:
                 Dict with metrics, checkpoint_count, last_checkpoint_id, node_count, 
@@ -562,11 +568,27 @@ def _create_variant_execution_actor_class():
                             f"{graph_factory_module}.{graph_factory_name}"
                         )
                     except Exception as graph_err:
-                        logger.warning(
-                            f"Actor {self._actor_id}: Failed to create graph from factory "
-                            f"{graph_factory_module}.{graph_factory_name}: {graph_err}. "
-                            f"Falling back to legacy execution (no checkpoints)."
-                        )
+                        if graph_factory_pickled:
+                            try:
+                                import cloudpickle
+                                factory = cloudpickle.loads(graph_factory_pickled)
+                                langgraph_graph = factory()
+                                logger.info(
+                                    f"Actor {self._actor_id}: Created LangGraph graph "
+                                    f"from cloudpickle fallback"
+                                )
+                            except Exception as pkl_err:
+                                logger.warning(
+                                    f"Actor {self._actor_id}: cloudpickle fallback also "
+                                    f"failed: {pkl_err}. No checkpoints will be created."
+                                )
+                        else:
+                            logger.warning(
+                                f"Actor {self._actor_id}: Failed to create graph from "
+                                f"factory {graph_factory_module}.{graph_factory_name}: "
+                                f"{graph_err}. "
+                                f"Falling back to legacy execution (no checkpoints)."
+                            )
                 
                 # Run execution (ACID: via controller with UoW)
                 # v1.8: Pass graph for LangGraph execution with checkpoints
@@ -1367,6 +1389,9 @@ class RayBatchTestRunner(IBatchTestRunner):
             initial_state_ref = ray.put(batch_test.initial_state)
             batch_test_id_ref = ray.put(batch_test.id)
             
+            # Cloudpickle-serialized graph factory for __main__ fallback
+            graph_factory_pickled = batch_test.metadata.get("_graph_factory_pickled")
+            
             logger.info(
                 f"Starting batch test {batch_test.id} with "
                 f"{len(batch_test.variant_combinations)} variants"
@@ -1446,6 +1471,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                     initial_state=ray.get(initial_state_ref),
                     batch_test_id=ray.get(batch_test_id_ref),
                     workspace_data=workspace_data,  # Pass workspace (2026-01-16)
+                    graph_factory_pickled=graph_factory_pickled,
                 )
                 
                 pending_refs.append(ref)
