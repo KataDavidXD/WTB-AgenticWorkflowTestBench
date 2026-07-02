@@ -78,7 +78,7 @@ class RayFileTrackerService(IFileTrackingService):
             config_dict: FileTrackingConfig.to_dict() output
         """
         self._config_dict = config_dict
-        self._service: Optional["FileTrackerService"] = None
+        self._service: Optional[IFileTrackingService] = None
         self._initialized = False
         self._initialization_error: Optional[str] = None
     
@@ -104,9 +104,20 @@ class RayFileTrackerService(IFileTrackingService):
                 self._initialized = True
                 return
             
-            # Import and create service
-            from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
-            self._service = FileTrackerService(config)
+            if config.postgres_url:
+                from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
+
+                self._service = FileTrackerService(config)
+            else:
+                from pathlib import Path
+                from wtb.infrastructure.file_tracking.sqlite_service import (
+                    SqliteFileTrackingService,
+                )
+
+                self._service = SqliteFileTrackingService(
+                    workspace_path=Path(config.storage_path),
+                    db_name="filetrack.db",
+                )
             
             self._initialized = True
             logger.info("RayFileTrackerService initialized successfully")

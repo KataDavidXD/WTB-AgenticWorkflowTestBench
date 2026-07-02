@@ -17,9 +17,8 @@ ACID Compliance (v1.7):
 """
 
 import warnings
-from typing import Optional, Callable, TYPE_CHECKING, Tuple
+from typing import Optional, Callable, TYPE_CHECKING
 from dataclasses import dataclass
-from contextlib import contextmanager
 
 if TYPE_CHECKING:
     from wtb.sdk.test_bench import WTBTestBench
@@ -32,7 +31,6 @@ from wtb.domain.interfaces.batch_runner import IBatchTestRunner
 from wtb.config import WTBConfig, get_config
 from wtb.infrastructure.database import (
     UnitOfWorkFactory,
-    SQLAlchemyUnitOfWork,
     InMemoryUnitOfWork,
 )
 from wtb.infrastructure.adapters import InMemoryStateAdapter
@@ -120,6 +118,18 @@ class ExecutionControllerFactory:
         Returns:
             ManagedController with controller and managed UoW
         """
+        if file_tracking_service is None and self._config.file_tracking_config:
+            ft_config = self._config.file_tracking_config
+            if ft_config.enabled and not ft_config.postgres_url:
+                from pathlib import Path
+                from wtb.infrastructure.file_tracking import SqliteFileTrackingService
+
+                file_tracking_service = SqliteFileTrackingService(
+                    workspace_path=Path(ft_config.storage_path),
+                    db_name="filetrack.db",
+                )
+                output_dir = output_dir or str(Path(ft_config.storage_path) / "outputs")
+
         uow = UnitOfWorkFactory.create(
             mode=self._config.wtb_storage_mode,
             db_url=self._config.wtb_db_url,
@@ -426,6 +436,11 @@ class BatchTestRunnerFactory:
             config=ray_config,
             agentgit_db_url=config.agentgit_db_path,
             wtb_db_url=config.wtb_db_url or f"sqlite:///{config.data_dir}/wtb.db",
+            filetracker_config=(
+                config.file_tracking_config.to_dict()
+                if config.file_tracking_config and config.file_tracking_config.enabled
+                else None
+            ),
             environment_provider=env_provider,
         )
     
@@ -498,11 +513,25 @@ class BatchCoordinatorFactory:
         
         # Create state adapter using existing factory method
         state_adapter = ExecutionControllerFactory._create_state_adapter(config, None)
+
+        file_tracking = None
+        if config.file_tracking_config and config.file_tracking_config.enabled:
+            ft_config = config.file_tracking_config
+            if not ft_config.postgres_url:
+                from pathlib import Path
+                from wtb.infrastructure.file_tracking import SqliteFileTrackingService
+
+                file_tracking = SqliteFileTrackingService(
+                    workspace_path=Path(ft_config.storage_path),
+                    db_name="filetrack.db",
+                )
         
         return BatchExecutionCoordinator(
             uow_factory=uow_factory,
             controller_factory=DefaultExecutionControllerFactory(),
             state_adapter=state_adapter,
+            file_tracking=file_tracking,
+            config=config,
         )
     
     @staticmethod
@@ -738,6 +767,8 @@ class WTBTestBenchFactory:
         output_dir = None
         if enable_file_tracking:
             from wtb.infrastructure.file_tracking import SqliteFileTrackingService
+            from wtb.config import FileTrackingConfig
+
             file_tracking_service = SqliteFileTrackingService(
                 workspace_path=Path(data_dir),
                 db_name="filetrack.db"
@@ -753,6 +784,12 @@ class WTBTestBenchFactory:
         )
         
         config = WTBConfig.for_development(data_dir)
+        if enable_file_tracking:
+            config.filetracker_enabled = True
+            config.file_tracking_config = FileTrackingConfig.for_development(
+                storage_path=str(Path(data_dir)),
+                wtb_db_url=db_url,
+            )
         outbox_repo = getattr(uow, 'outbox', None)
         wrapped_ctrl = OutboxExecutionControllerDecorator(
             exec_ctrl, outbox_repo, commit_fn=uow.commit,

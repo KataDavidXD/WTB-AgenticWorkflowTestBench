@@ -25,7 +25,7 @@ Architecture:
     BaseCheckpointSaver (InMemory | SQLite | PostgreSQL)
 """
 
-from typing import Any, Optional, List, Dict, Union
+from typing import Any, Optional, List, Dict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -54,7 +54,6 @@ try:
     from langgraph.graph import StateGraph
     from langgraph.graph.state import CompiledStateGraph
     from langgraph.checkpoint.base import BaseCheckpointSaver
-    from langgraph.checkpoint.memory import MemorySaver
     
     _langgraph = _lg
     LANGGRAPH_AVAILABLE = True
@@ -180,6 +179,7 @@ class LangGraphStateAdapter(IStateAdapter):
         # Session tracking (v1.6: string IDs)
         self._current_thread_id: Optional[str] = None
         self._current_execution_id: Optional[str] = None
+        self._resume_checkpoint_id: Optional[str] = None
         
         # Node boundary tracking (per thread_id)
         self._node_boundaries: Dict[str, Dict[str, _NodeBoundaryTracker]] = {}
@@ -513,6 +513,7 @@ class LangGraphStateAdapter(IStateAdapter):
         
         # Load the checkpoint state
         state = self.load_checkpoint(to_checkpoint_id)
+        self._resume_checkpoint_id = to_checkpoint_id
         
         # Update current state to match checkpoint
         config = self.get_config(checkpoint_id=to_checkpoint_id)
@@ -704,7 +705,12 @@ class LangGraphStateAdapter(IStateAdapter):
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         
-        config = self.get_config()
+        resume_checkpoint_id = None
+        if initial_state is None:
+            resume_checkpoint_id = self._resume_checkpoint_id
+            self._resume_checkpoint_id = None
+
+        config = self.get_config(checkpoint_id=resume_checkpoint_id)
         result = self._compiled_graph.invoke(initial_state, config)
         
         return result

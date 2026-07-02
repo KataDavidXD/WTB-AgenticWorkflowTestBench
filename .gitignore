@@ -24,6 +24,9 @@ file_processing/
 docs/
 #tests/
 
+todo
+TODO
 
-examples/
+examples/*
+!examples/modes_quick_demo.py
 uv_venv_manager/

@@ -7,14 +7,12 @@ Skips gracefully when Ray is not installed.
 
 import pytest
 import os
+import socket
 import tempfile
-from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
-from datetime import datetime
 
 from wtb.domain.models.batch_test import (
     BatchTest,
-    BatchTestResult,
     BatchTestStatus,
     VariantCombination,
 )
@@ -22,7 +20,6 @@ from wtb.domain.models.workflow import (
     TestWorkflow,
     WorkflowNode,
     WorkflowEdge,
-    ExecutionStatus,
 )
 
 try:
@@ -79,13 +76,33 @@ def _make_batch_test(
     )
 
 
+def _assert_completed_batch(result: BatchTest, expected_count: int) -> None:
+    assert result.status == BatchTestStatus.COMPLETED
+    assert len(result.results) == expected_count
+    assert all(r.success for r in result.results), [
+        (r.combination_name, r.error_message) for r in result.results if not r.success
+    ]
+    assert len(result.execution_ids) == expected_count
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 @pytest.fixture(scope="module")
 def ray_init():
     """Initialize Ray once per module."""
     if not ray.is_initialized():
-        ray.init(num_cpus=2, ignore_reinit_error=True)
+        ray.init(
+            num_cpus=2,
+            ignore_reinit_error=True,
+            include_dashboard=False,
+            _metrics_export_port=_find_free_port(),
+        )
     yield
-    # Don't shutdown - let other test modules use it
+    ray.shutdown()
 
 
 @pytest.fixture
@@ -108,6 +125,29 @@ class TestRayAvailability:
     def test_runner_reports_available(self):
         RayBatchTestRunner = _try_import_runner()
         assert RayBatchTestRunner.is_available() is True
+
+    def test_docker_internal_venv_paths_stay_out_of_ray_runtime_env(self):
+        RayBatchTestRunner = _try_import_runner()
+
+        runtime_env = RayBatchTestRunner._build_ray_runtime_env(
+            "actor_0",
+            {
+                "type": "grpc_uv",
+                "env_path": "/data/envs/actor_0",
+                "python_path": "/data/envs/actor_0/.venv/bin/python",
+                "py_executable": "/data/envs/actor_0/.venv/bin/python",
+                "venv_path": "/data/envs/actor_0/.venv",
+                "env_vars": {"CUSTOM": "1"},
+            },
+        )
+
+        assert set(runtime_env) == {"env_vars"}
+        assert runtime_env["env_vars"]["WTB_UV_ENV_PATH"] == "/data/envs/actor_0"
+        assert runtime_env["env_vars"]["WTB_UV_PYTHON_PATH"] == (
+            "/data/envs/actor_0/.venv/bin/python"
+        )
+        assert "py_executable" not in runtime_env
+        assert "VIRTUAL_ENV" not in runtime_env["env_vars"]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -133,13 +173,8 @@ class TestBatchRun:
 
         batch = _make_batch_test()
 
-        try:
-            result = runner.run_batch_test(batch)
-            assert result.status in (BatchTestStatus.COMPLETED, BatchTestStatus.FAILED)
-        except Exception as e:
-            # Ray tests may fail due to missing DB setup; verify the error is not a code bug
-            assert "variant" in str(e).lower() or "workflow" in str(e).lower() or "database" in str(e).lower(), \
-                f"Unexpected error: {e}"
+        result = runner.run_batch_test(batch)
+        _assert_completed_batch(result, expected_count=2)
 
     def test_batch_with_graph_factory(self, ray_init, temp_data_dir):
         """Variants with graph_factory_module/name pass factory references to actors."""
@@ -166,11 +201,8 @@ class TestBatchRun:
 
         batch = _make_batch_test(combinations=combos)
 
-        try:
-            result = runner.run_batch_test(batch)
-            assert result.status in (BatchTestStatus.COMPLETED, BatchTestStatus.FAILED)
-        except Exception:
-            pass  # DB setup may be incomplete; structural test
+        result = runner.run_batch_test(batch)
+        _assert_completed_batch(result, expected_count=1)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -196,15 +228,11 @@ class TestCheckpointMetadata:
 
         batch = _make_batch_test()
 
-        try:
-            result = runner.run_batch_test(batch)
-            # If completed, check metadata on results
-            if result.results:
-                for r in result.results:
-                    if hasattr(r, 'execution_id') and r.execution_id:
-                        pass  # Metadata check requires execution store access
-        except Exception:
-            pass  # DB setup incomplete; structural verification
+        result = runner.run_batch_test(batch)
+
+        _assert_completed_batch(result, expected_count=2)
+        for r in result.results:
+            assert r.execution_id
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -221,14 +249,25 @@ class TestEventBridge:
 
         class FakeEventBridge:
             def __init__(self):
+                self.actor_pool_events = []
                 self.started_events = []
                 self.completed_events = []
+
+            @property
+            def event_bus(self):
+                return None
 
             def on_variant_execution_started(self, **kwargs):
                 self.started_events.append(kwargs)
 
             def on_variant_completed(self, **kwargs):
                 self.completed_events.append(kwargs)
+
+            def on_variant_execution_completed(self, **kwargs):
+                self.completed_events.append(kwargs)
+
+            def on_actor_pool_created(self, **kwargs):
+                self.actor_pool_events.append(kwargs)
 
             def on_variant_failed(self, **kwargs):
                 pass
@@ -240,6 +279,12 @@ class TestEventBridge:
                 pass
 
             def on_batch_test_failed(self, **kwargs):
+                pass
+
+            def on_batch_test_cancelled(self, **kwargs):
+                pass
+
+            def cleanup_batch(self, batch_test_id):
                 pass
 
         agentgit_db = os.path.join(temp_data_dir, "agentgit.db")
@@ -255,12 +300,12 @@ class TestEventBridge:
 
         batch = _make_batch_test()
 
-        try:
-            runner.run_batch_test(batch)
-            assert len(bridge.started_events) >= 1, "Expected at least one variant started event"
-        except Exception:
-            # If Ray init or DB fails before events, that's acceptable
-            pass
+        result = runner.run_batch_test(batch)
+
+        _assert_completed_batch(result, expected_count=2)
+        assert len(bridge.actor_pool_events) == 1
+        assert len(bridge.started_events) == 2
+        assert len(bridge.completed_events) == 2
 
 
 # ═══════════════════════════════════════════════════════════════

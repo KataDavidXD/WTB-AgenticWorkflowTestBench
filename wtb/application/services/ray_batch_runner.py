@@ -39,10 +39,9 @@ Usage:
     result = runner.run_batch_test(batch_test)
 """
 
-from typing import Dict, Any, List, Optional, Callable, Tuple
+from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from dataclasses import dataclass, field
-from enum import Enum
 import logging
 import threading
 import time
@@ -52,7 +51,6 @@ import copy
 from wtb.domain.models.batch_test import (
     BatchTest,
     BatchTestResult,
-    BatchTestStatus,
     VariantCombination,
 )
 from wtb.domain.models.workflow import (
@@ -60,7 +58,6 @@ from wtb.domain.models.workflow import (
     WorkflowNode,
     WorkflowEdge,
     Execution,
-    ExecutionState,
     ExecutionStatus,
 )
 from wtb.domain.interfaces.batch_runner import (
@@ -68,7 +65,6 @@ from wtb.domain.interfaces.batch_runner import (
     BatchRunnerStatus,
     BatchRunnerProgress,
     BatchRunnerError,
-    BatchRunnerExecutionError,
 )
 from wtb.domain.interfaces.state_adapter import IStateAdapter
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
@@ -364,7 +360,6 @@ def _create_variant_execution_actor_class():
                 # Load workspace if provided (2026-01-16)
                 if workspace_data:
                     try:
-                        from pathlib import Path
                         workspace = Workspace.from_dict(workspace_data)
                         workspace.activate()
                         logger.info(
@@ -505,6 +500,7 @@ def _create_variant_execution_actor_class():
                 ExecutionController,
                 DefaultNodeExecutor,
             )
+            from pathlib import Path
             
             # Create isolated UoW for this execution (ACID: Isolation)
             uow = self._uow_factory()
@@ -519,12 +515,20 @@ def _create_variant_execution_actor_class():
                     uow.workflows.add(workflow)
                 
                 # v1.7: Create execution controller with factory pattern
+                controller_output_dir = None
+                if self._file_tracking_service and self._filetracker_config:
+                    controller_output_dir = str(
+                        Path(self._filetracker_config["storage_path"]) / "outputs"
+                    )
+
                 controller = ExecutionController(
                     execution_repository=uow.executions,
                     workflow_repository=uow.workflows,
                     state_adapter=self._state_adapter,
                     node_executor=DefaultNodeExecutor(),
                     unit_of_work=uow,  # v1.7: Pass UoW for transaction management
+                    file_tracking_service=self._file_tracking_service,
+                    output_dir=controller_output_dir,
                 )
                 
                 # v1.7: Add variant info to initial state (like ThreadPoolBatchTestRunner)
@@ -647,7 +651,12 @@ def _create_variant_execution_actor_class():
                 # Track output files if FileTracker is configured
                 files_tracked = 0
                 file_commit_id = None
-                if self._file_tracking_service:
+                if self._file_tracking_service and controller_output_dir:
+                    file_commit_id = self._file_tracking_service.get_commit_for_checkpoint(
+                        execution.checkpoint_id or ""
+                    )
+                    files_tracked = 1 if file_commit_id else 0
+                elif self._file_tracking_service:
                     try:
                         output_files = self._collect_output_files(
                             execution, 
@@ -1197,8 +1206,8 @@ class RayBatchTestRunner(IBatchTestRunner):
         """
         import os as _os
         
-        ray_env: Dict[str, Any] = dict(raw_env or {})
-        env_vars: Dict[str, str] = dict(ray_env.get("env_vars", {}) or {})
+        ray_env: Dict[str, Any] = {}
+        env_vars: Dict[str, str] = dict((raw_env or {}).get("env_vars", {}) or {})
         metadata_vars: Dict[str, str] = {
             "WTB_UV_ENV_TYPE": raw_env.get("type", "unknown"),
             "WTB_UV_ENV_PATH": raw_env.get("env_path", ""),
@@ -1444,18 +1453,6 @@ class RayBatchTestRunner(IBatchTestRunner):
                         logger.warning(f"Failed to create workspace for {combo.name}: {ws_error}")
                         workspace = None
                         workspace_data = None
-                
-                # Emit variant execution started event (FLAW 8 fix)
-                if self._event_bridge:
-                    self._event_bridge.on_variant_execution_started(
-                        execution_id=execution_id,
-                        batch_test_id=batch_test.id,
-                        actor_id="",
-                        combination_name=combo.name,
-                        variants=combo.variants,
-                        queue_position=batch_test.variant_combinations.index(combo),
-                        total_in_queue=len(batch_test.variant_combinations),
-                    )
                 
                 # Emit variant execution started event (FLAW 8 fix)
                 if self._event_bridge:
@@ -2023,11 +2020,21 @@ class RayBatchTestRunner(IBatchTestRunner):
             return None
         
         try:
-            from wtb.infrastructure.file_tracking import FileTrackerService
-            from wtb.infrastructure.file_tracking.config import FileTrackingConfig
+            from pathlib import Path
+            from wtb.config import FileTrackingConfig
             
             config = FileTrackingConfig.from_dict(self._filetracker_config)
-            return FileTrackerService(config)
+            if config.postgres_url:
+                from wtb.infrastructure.file_tracking import FileTrackerService
+
+                return FileTrackerService(config)
+
+            from wtb.infrastructure.file_tracking import SqliteFileTrackingService
+
+            return SqliteFileTrackingService(
+                workspace_path=Path(config.storage_path),
+                db_name="filetrack.db",
+            )
         except Exception as e:
             logger.warning(f"Failed to create file tracking service: {e}")
             return None

@@ -25,12 +25,6 @@ from wtb.domain.interfaces.execution_controller import IExecutionController
 from wtb.domain.interfaces.state_adapter import IStateAdapter, CheckpointTrigger
 from wtb.domain.interfaces.node_executor import INodeExecutor, NodeExecutionResult
 from wtb.domain.interfaces.repositories import IExecutionRepository, IWorkflowRepository
-
-if TYPE_CHECKING:
-    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
-    from wtb.domain.interfaces.file_tracking import IFileTrackingService
-
-logger = logging.getLogger(__name__)
 from wtb.domain.models import (
     Execution,
     ExecutionState,
@@ -38,6 +32,12 @@ from wtb.domain.models import (
     TestWorkflow,
     WorkflowNode,
 )
+
+if TYPE_CHECKING:
+    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+    from wtb.domain.interfaces.file_tracking import IFileTrackingService
+
+logger = logging.getLogger(__name__)
 
 
 _SAFE_COMPARE_OPS = {
@@ -404,7 +404,12 @@ class ExecutionController(IExecutionController):
                 final_state = self._state_adapter.execute(initial_state)
             elif execution.status == ExecutionStatus.PAUSED:
                 execution.resume()
+                resume_checkpoint_id = (execution.metadata or {}).get("resume_checkpoint_id")
+                if resume_checkpoint_id and hasattr(self._state_adapter, "_resume_checkpoint_id"):
+                    self._state_adapter._resume_checkpoint_id = resume_checkpoint_id
                 final_state = self._state_adapter.execute(None)
+                if execution.metadata and "resume_checkpoint_id" in execution.metadata:
+                    execution.metadata.pop("resume_checkpoint_id", None)
             else:
                 raise RuntimeError(f"Cannot run execution in status {execution.status.value}")
             
@@ -794,6 +799,8 @@ class ExecutionController(IExecutionController):
         # Domain model validates transition, clones state, clears errors, sets PAUSED
         execution.restore_from_checkpoint(restored_state)
         execution.checkpoint_id = checkpoint_id
+        execution.metadata = dict(execution.metadata or {})
+        execution.metadata["resume_checkpoint_id"] = checkpoint_id
         self._sync_external_cache_metadata(execution)
         
         # File restore is keyed by checkpoint_id. The ideal path requires the

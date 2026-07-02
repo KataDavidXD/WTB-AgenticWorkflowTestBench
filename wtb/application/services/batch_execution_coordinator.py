@@ -66,6 +66,7 @@ from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 from wtb.application.services.external_storage import resolve_execution_storage_paths
 
 if TYPE_CHECKING:
+    from wtb.domain.interfaces.execution_controller import IExecutionController
     from wtb.domain.interfaces.unit_of_work import IUnitOfWork
     from wtb.domain.interfaces.state_adapter import IStateAdapter
     from wtb.domain.interfaces.file_tracking import IFileTrackingService
@@ -198,6 +199,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
     def get_checkpoints(
         self,
         execution_id: str,
+        graph: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve checkpoint history using execution-specific storage.
 
@@ -208,7 +210,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         uow = self._uow_factory()
         try:
             uow.__enter__()
-            with self._controller_for_execution(uow, execution_id) as controller:
+            with self._controller_for_execution(uow, execution_id, graph=graph) as controller:
                 return controller.get_checkpoint_history(execution_id)
         except Exception as e:
             logger.warning(
