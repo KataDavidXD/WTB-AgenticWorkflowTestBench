@@ -105,8 +105,8 @@ class TestExecutionControllerFork:
         
         assert forked_exec.workflow_id == source_exec.workflow_id
     
-    def test_fork_has_pending_status(self, controller):
-        """Forked execution should start in PENDING status."""
+    def test_fork_has_paused_status(self, controller):
+        """Forked execution should start in PAUSED status so it can resume."""
         workflow = controller._workflow_repo.get("test-workflow-1")
         source_exec = controller.create_execution(workflow=workflow)
         
@@ -119,7 +119,7 @@ class TestExecutionControllerFork:
         
         forked_exec = controller.fork(source_exec.id, checkpoint_id)
         
-        assert forked_exec.status == ExecutionStatus.PENDING
+        assert forked_exec.status == ExecutionStatus.PAUSED
     
     def test_fork_has_new_session_id(self, controller):
         """Forked execution should have new session_id."""

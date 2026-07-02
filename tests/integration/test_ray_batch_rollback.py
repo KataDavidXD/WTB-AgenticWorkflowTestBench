@@ -429,7 +429,7 @@ class TestCoordinatorBehavior:
         
         mock_forked = MagicMock(spec=Execution)
         mock_forked.id = "forked-789"
-        mock_forked.status = ExecutionStatus.PENDING
+        mock_forked.status = ExecutionStatus.PAUSED
         mock_forked.state = MagicMock()
         
         mock_controller = MagicMock()

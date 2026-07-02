@@ -657,6 +657,11 @@ def _create_variant_execution_actor_class():
                         if output_files:
                             # v1.6: checkpoint_id is now str (legacy agent field was int)
                             cp_id = execution.checkpoint_id or ""
+                            if not cp_id:
+                                raise RuntimeError(
+                                    "Execution produced output files but has no checkpoint_id "
+                                    "for CAS file linking"
+                                )
                             tracking_result = self._file_tracking_service.track_and_link(
                                 checkpoint_id=cp_id,
                                 file_paths=output_files,
@@ -670,7 +675,8 @@ def _create_variant_execution_actor_class():
                                 f"for execution {execution_id}"
                             )
                     except Exception as e:
-                        logger.warning(f"File tracking failed: {e}")
+                        logger.error(f"File tracking failed: {e}")
+                        raise
                 
                 # Calculate metrics from execution results
                 metrics = self._calculate_metrics(execution)

@@ -417,9 +417,6 @@ class ExecutionController(IExecutionController):
                 if "messages" in final_state:
                     execution.state.execution_path = final_state.get("messages", [])
             
-            if self._file_tracking and self._file_tracking.is_available():
-                self._track_output_files(execution, final_state)
-            
             if hasattr(self._state_adapter, 'get_config'):
                 try:
                     cfg = self._state_adapter.get_config()
@@ -430,6 +427,9 @@ class ExecutionController(IExecutionController):
                         ).get("checkpoint_id")
                 except Exception:
                     pass
+
+            if self._file_tracking and self._file_tracking.is_available():
+                self._track_checkpoint_history_output_files(execution, final_state)
             
             execution.complete()
             
@@ -449,13 +449,44 @@ class ExecutionController(IExecutionController):
         
         return execution
     
-    def _track_output_files(self, execution: Execution, final_state: Any) -> None:
-        """Write output files to disk and track them."""
-        import os
-        from pathlib import Path
-        
+    def _track_checkpoint_history_output_files(self, execution: Execution, final_state: Any) -> None:
+        """Link every checkpoint's output files to a CAS commit."""
         if not isinstance(final_state, dict):
             return
+
+        linked_count = 0
+        history = []
+        get_history = getattr(self._state_adapter, "get_checkpoint_history", None)
+        if callable(get_history):
+            try:
+                history = get_history()
+            except Exception as e:
+                logger.warning(f"Could not read checkpoint history for file tracking: {e}")
+
+        checkpoints = []
+        for cp in history or []:
+            checkpoint_id = cp.get("checkpoint_id") or cp.get("id")
+            values = cp.get("values") or {}
+            output_files = values.get("_output_files")
+            step = cp.get("step", 0)
+            if checkpoint_id and isinstance(output_files, dict) and output_files:
+                checkpoints.append((step, checkpoint_id, output_files))
+
+        checkpoints.sort(key=lambda item: item[0])
+        for _, checkpoint_id, output_files in checkpoints:
+            if self._get_commit_for_checkpoint(checkpoint_id):
+                continue
+            written_paths = self._write_output_files(output_files)
+            if not written_paths:
+                raise RuntimeError(f"Checkpoint {checkpoint_id} has _output_files but no files were written")
+            result = self._track_paths_for_checkpoint(
+                checkpoint_id=checkpoint_id,
+                file_paths=written_paths,
+                message=f"Checkpoint {checkpoint_id} output files",
+            )
+            if not result or not getattr(result, "commit_id", None):
+                raise RuntimeError(f"Failed to link files for checkpoint {checkpoint_id}")
+            linked_count += 1
         
         output_files_data = final_state.get("_output_files", {})
         if not isinstance(output_files_data, dict):
@@ -474,56 +505,118 @@ class ExecutionController(IExecutionController):
         
         if not output_files_data:
             return
-        
-        # Determine output directory
-        if self._output_dir:
-            output_dir = Path(self._output_dir)
+
+        written_paths = self._write_output_files(output_files_data)
+        if not written_paths:
+            raise RuntimeError("Final state has _output_files but no files were written")
+
+        commit_id = self._get_commit_for_checkpoint(execution.checkpoint_id)
+        if not commit_id:
+            tracking_result = self._track_paths_for_checkpoint(
+                    checkpoint_id=execution.checkpoint_id,
+                    file_paths=written_paths,
+                    message=f"Execution {execution.id} output files",
+                )
+            commit_id = getattr(tracking_result, "commit_id", None)
         else:
-            output_dir = Path("outputs")
-        
+            tracking_result = None
+
+        if not commit_id:
+            raise RuntimeError(f"Final checkpoint {execution.checkpoint_id} has no linked file commit")
+
+        execution.state.workflow_variables["_file_tracking_result"] = {
+            "commit_id": commit_id,
+            "files_tracked": getattr(tracking_result, "files_tracked", len(written_paths)),
+            "total_size_bytes": getattr(tracking_result, "total_size_bytes", 0),
+            "linked_checkpoints": linked_count,
+        }
+
+        logger.info(
+            f"Linked output files for {linked_count} checkpoints "
+            f"for execution {execution.id}"
+        )
+
+    def _write_output_files(self, output_files_data: Dict[str, Any]) -> List[str]:
+        """Materialize _output_files under output_dir and return absolute paths."""
+        import json
+        from pathlib import Path
+
+        if not output_files_data:
+            return []
+
+        output_dir = Path(self._output_dir) if self._output_dir else Path("outputs")
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Write files to disk
+
         written_paths: List[str] = []
         for filename, content in output_files_data.items():
             try:
                 file_path = output_dir / filename
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 if isinstance(content, bytes):
                     file_path.write_bytes(content)
                 elif isinstance(content, str):
                     file_path.write_text(content, encoding="utf-8")
                 else:
-                    import json
-                    file_path.write_text(json.dumps(content, indent=2), encoding="utf-8")
-                
+                    file_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
+
                 written_paths.append(str(file_path.absolute()))
             except Exception as e:
                 logger.warning(f"Failed to write output file {filename}: {e}")
-        
-        if not written_paths:
-            return
-        
-        # Track written files
+
+        return written_paths
+
+    def _track_paths_for_checkpoint(
+        self,
+        checkpoint_id: Optional[str],
+        file_paths: List[str],
+        message: Optional[str] = None,
+    ):
+        """Track file paths and link the CAS commit to checkpoint_id."""
+        if not self._file_tracking or not file_paths:
+            return None
+
+        if checkpoint_id and hasattr(self._file_tracking, "track_and_link"):
+            return self._file_tracking.track_and_link(
+                checkpoint_id=checkpoint_id,
+                file_paths=file_paths,
+                message=message,
+            )
+
+        result = self._file_tracking.track_files(file_paths=file_paths, message=message)
+        if checkpoint_id and result and getattr(result, "commit_id", None):
+            link_fn = getattr(self._file_tracking, "link_to_checkpoint", None)
+            if callable(link_fn):
+                link_fn(checkpoint_id, result.commit_id)
+        return result
+
+    def _get_commit_for_checkpoint(self, checkpoint_id: Optional[str]) -> Optional[str]:
+        if not checkpoint_id or not self._file_tracking:
+            return None
+        get_commit = getattr(self._file_tracking, "get_commit_for_checkpoint", None)
+        if not callable(get_commit):
+            return None
         try:
-            tracking_result = self._file_tracking.track_files(
-                file_paths=written_paths,
-                message=f"Execution {execution.id} output files",
-            )
-            
-            execution.state.workflow_variables["_file_tracking_result"] = {
-                "commit_id": tracking_result.commit_id,
-                "files_tracked": tracking_result.files_tracked,
-                "total_size_bytes": tracking_result.total_size_bytes,
-            }
-            
-            logger.info(
-                f"Tracked {tracking_result.files_tracked} files "
-                f"for execution {execution.id}"
-            )
-        except Exception as e:
-            logger.warning(f"File tracking failed (non-fatal): {e}")
+            return get_commit(checkpoint_id)
+        except Exception:
+            return None
+
+    def _require_checkpoint_file_commit(
+        self,
+        checkpoint_id: Optional[str],
+    ) -> Optional[str]:
+        """Require checkpoint_id to have a CAS file commit."""
+        if not checkpoint_id or not self._file_tracking or not self._file_tracking.is_available():
+            return None
+
+        existing = self._get_commit_for_checkpoint(checkpoint_id)
+        if existing:
+            return existing
+
+        raise RuntimeError(
+            f"Checkpoint {checkpoint_id} has no linked file commit. "
+            "Files must be linked with track_and_link at checkpoint creation time."
+        )
     
     def _run_with_node_executor(self, execution: Execution) -> Execution:
         """Legacy execution using DefaultNodeExecutor with WTB workflow nodes."""
@@ -646,7 +739,13 @@ class ExecutionController(IExecutionController):
         execution = self._get_execution(execution_id)
         
         if not execution.can_resume():
-            raise ValueError(f"Cannot resume execution in status {execution.status.value}")
+            if (
+                execution.status == ExecutionStatus.PENDING
+                and (execution.metadata or {}).get("fork_type") == "checkpoint_fork"
+            ):
+                execution.status = ExecutionStatus.PAUSED
+            else:
+                raise ValueError(f"Cannot resume execution in status {execution.status.value}")
         
         if modified_state:
             execution.state.workflow_variables.update(modified_state)
@@ -697,50 +796,34 @@ class ExecutionController(IExecutionController):
         execution.checkpoint_id = checkpoint_id
         self._sync_external_cache_metadata(execution)
         
-        # File restore (reads from original restored_state, writes to cloned execution.state)
+        # File restore is keyed by checkpoint_id. The ideal path requires the
+        # checkpoint to already be linked to a CAS file commit.
         if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
-            self._restore_output_files(execution, restored_state)
+            self._restore_checkpoint_files(execution, checkpoint_id, restored_state)
         
         self._exec_repo.update(execution)
         self._commit()
         
         return execution
     
-    def _restore_output_files(self, execution: Execution, source_state: ExecutionState) -> None:
-        """Restore output files from a checkpoint state."""
-        import json
-        from pathlib import Path
-        
-        files_restored_count = 0
-        file_restore_error = None
-        
-        try:
-            output_files_data = source_state.workflow_variables.get("_output_files")
-            if not output_files_data or not isinstance(output_files_data, dict):
-                return
-            
-            output_dir = Path(self._output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            for filename, content in output_files_data.items():
-                try:
-                    file_path = output_dir / filename
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    if isinstance(content, bytes):
-                        file_path.write_bytes(content)
-                    elif isinstance(content, str):
-                        file_path.write_text(content, encoding="utf-8")
-                    else:
-                        file_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
-                    
-                    files_restored_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to restore file {filename}: {e}")
-        except Exception as e:
-            file_restore_error = str(e)
-            logger.warning(f"File restore failed (non-fatal): {e}")
-        
+    def _restore_checkpoint_files(
+        self,
+        execution: Execution,
+        checkpoint_id: str,
+        source_state: ExecutionState,
+    ) -> None:
+        """Restore checkpoint files via required CAS checkpoint link."""
+        self._require_checkpoint_file_commit(checkpoint_id)
+        restore_fn = getattr(self._file_tracking, "restore_from_checkpoint", None)
+        if not callable(restore_fn):
+            raise RuntimeError("File tracking service does not support restore_from_checkpoint")
+
+        result = restore_fn(checkpoint_id)
+        files_restored_count = getattr(result, "files_restored", 0)
+        file_restore_error = getattr(result, "error_message", None)
+        if file_restore_error:
+            raise RuntimeError(file_restore_error)
+
         execution.state.workflow_variables["_file_restore_status"] = {
             "attempted": True,
             "success": files_restored_count > 0,
@@ -788,6 +871,8 @@ class ExecutionController(IExecutionController):
         
         # Load checkpoint state
         checkpoint_state = self._state_adapter.load_checkpoint(checkpoint_id)
+        if self._file_tracking and self._file_tracking.is_available():
+            self._require_checkpoint_file_commit(checkpoint_id)
         
         # Merge checkpoint state with new_initial_state
         forked_state_vars = {}
@@ -821,11 +906,12 @@ class ExecutionController(IExecutionController):
             node_results={},
         )
         
-        # Create new execution record
+        # Create new execution record. A checkpoint fork is resumable from the
+        # forked LangGraph thread, so it starts PAUSED rather than PENDING.
         forked_execution = Execution(
             id=fork_execution_id,
             workflow_id=source_execution.workflow_id,
-            status=ExecutionStatus.PENDING,
+            status=ExecutionStatus.PAUSED,
             state=forked_exec_state,
             metadata=copy.deepcopy(source_execution.metadata or {}),
         )
@@ -837,6 +923,20 @@ class ExecutionController(IExecutionController):
             initial_state=forked_exec_state,
         )
         forked_execution.session_id = session_id
+
+        # Apply variant overrides to the forked LangGraph thread. create_fork()
+        # copies checkpoint state and next-node metadata; update_state() overlays
+        # the caller's changes while preserving the fork's independent thread.
+        if (
+            new_initial_state
+            and self._state_adapter.supports_graph_execution()
+            and hasattr(self._state_adapter, "update_state")
+        ):
+            try:
+                self._state_adapter.update_state(forked_state_vars)
+            except Exception as e:
+                logger.warning(f"Could not apply fork initial state: {e}")
+
         forked_execution.metadata.update(
             {
                 "forked_from": execution_id,

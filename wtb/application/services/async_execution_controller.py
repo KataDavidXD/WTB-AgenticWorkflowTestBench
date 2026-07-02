@@ -481,15 +481,21 @@ class AsyncExecutionController:
             else:
                 raise RuntimeError("State adapter does not support forking")
             
-            # Create new execution record
+            # Create new execution record. A checkpoint fork is resumable from
+            # the forked thread, so it starts PAUSED rather than PENDING.
             fork_execution = Execution(
                 id=new_execution_id,
                 workflow_id=self._current_execution_var.get().workflow_id,
                 state=await self._state_adapter.aget_current_state() if not from_checkpoint_id else 
                       await self._state_adapter.aload_checkpoint(from_checkpoint_id),
-                status=ExecutionStatus.PENDING,
-                parent_execution_id=self._current_execution_var.get().id,
+                status=ExecutionStatus.PAUSED,
                 session_id=fork_thread_id,
+                metadata={
+                    **(self._current_execution_var.get().metadata or {}),
+                    "forked_from": self._current_execution_var.get().id,
+                    "source_checkpoint_id": from_checkpoint_id,
+                    "fork_type": "checkpoint_fork",
+                },
             )
             
             await uow.executions.aadd(fork_execution)
@@ -501,7 +507,7 @@ class AsyncExecutionController:
                 uow_factory=self._uow_factory,
                 file_tracking_service=self._file_tracking,
             )
-            fork_controller._current_execution = fork_execution
+            fork_controller._current_execution_var.set(fork_execution)
             
             logger.info(
                 f"Created async fork: {self._current_execution_var.get().id} -> {new_execution_id}"

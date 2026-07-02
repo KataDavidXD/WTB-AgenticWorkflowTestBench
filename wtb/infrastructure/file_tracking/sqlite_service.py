@@ -607,6 +607,95 @@ class SqliteFileTrackingService(IFileTrackingService):
                 success=success,
                 error_message=error_message,
             )
+
+    def restore_to_workspace(
+        self,
+        commit_id: str,
+        workspace_output_dir: str,
+    ) -> FileRestoreResult:
+        """
+        Restore files from a commit under a separate workspace output directory.
+
+        This preserves paths relative to the tracked workspace/output root when
+        possible, so two processes can materialize different checkpoint/fork
+        folders side-by-side without overwriting the canonical output folder.
+        """
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT commit_id FROM commits WHERE commit_id = ?",
+                (commit_id,)
+            )
+            if cursor.fetchone() is None:
+                raise CommitNotFoundError(f"Commit not found: {commit_id}")
+
+            cursor.execute(
+                """
+                SELECT file_path, blob_hash, file_size
+                FROM mementos WHERE commit_id = ?
+                """,
+                (commit_id,)
+            )
+            rows = cursor.fetchall()
+
+            output_dir = Path(workspace_output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            workspace_root = self._workspace.resolve()
+            canonical_output = (self._workspace / "outputs").resolve()
+
+            restored_paths = []
+            total_size = 0
+            errors = []
+
+            for row in rows:
+                original_path = Path(row["file_path"])
+                blob_hash = row["blob_hash"]
+                file_size = row["file_size"]
+
+                try:
+                    resolved_original = original_path.resolve()
+                    try:
+                        rel_path = resolved_original.relative_to(canonical_output)
+                    except ValueError:
+                        try:
+                            rel_path = resolved_original.relative_to(workspace_root)
+                        except ValueError:
+                            rel_path = Path(original_path.name)
+
+                    target_path = output_dir / rel_path
+                    if self._restore_blob(blob_hash, str(target_path)):
+                        restored_paths.append(str(target_path))
+                        total_size += file_size
+                    else:
+                        errors.append(f"Failed to restore {original_path}")
+                except Exception as e:
+                    errors.append(f"Failed to restore {original_path}: {e}")
+
+            return FileRestoreResult(
+                commit_id=commit_id,
+                files_restored=len(restored_paths),
+                total_size_bytes=total_size,
+                restored_paths=restored_paths,
+                success=len(errors) == 0,
+                error_message="; ".join(errors) if errors else None,
+            )
+
+    def restore_checkpoint_to_workspace(
+        self,
+        checkpoint_id: str,
+        workspace_output_dir: str,
+    ) -> FileRestoreResult:
+        """
+        Restore checkpoint-linked files under a separate workspace output dir.
+        """
+        commit_id = self.get_commit_for_checkpoint(checkpoint_id)
+        if commit_id is None:
+            raise CheckpointLinkError(
+                f"No commit linked to checkpoint {checkpoint_id}"
+            )
+        return self.restore_to_workspace(commit_id, workspace_output_dir)
     
     def get_commit_for_checkpoint(
         self,

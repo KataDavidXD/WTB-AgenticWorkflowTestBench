@@ -70,6 +70,7 @@ def mock_file_tracking():
     service = MagicMock()
     service.is_available.return_value = True
     service.restore_commit.return_value = MagicMock(files_restored=3)
+    service.get_commit_for_checkpoint.return_value = "ft-linked-checkpoint"
     return service
 
 
@@ -91,7 +92,7 @@ def mock_forked_execution():
     """Create mock forked Execution."""
     execution = MagicMock(spec=Execution)
     execution.id = str(uuid.uuid4())
-    execution.status = ExecutionStatus.PENDING
+    execution.status = ExecutionStatus.PAUSED
     execution.state = MagicMock(spec=ExecutionState)
     execution.state.workflow_variables = {}
     return execution
@@ -208,6 +209,27 @@ class TestRollback:
         assert file_restore_event.payload["execution_id"] == exec_id
         assert file_restore_event.payload["target_checkpoint_id"] == checkpoint_id
         assert "source_commit_id" in file_restore_event.payload
+
+    def test_rollback_resolves_file_commit_from_checkpoint_link(
+        self,
+        coordinator,
+        mock_uow,
+        mock_file_tracking,
+    ):
+        """Rollback audit should use checkpoint_id -> file_commit_id link."""
+        exec_id = str(uuid.uuid4())
+        checkpoint_id = str(uuid.uuid4())
+        mock_file_tracking.get_commit_for_checkpoint.return_value = "linked-from-cp"
+
+        coordinator.rollback(exec_id, checkpoint_id)
+
+        mock_file_tracking.get_commit_for_checkpoint.assert_called_with(checkpoint_id)
+        file_restore_event = next(
+            call_args.args[0]
+            for call_args in mock_uow.outbox.add.call_args_list
+            if call_args.args[0].event_type == OutboxEventType.ROLLBACK_FILE_RESTORE
+        )
+        assert file_restore_event.payload["source_commit_id"] == "linked-from-cp"
     
     def test_rollback_handles_errors_gracefully(
         self, 

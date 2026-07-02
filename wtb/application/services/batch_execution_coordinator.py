@@ -94,6 +94,12 @@ class DefaultExecutionControllerFactory(IExecutionControllerFactory):
             ExecutionController,
             DefaultNodeExecutor,
         )
+        import os
+
+        output_dir = None
+        workspace = getattr(file_tracking_service, "_workspace", None)
+        if workspace is not None:
+            output_dir = os.path.join(str(workspace), "outputs")
 
         return ExecutionController(
             execution_repository=uow.executions,
@@ -102,6 +108,7 @@ class DefaultExecutionControllerFactory(IExecutionControllerFactory):
             node_executor=DefaultNodeExecutor(),
             unit_of_work=uow,
             file_tracking_service=file_tracking_service,
+            output_dir=output_dir,
         )
 
 
@@ -263,8 +270,9 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                 # Check venv compatibility post-rollback and emit warning if drifted
                 self._check_venv_compat_after_rollback(execution, checkpoint_id)
 
-                # Extract file_commit_id from execution state if available
-                file_commit_id = self._extract_file_commit_id(execution)
+                # checkpoint_id is the canonical handle; file_commit_id is
+                # resolved internally from the checkpoint->CAS link for audit.
+                file_commit_id = self._get_file_commit_for_checkpoint(checkpoint_id)
 
                 # 1. Emit audit event via outbox (for tracking)
                 audit_event = OutboxEvent.create(
@@ -362,7 +370,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                    Can be created via graph_factory().
 
         Returns:
-            NEW Execution in PENDING state
+            NEW Execution in PAUSED state
 
         Raises:
             ValueError: If execution or checkpoint not found
@@ -444,7 +452,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
 
                 # Rollback state
                 execution = controller.rollback(execution_id, checkpoint_id)
-                file_commit_id = self._extract_file_commit_id(execution)
+                file_commit_id = self._get_file_commit_for_checkpoint(checkpoint_id)
 
                 # Continue execution with graph
                 execution = controller.run(execution_id, graph=graph)
@@ -940,6 +948,15 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             return workflow_vars["file_commit_id"]
 
         return None
+
+    def _get_file_commit_for_checkpoint(self, checkpoint_id: str) -> Optional[str]:
+        """Resolve checkpoint_id -> file_commit_id through file tracking."""
+        if not checkpoint_id or not self._file_tracking:
+            return None
+        get_commit = getattr(self._file_tracking, "get_commit_for_checkpoint", None)
+        if not callable(get_commit):
+            return None
+        return get_commit(checkpoint_id)
 
     def _restore_files_post_commit(
         self,
