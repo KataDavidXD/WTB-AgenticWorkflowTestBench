@@ -20,12 +20,18 @@ Exit code 0 = all attempted checks passed, 1 = at least one failure.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import os
+import shutil
+import socket
 import sys
+import tempfile
 import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
+
+from wtb.sdk._example_graphs import create_linear_graph as _create_linear_graph
 
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
@@ -49,12 +55,62 @@ def record(name: str, status: str, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 # Graph factories (SDK-only, minimal LangGraph)
 # ---------------------------------------------------------------------------
-# Imported from wtb.sdk so that Ray actors can resolve __module__ to a real
-# importable path (not "__main__").
-from wtb.sdk._example_graphs import create_linear_graph as _create_linear_graph
-
-
 _INIT_STATE: Dict[str, Any] = {"messages": [], "count": 0, "result": ""}
+
+
+def _node_b_variant(state: Dict[str, Any]) -> Dict[str, Any]:
+    messages = state.get("messages", []) + ["B:variant"]
+    return {
+        "messages": messages,
+        "count": state.get("count", 0) + 10,
+    }
+
+
+def _assert_completed_execution(execution: Any) -> None:
+    assert execution.status.value == "completed", (
+        f"status={execution.status}, error={getattr(execution, 'error_message', None)}"
+    )
+
+
+def _assert_variant_marker(bench: Any, execution_id: str, marker: str) -> None:
+    execution = bench.get_execution(execution_id)
+    messages = (execution.state.workflow_variables or {}).get("messages", [])
+    assert marker in messages, f"variant marker {marker!r} missing from {messages!r}"
+
+
+def _first_checkpoint(bench: Any, execution_id: str) -> Any:
+    checkpoints = bench.get_checkpoints(execution_id)
+    assert checkpoints, "no checkpoints"
+    return checkpoints[0]
+
+
+def _resume_and_assert(bench: Any, execution_id: str, name: str) -> None:
+    resumed = bench.resume(execution_id)
+    _assert_completed_execution(resumed)
+    record(name, PASS, f"exec={execution_id[:12]}...")
+
+
+def _fork_resume_and_assert(
+    bench: Any,
+    execution_id: str,
+    checkpoint_id: str,
+    name: str,
+) -> None:
+    fork = bench.fork(
+        execution_id,
+        checkpoint_id=checkpoint_id,
+        new_initial_state={"messages": ["forked"], "count": 42, "result": ""},
+    )
+    assert fork.fork_execution_id, f"fork error: {fork.error}"
+    resumed = bench.resume(fork.fork_execution_id)
+    _assert_completed_execution(resumed)
+    record(name, PASS, f"fork={fork.fork_execution_id[:12]}...")
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -161,6 +217,42 @@ def check_fork(ctx: Optional[Any], cps: Optional[list]) -> None:
         record("fork", FAIL, str(exc))
 
 
+def check_single_variant_control_flow() -> None:
+    """Single execution with node variant, rollback, resume, fork, resume."""
+    tmp = tempfile.mkdtemp(prefix="wtb_single_variant_")
+    try:
+        from wtb.sdk import WTBTestBench, WorkflowProject
+
+        bench = WTBTestBench.create(mode="development", data_dir=tmp)
+        project = WorkflowProject(name="single_variant", graph_factory=_create_linear_graph)
+        project.register_variant("node_b", "marked", _node_b_variant)
+        bench.register_project(project)
+
+        execution = bench.run(
+            project=project.name,
+            initial_state=dict(_INIT_STATE),
+            variant_config={"node_b": "marked"},
+        )
+        _assert_completed_execution(execution)
+        _assert_variant_marker(bench, execution.id, "B:variant")
+        record("single variant", PASS, "node_b=marked applied")
+
+        cp = _first_checkpoint(bench, execution.id)
+        rollback = bench.rollback(execution.id, checkpoint_id=str(cp.id))
+        assert rollback.success, f"rollback error: {rollback.error}"
+        record("single rollback", PASS, f"to step={cp.step}")
+
+        _resume_and_assert(bench, execution.id, "single resume")
+        _fork_resume_and_assert(bench, execution.id, str(cp.id), "single fork resume")
+
+        bench.close()
+    except Exception as exc:
+        record("single variant/control", FAIL, str(exc))
+        traceback.print_exc()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_batch_sequential() -> None:
     """Batch test via sequential fallback (no Ray)."""
     try:
@@ -188,37 +280,40 @@ def check_batch_sequential() -> None:
         record("batch sequential", FAIL, str(exc))
 
 
-def check_batch_rollback_and_fork() -> None:
-    """Rollback and fork batch results via the SDK convenience API.
+def check_batch_rollback_resume_and_fork() -> None:
+    """Rollback, resume, and fork batch results via the SDK convenience API.
 
     Uses SQLite (development mode) because batch rollback/fork requires
     shared persistent storage -- the BatchExecutionCoordinator creates its
     own controller/UoW, and in-memory UoWs are not shared across instances.
     """
-    import tempfile, os
-
     tmp = tempfile.mkdtemp(prefix="wtb_check_")
     try:
         from wtb.sdk import WTBTestBench, WorkflowProject
 
         bench = WTBTestBench.create(mode="development", data_dir=tmp)
         project = WorkflowProject(name="br_test", graph_factory=_create_linear_graph)
+        project.register_variant("node_b", "marked", _node_b_variant)
         bench.register_project(project)
 
         batch = bench.run_batch_test(
             project="br_test",
-            variant_matrix=[{"node_b": "default"}],
+            variant_matrix=[{"node_b": "marked"}],
             test_cases=[dict(_INIT_STATE)],
         )
         result = batch.results[0]
         if not result.execution_id:
             record("batch rollback", SKIP, "no execution_id")
+            record("batch resume", SKIP, "no execution_id")
             record("batch fork", SKIP, "no execution_id")
             return
+        _assert_variant_marker(bench, result.execution_id, "B:marked")
+        record("batch variant", PASS, "node_b=marked applied")
 
         cps = bench.get_batch_result_checkpoints(result)
         if not cps:
             record("batch rollback", SKIP, "no checkpoints")
+            record("batch resume", SKIP, "no checkpoints")
             record("batch fork", SKIP, "no checkpoints")
             return
 
@@ -226,22 +321,26 @@ def check_batch_rollback_and_fork() -> None:
         assert rb.success, f"rollback error: {rb.error}"
         record("batch rollback", PASS, f"to step={cps[0].step}")
 
+        _resume_and_assert(bench, result.execution_id, "batch resume")
+
         fork = bench.fork_batch_result(
             result,
             checkpoint_id=str(cps[0].id),
             new_state={"messages": ["forked"], "count": 42, "result": ""},
         )
         assert fork.fork_execution_id, f"fork error: {fork.error}"
+        resumed = bench.resume(fork.fork_execution_id)
+        _assert_completed_execution(resumed)
         record("batch fork", PASS,
                f"forked {fork.fork_execution_id[:12]}... from step={cps[0].step}")
 
         bench.close()
     except Exception as exc:
         record("batch rollback", FAIL, str(exc))
+        record("batch resume", SKIP, "blocked by rollback failure")
         record("batch fork", SKIP, "blocked by rollback failure")
         traceback.print_exc()
     finally:
-        import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -254,13 +353,9 @@ def check_ray_batch(skip: bool = False) -> None:
         record("ray batch", SKIP, "skipped via --skip-ray")
         return
 
-    try:
-        import ray
-    except ImportError:
+    if importlib.util.find_spec("ray") is None:
         record("ray batch", SKIP, "ray not installed")
         return
-
-    import tempfile, shutil
 
     tmp = tempfile.mkdtemp(prefix="wtb_ray_")
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
@@ -307,13 +402,9 @@ def check_ray_batch_cache_metadata(skip: bool = False) -> None:
         record("ray cache metadata", SKIP, "skipped via --skip-ray")
         return
 
-    try:
-        import ray
-    except ImportError:
+    if importlib.util.find_spec("ray") is None:
         record("ray cache metadata", SKIP, "ray not installed")
         return
-
-    import tempfile, shutil
 
     tmp = tempfile.mkdtemp(prefix="wtb_ray_cache_")
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
@@ -380,14 +471,10 @@ def check_ray_batch_rollback_fork_cache(skip: bool = False) -> None:
         record("ray cache fork", SKIP, "skipped via --skip-ray")
         return
 
-    try:
-        import ray
-    except ImportError:
+    if importlib.util.find_spec("ray") is None:
         record("ray cache rollback", SKIP, "ray not installed")
         record("ray cache fork", SKIP, "ray not installed")
         return
-
-    import tempfile, shutil
 
     tmp = tempfile.mkdtemp(prefix="wtb_ray_rbfk_")
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
@@ -466,6 +553,98 @@ def check_ray_batch_rollback_fork_cache(skip: bool = False) -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_ray_variant_rollback_resume_fork(skip: bool = False) -> None:
+    """Ray batch variant execution plus rollback, resume, fork, resume."""
+    if skip:
+        record("ray variant", SKIP, "skipped via --skip-ray")
+        record("ray resume", SKIP, "skipped via --skip-ray")
+        return
+
+    if importlib.util.find_spec("ray") is None:
+        record("ray variant", SKIP, "ray not installed")
+        record("ray resume", SKIP, "ray not installed")
+        return
+
+    _check_ray_variant_control_flow(
+        grpc_url=None,
+        prefix="ray",
+        tmp_prefix="wtb_ray_variant_",
+    )
+
+
+def _check_ray_variant_control_flow(
+    grpc_url: Optional[str],
+    prefix: str,
+    tmp_prefix: str,
+) -> None:
+    tmp = tempfile.mkdtemp(prefix=tmp_prefix)
+    os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
+    bench = None
+    try:
+        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+
+        bench = WTBTestBench.create(
+            mode="development",
+            data_dir=tmp,
+            enable_ray=True,
+            grpc_env_url=grpc_url,
+        )
+        project = WorkflowProject(
+            name=f"{prefix}_variant",
+            graph_factory=_create_linear_graph,
+            execution=ExecutionConfig(
+                batch_executor="ray",
+                ray_config=RayConfig(address="auto", max_retries=1),
+            ),
+        )
+        bench.register_project(project)
+
+        batch = bench.run_batch_test(
+            project=project.name,
+            variant_matrix=[{"node_b": "marked"}],
+            test_cases=[dict(_INIT_STATE)],
+        )
+        result = batch.results[0]
+        assert result.success, f"variant failed: {result.error_message}"
+        assert result.execution_id, "missing execution_id"
+        _assert_variant_marker(bench, result.execution_id, "B:marked")
+        record(f"{prefix} variant", PASS, "node_b=marked applied")
+
+        cps = bench.get_batch_result_checkpoints(result)
+        assert cps, "no checkpoints"
+        cp_id = str(cps[0].id)
+
+        rb = bench.rollback_batch_result(result, checkpoint_id=cp_id)
+        assert rb.success, f"rollback error: {rb.error}"
+        record(f"{prefix} rollback", PASS, f"to step={cps[0].step}")
+
+        _resume_and_assert(bench, result.execution_id, f"{prefix} resume")
+
+        fork = bench.fork_batch_result(
+            result,
+            checkpoint_id=cp_id,
+            new_state={"messages": ["forked"], "count": 42, "result": ""},
+        )
+        assert fork.fork_execution_id, f"fork error: {fork.error}"
+        resumed = bench.resume(fork.fork_execution_id)
+        _assert_completed_execution(resumed)
+        record(f"{prefix} fork", PASS, f"fork={fork.fork_execution_id[:12]}...")
+
+        if grpc_url:
+            execution = bench.get_execution(result.execution_id)
+            meta = execution.metadata or {}
+            assert meta.get("actor_id"), "missing actor_id for venv-backed Ray run"
+            record(f"{prefix} venv binding", PASS, f"actor={meta['actor_id']}")
+    except Exception as exc:
+        record(f"{prefix} variant/control", FAIL, str(exc))
+        traceback.print_exc()
+    finally:
+        if bench is not None:
+            bench.close()
+        os.environ.pop("WTB_RAY_STORAGE_ROOT", None)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -513,6 +692,29 @@ def check_venv_provider(grpc_url: Optional[str]) -> None:
         traceback.print_exc()
 
 
+def check_venv_variant_rollback_resume_fork(grpc_url: Optional[str]) -> None:
+    """Ray batch with GrpcEnvironmentProvider plus variant/control operations."""
+    if grpc_url is None:
+        record("venv variant", SKIP, "no --grpc-url provided")
+        record("venv rollback", SKIP, "no --grpc-url provided")
+        record("venv resume", SKIP, "no --grpc-url provided")
+        record("venv fork", SKIP, "no --grpc-url provided")
+        return
+
+    if importlib.util.find_spec("ray") is None:
+        record("venv variant", SKIP, "ray not installed")
+        record("venv rollback", SKIP, "ray not installed")
+        record("venv resume", SKIP, "ray not installed")
+        record("venv fork", SKIP, "ray not installed")
+        return
+
+    _check_ray_variant_control_flow(
+        grpc_url=grpc_url,
+        prefix="venv",
+        tmp_prefix="wtb_venv_variant_",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -538,8 +740,9 @@ def main() -> int:
     cps = check_checkpoints(ctx)
     check_rollback(ctx, cps)
     check_fork(ctx, cps)
+    check_single_variant_control_flow()
     check_batch_sequential()
-    check_batch_rollback_and_fork()
+    check_batch_rollback_resume_and_fork()
 
     # ── Tier 2: Ray ──────────────────────────────────────────────────────
     print("\n  --- Tier 2: Ray Distributed ---\n")
@@ -548,25 +751,36 @@ def main() -> int:
     if not args.skip_ray:
         try:
             import ray
-            import tempfile as _tf
-            _ray_tmp = _tf.mkdtemp(prefix="wtb_ray_main_")
+            _ray_tmp = tempfile.mkdtemp(prefix="wtb_ray_main_")
             os.chdir(_ray_tmp)
-            ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+            ray.init(
+                num_cpus=2,
+                ignore_reinit_error=True,
+                include_dashboard=False,
+                log_to_driver=False,
+                _metrics_export_port=_find_free_port(),
+            )
         except ImportError:
             pass
     try:
         check_ray_batch(skip=args.skip_ray)
         check_ray_batch_cache_metadata(skip=args.skip_ray)
         check_ray_batch_rollback_fork_cache(skip=args.skip_ray)
+        check_ray_variant_rollback_resume_fork(skip=args.skip_ray)
     finally:
+        if not args.skip_ray and "ray" in sys.modules:
+            try:
+                sys.modules["ray"].shutdown()
+            except Exception:
+                pass
         os.chdir(_orig_cwd)
         if _ray_tmp:
-            import shutil as _sh
-            _sh.rmtree(_ray_tmp, ignore_errors=True)
+            shutil.rmtree(_ray_tmp, ignore_errors=True)
 
     # ── Tier 3: Venv Service ─────────────────────────────────────────────
     print("\n  --- Tier 3: Venv Service ---\n")
     check_venv_provider(args.grpc_url)
+    check_venv_variant_rollback_resume_fork(args.grpc_url)
 
     # ── Summary ──────────────────────────────────────────────────────────
     print()

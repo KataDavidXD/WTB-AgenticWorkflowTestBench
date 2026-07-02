@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, TYPE_CHECKING
 
@@ -818,12 +818,37 @@ class WorkflowProject:
     ) -> Any:
         """
         Apply node variants to a graph.
-        
-        This is a placeholder - actual implementation depends on
-        LangGraph's node replacement API.
+
+        For LangGraph ``StateGraph`` builders, replace the selected node's
+        runnable while preserving its schema, metadata, retry/cache policies,
+        and edge topology. Unknown variants are left unchanged for backward
+        compatibility with state-driven variant graphs.
         """
-        # TODO: Implement node replacement using LangGraph's API
-        # For now, return graph as-is
+        nodes = getattr(graph, "nodes", None)
+        if not isinstance(nodes, dict):
+            return graph
+
+        coerce_to_runnable = getattr(type(graph), "add_node").__globals__.get(
+            "coerce_to_runnable"
+        )
+        if coerce_to_runnable is None:
+            return graph
+
+        for node_id, variant_name in variant_config.items():
+            variant = self._node_variants.get(node_id, {}).get(variant_name)
+            if variant is None:
+                continue
+            if node_id not in nodes:
+                raise ValueError(f"Cannot apply variant for unknown node: {node_id}")
+
+            existing_spec = nodes[node_id]
+            runnable = coerce_to_runnable(
+                variant.implementation,
+                name=node_id,
+                trace=False,
+            )
+            nodes[node_id] = replace(existing_spec, runnable=runnable)
+
         return graph
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -872,7 +897,6 @@ class WorkflowProject:
         Note:
             This requires the module paths to be importable.
         """
-        import importlib
         import yaml
         
         with open(path, "r", encoding="utf-8") as f:

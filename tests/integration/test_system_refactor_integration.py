@@ -157,7 +157,7 @@ class TestNonBatchLifecycle:
             new_initial_state={"forked_flag": True},
         )
         assert forked.id != execution.id
-        assert forked.status == ExecutionStatus.PENDING
+        assert forked.status == ExecutionStatus.PAUSED
         assert forked.state.workflow_variables.get("forked_flag") is True
         assert forked.metadata.get("forked_from") == execution.id
 

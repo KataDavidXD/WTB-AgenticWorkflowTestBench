@@ -115,6 +115,123 @@ pip install -e ".[all]"
 
 > All examples import only from `wtb.sdk`. The Ray batch runner and LangGraph adapter are configured internally by the SDK.
 
+### Runnable Mode Demo
+
+The quickest way to verify the main execution modes is the runnable demo in
+`examples/modes_quick_demo.py`. Each mode proves the same control-flow contract:
+`real LLM call -> variant -> _output_files -> outputs/ -> checkpoint_id -> file_commit_id -> rollback -> resume -> fork/resume`.
+
+The demo requires a real OpenAI-compatible LLM provider. Configure either
+environment variables or a local `.env` file:
+
+```bash
+LLM_API_KEY=...
+LLM_BASE_URL=https://your-openai-compatible-endpoint/v1
+LLM_MODEL=your-model-name
+```
+
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_MODEL` are also accepted. The
+demo fails fast when no real LLM is configured; it does not fall back to mocks.
+
+```bash
+# Single workflow execution with a real LLM call, real output file, and registered node variant
+python -m examples.modes_quick_demo --mode single
+
+# Local batch mode with the same real LLM graph and CAS-tracked file restore
+python -m examples.modes_quick_demo --mode batch
+
+# Ray batch mode with the same real LLM graph and CAS-tracked file restore
+python -m examples.modes_quick_demo --mode ray
+
+# Ray batch mode plus Docker uv_venv_manager gRPC venv provisioning
+python -m examples.modes_quick_demo --mode venv --grpc-url localhost:50051
+
+# Run single + batch + Ray; add --grpc-url to include venv mode
+python -m examples.modes_quick_demo --mode all --grpc-url localhost:50051
+```
+
+For the venv mode, start `uv_venv_manager` first:
+
+```bash
+cd C:\Users\asus\Documents\uv_venv_manager
+docker compose up -d
+```
+
+### Mode Recipes
+
+These snippets use the demo graph so they stay short and executable.
+Run them from the repository root. If you save a snippet outside the repo,
+set `PYTHONPATH` to the repository root first.
+
+#### Single Mode: real LLM file output, variant, rollback, resume, fork
+
+```python
+import tempfile
+
+from examples.modes_quick_demo import run_single
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as data_dir:
+    result = run_single(data_dir)
+    print(result["execution_id"])
+```
+
+#### Batch Mode: local batch file output with rollback/resume/fork
+
+```python
+import tempfile
+
+from examples.modes_quick_demo import run_batch
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as data_dir:
+    result = run_batch(data_dir)
+    print(result["fork_execution_id"])
+```
+
+#### Ray Batch Mode: distributed file output with rollback/resume/fork
+
+```python
+import tempfile
+
+import ray
+
+from examples.modes_quick_demo import run_ray
+
+try:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as data_dir:
+        result = run_ray(data_dir)
+        print(result["execution_id"])
+finally:
+    ray.shutdown()
+```
+
+#### Venv Mode: Ray batch plus Docker uv_venv_manager
+
+```python
+import tempfile
+
+import ray
+
+from examples.modes_quick_demo import run_ray
+
+try:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as data_dir:
+        result = run_ray(data_dir, grpc_url="localhost:50051")
+        print(result["actor_id"])
+finally:
+    ray.shutdown()
+```
+
+### E2E Validation with Docker uv_venv_manager
+
+When `uv_venv_manager` is running via Docker compose, use the strict E2E checker:
+
+```powershell
+.\scripts\verify_wtb_uv_e2e.ps1 -UvVenvManagerPath C:\Users\asus\Documents\uv_venv_manager
+```
+
+The script builds/starts compose, waits for REST and gRPC, runs the strict Ray
+pytest, then runs `install_checker.py --grpc-url localhost:50051`.
+
 ### 1. Batch Testing with Ray (Recommended)
 
 `bench.run_batch_test()` internally delegates to `RayBatchTestRunner`, which distributes variant combinations across a Ray ActorPool. Configure Ray through `ExecutionConfig` on your `WorkflowProject`.

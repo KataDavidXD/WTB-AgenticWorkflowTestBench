@@ -53,7 +53,7 @@ class TestWTBConfig:
         """Test development configuration preset."""
         config = WTBConfig.for_development()
         assert config.wtb_storage_mode == "sqlalchemy"
-        assert config.state_adapter_mode == "agentgit"
+        assert config.state_adapter_mode == "langgraph"
         assert "wtb.db" in config.wtb_db_url
         assert config.log_sql is True
     

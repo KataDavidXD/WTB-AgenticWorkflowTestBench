@@ -30,15 +30,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime, timezone
-import uuid
 import logging
 
 # REUSE domain models - don't duplicate!
 from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
 from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
-from wtb.domain.models.batch_test import BatchTest, BatchTestResult, BatchTestStatus
+from wtb.domain.models.batch_test import BatchTest, BatchTestResult
 
-from .workflow_project import WorkflowProject, NodeVariant as SDKNodeVariant
+from .workflow_project import WorkflowProject
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces import (
@@ -442,6 +441,10 @@ class WTBTestBench:
         if not workflow:
             raise ValueError(f"Workflow for project '{project}' not found")
         
+        run_initial_state = dict(initial_state)
+        if variant_config:
+            run_initial_state.setdefault("_variant_config", dict(variant_config))
+
         # Build graph
         graph = proj.build_graph(
             variant_config=variant_config,
@@ -451,7 +454,7 @@ class WTBTestBench:
         # Create and run execution via ExecutionController
         execution = self._exec_ctrl.create_execution(
             workflow=workflow,
-            initial_state=initial_state,
+            initial_state=run_initial_state,
             breakpoints=breakpoints or [],
         )
         
@@ -467,6 +470,9 @@ class WTBTestBench:
     
     def resume(self, execution_id: str, modified_state: Optional[Dict[str, Any]] = None) -> Execution:
         """Resume execution. Returns domain Execution."""
+        execution = self.get_execution(execution_id)
+        graph = self._resolve_graph_for_execution(execution_id, execution=execution)
+        self._prepare_controller_graph(graph, execution=execution)
         return self._exec_ctrl.resume(execution_id, modified_state)
     
     def stop(self, execution_id: str) -> Execution:
@@ -571,6 +577,96 @@ class WTBTestBench:
                 except Exception:
                     continue
         return None
+
+    def _resolve_graph_for_execution(
+        self,
+        execution_id: str,
+        execution: Optional[Execution] = None,
+    ) -> Optional[Any]:
+        """Resolve the registered project graph for an existing execution."""
+        if execution is None:
+            try:
+                execution = self.get_execution(execution_id)
+            except Exception:
+                return None
+
+        state_vars = {}
+        if execution.state and execution.state.workflow_variables:
+            state_vars = execution.state.workflow_variables
+        variant_config = state_vars.get("_variant_config")
+
+        for proj in self._project_cache.values():
+            if proj.id == execution.workflow_id:
+                return proj.build_graph(variant_config=variant_config)
+
+        if len(self._project_cache) == 1:
+            proj = next(iter(self._project_cache.values()))
+            return proj.build_graph(variant_config=variant_config)
+
+        return None
+
+    def _prepare_controller_graph(
+        self,
+        graph: Optional[Any],
+        execution: Optional[Execution] = None,
+    ) -> None:
+        """Prime the underlying controller's state adapter before resume."""
+        if graph is None:
+            return
+
+        controller = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+        state_adapter = self._state_adapter_for_execution(
+            execution,
+            fallback=getattr(controller, "_state_adapter", None),
+        )
+        if state_adapter is not None:
+            setattr(controller, "_state_adapter", state_adapter)
+        set_graph = getattr(state_adapter, "set_workflow_graph", None)
+        if callable(set_graph):
+            set_graph(graph, force_recompile=True)
+
+    def _state_adapter_for_execution(
+        self,
+        execution: Optional[Execution],
+        fallback: Optional[Any],
+    ) -> Optional[Any]:
+        """Use actor-local checkpoint storage when execution metadata requires it."""
+        if execution is None:
+            return fallback
+
+        metadata = execution.metadata or {}
+        if not isinstance(metadata, dict) or not metadata.get("checkpoint_db_path"):
+            return fallback
+
+        try:
+            from wtb.application.services.external_storage import (
+                resolve_execution_storage_paths,
+            )
+            from wtb.infrastructure.adapters.langgraph_state_adapter import (
+                LANGGRAPH_AVAILABLE,
+                LangGraphConfig,
+                LangGraphStateAdapter,
+            )
+        except Exception:
+            return fallback
+
+        if not LANGGRAPH_AVAILABLE:
+            return fallback
+
+        paths = resolve_execution_storage_paths(
+            metadata,
+            fallback_actor_id=metadata.get("actor_id"),
+        )
+        checkpoint_db_path = str(paths.checkpoint_db_path)
+        existing_connection = getattr(
+            getattr(fallback, "_config", None),
+            "connection_string",
+            None,
+        )
+        if existing_connection and str(existing_connection) == checkpoint_db_path:
+            return fallback
+
+        return LangGraphStateAdapter(LangGraphConfig.for_development(checkpoint_db_path))
     
     def rollback_batch_result(
         self,
@@ -761,7 +857,8 @@ class WTBTestBench:
 
         try:
             coordinator = self.get_batch_coordinator()
-            history = coordinator.get_checkpoints(result.execution_id)
+            graph = self._resolve_graph_for_result()
+            history = coordinator.get_checkpoints(result.execution_id, graph=graph)
             if history:
                 return self._checkpoint_dicts_to_domain(result.execution_id, history)
         except Exception:

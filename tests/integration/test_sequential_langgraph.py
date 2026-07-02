@@ -303,7 +303,7 @@ class TestFork:
         forked = controller.fork(execution.id, cp_id, new_initial_state={"extra": True})
 
         assert forked.id != execution.id
-        assert forked.status == ExecutionStatus.PENDING
+        assert forked.status == ExecutionStatus.PAUSED
         assert forked.state.workflow_variables.get("extra") is True
         assert forked.metadata.get("forked_from") == execution.id
         assert forked.metadata.get("source_checkpoint_id") == cp_id
@@ -392,6 +392,6 @@ class TestNegativeCases:
 
         try:
             result = controller.fork(execution.id, "nonexistent-checkpoint-id")
-            assert result.status == ExecutionStatus.PENDING
+            assert result.status == ExecutionStatus.PAUSED
         except (ValueError, RuntimeError, KeyError, TypeError):
             pass  # Raising is also acceptable

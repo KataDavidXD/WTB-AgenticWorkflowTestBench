@@ -19,6 +19,7 @@ def create_linear_graph():
         messages: list
         count: int
         result: str
+        _variant_config: dict
 
     def node_a(state: Dict[str, Any]) -> dict:
         return {
@@ -27,8 +28,10 @@ def create_linear_graph():
         }
 
     def node_b(state: Dict[str, Any]) -> dict:
+        variant = (state.get("_variant_config") or {}).get("node_b")
+        marker = f"B:{variant}" if variant and variant != "default" else "B"
         return {
-            "messages": state.get("messages", []) + ["B"],
+            "messages": state.get("messages", []) + [marker],
             "count": state.get("count", 0) + 1,
         }
 
