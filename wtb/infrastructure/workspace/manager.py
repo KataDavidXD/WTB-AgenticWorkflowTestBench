@@ -567,15 +567,17 @@ class WorkspaceManager:
             
         Returns:
             True if cleaned up, False if not found
+
+        Raises:
+            OSError: If the workspace directory cannot be removed. Tracking
+                remains intact so callers can retry cleanup.
         """
         with self._lock:
-            workspace = self._workspaces.pop(workspace_id, None)
+            # Keep tracking until physical deletion succeeds. Callers such as
+            # RayBatchTestRunner can then retry a failed cleanup safely.
+            workspace = self._workspaces.get(workspace_id)
             if not workspace:
                 return False
-            
-            # Remove from batch tracking
-            if workspace.batch_test_id in self._batch_workspaces:
-                self._batch_workspaces[workspace.batch_test_id].discard(workspace_id)
             
             files_removed = 0
             space_freed = 0
@@ -592,15 +594,26 @@ class WorkspaceManager:
                 
                 try:
                     shutil.rmtree(workspace.root_path)
-                except Exception as e:
-                    logger.warning(f"Failed to remove workspace directory: {e}")
+                except Exception:
+                    logger.exception(
+                        "Failed to remove workspace directory %s",
+                        workspace.root_path,
+                    )
+                    raise
+
+            self._workspaces.pop(workspace_id, None)
+            if workspace.batch_test_id in self._batch_workspaces:
+                batch_workspaces = self._batch_workspaces[workspace.batch_test_id]
+                batch_workspaces.discard(workspace_id)
+                if not batch_workspaces:
+                    self._batch_workspaces.pop(workspace.batch_test_id, None)
             
             logger.info(
                 f"Cleaned up workspace {workspace_id}: "
                 f"reason={reason}, preserved={preserve}"
             )
             
-            # Publish event
+            # Publish event only after cleanup reaches a committed state.
             self._publish_event(WorkspaceCleanedUpEvent(
                 workspace_id=workspace_id,
                 reason=reason,
@@ -632,13 +645,8 @@ class WorkspaceManager:
         
         # Remove batch directory if empty
         batch_dir = self._base_dir / f"batch_{batch_id}"
-        if batch_dir.exists():
-            try:
-                # Only remove if empty
-                if not any(batch_dir.iterdir()):
-                    batch_dir.rmdir()
-            except Exception:
-                pass
+        if batch_dir.exists() and not any(batch_dir.iterdir()):
+            batch_dir.rmdir()
         
         return count
     

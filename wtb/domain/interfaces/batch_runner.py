@@ -114,7 +114,9 @@ class IBatchTestRunner(ABC):
             batch_test_id: ID of the batch test to cancel
             
         Returns:
-            True if cancellation was initiated, False if not found
+            True if the cancellation request was accepted, False if the batch
+            was not found or the request was rejected. Implementations may
+            document stronger completion guarantees.
         """
         pass
     
@@ -188,12 +190,21 @@ class IEnvironmentProvider(ABC):
         pass
     
     @abstractmethod
-    def cleanup_environment(self, variant_id: str) -> None:
+    def cleanup_environment(
+        self,
+        variant_id: str,
+        timeout: Optional[float] = None,
+    ) -> None:
         """
         Cleanup an execution environment.
         
         Args:
             variant_id: Environment to cleanup
+            timeout: Optional maximum seconds for remote cleanup
+
+        Raises:
+            Exception: If cleanup cannot be confirmed. Implementations must
+                retain enough state for a later retry.
         """
         pass
     

@@ -52,6 +52,10 @@ class VariantCombination:
     # v1.8: Graph factory reference for distributed execution with checkpoints
     graph_factory_module: Optional[str] = None  # e.g., "examples.ray_batch_demo.run_demo"
     graph_factory_name: Optional[str] = None    # e.g., "create_demo_graph"
+
+    # Thread-local fallback for graph objects that cloudpickle cannot safely
+    # round-trip. Deliberately excluded from to_dict() and value equality.
+    _runtime_graph: Optional[Any] = field(default=None, repr=False, compare=False)
     
     def to_dict(self) -> Dict[str, Any]:
         result = {

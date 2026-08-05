@@ -27,6 +27,7 @@ Domain Models (REUSED, not duplicated):
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime, timezone
@@ -35,7 +36,11 @@ import logging
 # REUSE domain models - don't duplicate!
 from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
 from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
-from wtb.domain.models.batch_test import BatchTest, BatchTestResult
+from wtb.domain.models.batch_test import (
+    BatchTest,
+    BatchTestResult,
+    BatchTestStatus,
+)
 
 from .workflow_project import WorkflowProject
 
@@ -304,18 +309,17 @@ class WTBTestBench:
         Closes (in order): batch runner thread pool / Ray actors,
         execution controller's state adapter (checkpointer),
         and the underlying UoW session.  Safe to call multiple times.
+
+        A batch-runner shutdown failure is propagated and leaves the bench
+        open so actor termination and resource cleanup can be retried.
         """
         if self._closed:
             return
-        self._closed = True
 
         if self._batch_runner is not None:
             _shutdown = getattr(self._batch_runner, "shutdown", None)
             if callable(_shutdown):
-                try:
-                    _shutdown()
-                except Exception:
-                    pass
+                _shutdown()
 
         inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
         adapter = getattr(inner, "_state_adapter", None)
@@ -333,6 +337,8 @@ class WTBTestBench:
                 uow.__exit__(None, None, None)
             except Exception:
                 pass
+
+        self._closed = True
 
     def __enter__(self) -> "WTBTestBench":
         return self
@@ -926,8 +932,50 @@ class WTBTestBench:
         """
         Run batch tests. Returns domain BatchTest with results.
         """
-        if not self._batch_runner:
+        proj = self._project_cache.get(project)
+        requested_executor = getattr(
+            getattr(proj, "execution", None),
+            "batch_executor",
+            None,
+        )
+
+        if requested_executor == "sequential":
             return self._run_batch_sequential(project, variant_matrix, test_cases)
+
+        if not self._batch_runner:
+            if requested_executor in {"ray", "threadpool"}:
+                from wtb.domain.interfaces.batch_runner import BatchRunnerError
+                raise BatchRunnerError(
+                    f"Project '{project}' requires batch_executor="
+                    f"'{requested_executor}', but no batch runner is configured. "
+                    "Recreate the test bench with the requested executor or use "
+                    "ExecutionConfig(batch_executor='sequential')."
+                )
+            return self._run_batch_sequential(project, variant_matrix, test_cases)
+
+        runner_executor = None
+        from wtb.application.services.batch_test_runner import ThreadPoolBatchTestRunner
+        if isinstance(self._batch_runner, ThreadPoolBatchTestRunner):
+            runner_executor = "threadpool"
+        elif any(
+            runner_type.__module__ == "wtb.application.services.ray_batch_runner"
+            and runner_type.__name__ == "RayBatchTestRunner"
+            for runner_type in type(self._batch_runner).__mro__
+        ):
+            # Avoid importing Ray merely to identify an already-created runner.
+            runner_executor = "ray"
+
+        if (
+            runner_executor is not None
+            and requested_executor in {"ray", "threadpool"}
+            and requested_executor != runner_executor
+        ):
+            from wtb.domain.interfaces.batch_runner import BatchRunnerError
+            raise BatchRunnerError(
+                f"Project '{project}' requires batch_executor='{requested_executor}', "
+                f"but the configured batch runner is '{runner_executor}'. "
+                "Recreate the test bench with matching enable_ray or update ExecutionConfig."
+            )
         
         # Get workflow via ProjectService
         workflow = self._project_service.get_workflow_by_name(project)
@@ -938,10 +986,9 @@ class WTBTestBench:
         # When the script is the entry point, __module__ is "__main__" which
         # is not importable in a Ray actor process.  Resolve to the real
         # module name via __spec__ when possible.
-        proj = self._project_cache.get(project)
         gf_module: Optional[str] = None
         gf_name: Optional[str] = None
-        gf_pickled: Optional[bytes] = None
+        gf_pickled: Optional[str] = None
         if proj and callable(getattr(proj, "graph_factory", None)):
             gf = proj.graph_factory
             gf_module = getattr(gf, "__module__", None)
@@ -954,7 +1001,9 @@ class WTBTestBench:
                 else:
                     try:
                         import cloudpickle
-                        gf_pickled = cloudpickle.dumps(gf)
+                        gf_pickled = base64.b64encode(
+                            cloudpickle.dumps(gf)
+                        ).decode("ascii")
                     except Exception:
                         pass
         
@@ -965,14 +1014,52 @@ class WTBTestBench:
         
         from wtb.domain.models.batch_test import VariantCombination
         for i, variant_config in enumerate(variant_matrix):
-            batch_test.variant_combinations.append(
-                VariantCombination(
-                    name=f"variant_{i}",
-                    variants=variant_config,
-                    graph_factory_module=gf_module,
-                    graph_factory_name=gf_name,
+            combo_metadata: Dict[str, Any] = {}
+            runtime_graph: Optional[Any] = None
+            graph: Optional[Any] = None
+            registered_variant_selected = bool(
+                proj
+                and any(
+                    proj.get_variant(node_id, variant_name) is not None
+                    for node_id, variant_name in variant_config.items()
                 )
             )
+            if registered_variant_selected:
+                try:
+                    graph = proj.build_graph(variant_config=variant_config)
+                    try:
+                        import cloudpickle
+                    except ImportError:
+                        from ray import cloudpickle
+                    serialized_graph = cloudpickle.dumps(graph)
+                    # A few proxy/test graph types serialize but cannot be
+                    # restored. Never publish a transport payload that the
+                    # worker cannot consume.
+                    cloudpickle.loads(serialized_graph)
+                    combo_metadata["_graph_pickled"] = base64.b64encode(
+                        serialized_graph
+                    ).decode("ascii")
+                except Exception as graph_error:
+                    if runner_executor == "threadpool" and graph is not None:
+                        # Threads share this process, so retain the real graph
+                        # outside public metadata instead of forcing a broken
+                        # serialization round-trip.
+                        runtime_graph = graph
+                    else:
+                        from wtb.domain.interfaces.batch_runner import BatchRunnerError
+                        raise BatchRunnerError(
+                            "Registered node variants require a serializable graph "
+                            f"for batch execution: {graph_error}"
+                        ) from graph_error
+
+            batch_test.variant_combinations.append(VariantCombination(
+                name=f"variant_{i}",
+                variants=variant_config,
+                metadata=combo_metadata,
+                graph_factory_module=gf_module,
+                graph_factory_name=gf_name,
+                _runtime_graph=runtime_graph,
+            ))
         
         if not test_cases:
             result = self._batch_runner.run_batch_test(batch_test)
@@ -982,17 +1069,55 @@ class WTBTestBench:
         all_results = []
         for test_case in test_cases:
             case_batch = BatchTest(workflow_id=batch_test.workflow_id, _workflow=workflow)
-            case_batch.variant_combinations = batch_test.variant_combinations
+            case_batch.metadata = dict(batch_test.metadata)
+            case_batch.variant_combinations = list(batch_test.variant_combinations)
             case_batch.initial_state = test_case
             all_results.append(self._batch_runner.run_batch_test(case_batch))
         
         if len(all_results) == 1:
+            self._expire_session()
             return all_results[0]
-        
-        # Aggregate: return first batch with all results combined
-        combined = all_results[0]
-        for extra in all_results[1:]:
-            combined.results.extend(extra.results)
+
+        combined = BatchTest(
+            workflow_id=batch_test.workflow_id,
+            variant_combinations=list(batch_test.variant_combinations),
+            metadata=dict(batch_test.metadata),
+            _workflow=workflow,
+        )
+        combined.start()
+        for case_result in all_results:
+            for result in case_result.results:
+                combined.add_result(result)
+
+        expected_results_per_case = len(batch_test.variant_combinations)
+        incomplete_cases = [
+            case_result for case_result in all_results
+            if len(case_result.results) != expected_results_per_case
+        ]
+        if any(
+            case_result.status is BatchTestStatus.CANCELLED
+            for case_result in all_results
+        ):
+            # Cancellation takes precedence because the requested test matrix
+            # was not fully evaluated, even if earlier cases produced results.
+            combined.cancel()
+        elif any(
+            case_result.status is not BatchTestStatus.COMPLETED
+            for case_result in all_results
+        ):
+            combined.fail("One or more batch test cases did not complete")
+        elif incomplete_cases:
+            combined.fail(
+                "Incomplete test-case results: expected "
+                f"{expected_results_per_case} result(s) per case"
+            )
+        elif combined.results and all(
+            not result.success for result in combined.results
+        ):
+            combined.fail("All variants failed")
+        else:
+            combined.complete()
+        combined.build_comparison_matrix()
 
         self._expire_session()
         return combined
@@ -1010,6 +1135,12 @@ class WTBTestBench:
         are populated to match the ThreadPoolBatchTestRunner output schema.
         """
         import time as _time
+        from wtb.domain.interfaces.batch_runner import BatchRunnerError
+
+        if not variant_matrix:
+            raise BatchRunnerError("No variant combinations to execute")
+        cases = test_cases or [{}]
+
         
         if project not in self._project_cache:
             raise KeyError(f"Project '{project}' not found")
@@ -1036,7 +1167,7 @@ class WTBTestBench:
             try:
                 graph = proj.build_graph(variant_config=variant_config)
                 
-                for test_case in test_cases:
+                for test_case in cases:
                     execution = self._exec_ctrl.create_execution(
                         workflow=workflow,
                         initial_state=test_case,
@@ -1079,7 +1210,12 @@ class WTBTestBench:
                 )
                 batch_test.add_result(result)
         
-        batch_test.complete()
+        if batch_test.results and all(
+            not result.success for result in batch_test.results
+        ):
+            batch_test.fail("All variants failed")
+        else:
+            batch_test.complete()
         batch_test.build_comparison_matrix()
         return batch_test
     

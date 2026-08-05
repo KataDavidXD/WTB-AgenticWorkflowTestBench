@@ -95,6 +95,59 @@ def test_build_ray_runtime_env_propagates_llm_and_storage_env_vars(monkeypatch):
     assert env_vars["WTB_LLM_RESPONSE_CACHE_ENABLED"] == "true"
 
 
+def test_build_ray_runtime_env_uses_accessible_worker_python(tmp_path):
+    from ray.runtime_env import RuntimeEnv
+
+    python_path = tmp_path / "venv" / "Scripts" / "python.exe"
+    python_path.parent.mkdir(parents=True)
+    python_path.touch()
+
+    runtime_env = RayBatchTestRunner._build_ray_runtime_env(
+        "actor_local",
+        {
+            "type": "grpc_uv",
+            "env_path": str(tmp_path),
+            "python_path": str(python_path),
+            "py_executable": str(python_path),
+            "venv_path": str(python_path.parent.parent),
+            "env_vars": {},
+        },
+    )
+
+    if "py_executable" in RuntimeEnv.known_fields:
+        assert runtime_env["py_executable"] == str(python_path)
+        assert runtime_env["env_vars"]["VIRTUAL_ENV"] == str(
+            python_path.parent.parent
+        )
+    else:
+        assert "py_executable" not in runtime_env
+        assert "VIRTUAL_ENV" not in runtime_env["env_vars"]
+
+
+def test_build_ray_runtime_env_drops_inaccessible_provider_virtual_env(
+    monkeypatch,
+):
+    monkeypatch.setattr(os.path, "isfile", lambda _path: False)
+
+    runtime_env = RayBatchTestRunner._build_ray_runtime_env(
+        "actor_remote",
+        {
+            "type": "grpc_uv",
+            "env_path": "/container/env",
+            "python_path": "/container/env/.venv/bin/python",
+            "py_executable": "/container/env/.venv/bin/python",
+            "venv_path": "/container/env/.venv",
+            "env_vars": {
+                "CUSTOM": "1",
+                "VIRTUAL_ENV": "/container/env/.venv",
+            },
+        },
+    )
+
+    assert runtime_env["env_vars"]["CUSTOM"] == "1"
+    assert "VIRTUAL_ENV" not in runtime_env["env_vars"]
+
+
 def test_batch_execution_coordinator_uses_execution_specific_storage(monkeypatch):
     import wtb.infrastructure.adapters.langgraph_state_adapter as lg_module
 

@@ -289,7 +289,7 @@ class ExecutionConfig:
         checkpoint_storage: Storage backend ("memory", "sqlite", "postgres")
         default_timeout: Default timeout in seconds
     """
-    batch_executor: Literal["ray", "threadpool", "sequential"] = "ray"
+    batch_executor: Literal["ray", "threadpool", "sequential"] = "threadpool"
     ray_config: RayConfig = field(default_factory=RayConfig)
     node_resources: Dict[str, NodeResourceConfig] = field(default_factory=dict)
     default_node_resources: NodeResourceConfig = field(default_factory=NodeResourceConfig)

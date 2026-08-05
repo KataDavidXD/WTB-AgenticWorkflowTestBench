@@ -4,6 +4,7 @@ Tests for Batch Test Runners.
 Tests IBatchTestRunner interface, ThreadPoolBatchTestRunner, and BatchTestRunnerFactory.
 """
 
+import base64
 import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
@@ -136,6 +137,94 @@ class TestThreadPoolBatchTestRunner:
         assert result.status in [BatchTestStatus.COMPLETED, BatchTestStatus.FAILED]
         assert len(result.results) == 2
     
+
+    def test_run_plain_python_batch_all_results_succeed(self, runner, batch_test):
+        """ThreadPool mode must execute a plain Python workflow end to end."""
+        from wtb.domain.models.workflow import WorkflowEdge, WorkflowNode
+
+        workflow = TestWorkflow(
+            id=batch_test.workflow_id,
+            name="Plain Python workflow",
+            entry_point="start",
+        )
+        workflow.add_node(WorkflowNode(id="start", name="Start", type="start"))
+        workflow.add_node(WorkflowNode(id="work", name="Work", type="action"))
+        workflow.add_node(WorkflowNode(id="end", name="End", type="end"))
+        workflow.add_edge(WorkflowEdge(source_id="start", target_id="work"))
+        workflow.add_edge(WorkflowEdge(source_id="work", target_id="end"))
+        batch_test._workflow = workflow
+
+        result = runner.run_batch_test(batch_test)
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert len(result.results) == 2
+        assert all(item.success for item in result.results)
+        assert all(item.error_message is None for item in result.results)
+        assert len({item.execution_id for item in result.results}) == 2
+
+    @pytest.mark.parametrize("metadata_format", ["base64", "legacy_bytes"])
+    def test_execute_variant_decodes_pickled_graph_metadata(
+        self,
+        runner,
+        metadata_format,
+    ):
+        """Both JSON-safe metadata and legacy in-memory bytes remain readable."""
+        raw_payload = b"serialized-graph-payload"
+        payload = (
+            base64.b64encode(raw_payload).decode("ascii")
+            if metadata_format == "base64"
+            else raw_payload
+        )
+        combo = VariantCombination(
+            name=f"Graph {metadata_format}",
+            variants={},
+            metadata={"_graph_pickled": payload},
+        )
+        try:
+            import cloudpickle
+        except ImportError:
+            from ray import cloudpickle
+
+        graph = object()
+        expected = BatchTestResult(
+            combination_name=combo.name,
+            execution_id="exec-graph",
+            success=True,
+        )
+        runner._controller_factory = MagicMock()
+
+        with (
+            patch.object(cloudpickle, "loads", return_value=graph) as loads,
+            patch.object(
+                runner,
+                "_execute_with_controller_factory",
+                return_value=expected,
+            ) as execute,
+        ):
+            result = runner._execute_variant("wf-graph", combo, {})
+
+        assert result is expected
+        loads.assert_called_once_with(raw_payload)
+        assert execute.call_args.args[3] is graph
+
+    def test_invalid_base64_pickled_graph_fails_closed(self, runner):
+        """Invalid public metadata must not silently fall back to another graph."""
+        combo = VariantCombination(
+            name="Invalid graph",
+            variants={},
+            metadata={"_graph_pickled": "not-valid-base64!"},
+        )
+        runner._controller_factory = MagicMock()
+
+        with patch.object(runner, "_execute_with_controller_factory") as execute:
+            result = runner._execute_variant("wf-graph", combo, {})
+
+        assert result.success is False
+        assert "Failed to load serialized variant graph" in (
+            result.error_message or ""
+        )
+        execute.assert_not_called()
+
     def test_get_status_idle(self, runner, batch_test):
         """Status is IDLE when not running."""
         status = runner.get_status(batch_test.id)

@@ -275,10 +275,10 @@ class TestGrpcEnvironmentProvider:
         assert runtime_env is None
     
     def test_cleanup_environment_removes_tracking(self):
-        """Should remove local tracking on cleanup."""
+        """A local fallback environment requires no remote confirmation."""
         provider = GrpcEnvironmentProvider("localhost:50051")
         provider._stub = None  # No actual gRPC call
-        provider._environments["variant-1"] = {"type": "grpc_uv"}
+        provider._environments["variant-1"] = {"type": "grpc_uv_stub"}
         
         provider.cleanup_environment("variant-1")
         
@@ -321,18 +321,10 @@ class TestGrpcEnvironmentProvider:
 
 
 def _grpc_provider_factory():
-    """Factory that checks gRPC availability before creating provider."""
-    import socket
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        result = sock.connect_ex(('localhost', 50051))
-        sock.close()
-        if result != 0:
-            pytest.skip("gRPC service not available at localhost:50051")
-    except Exception:
-        pytest.skip("gRPC service not available at localhost:50051")
-    return GrpcEnvironmentProvider("localhost:50051")
+    """Create a deterministic local stub for interface contract tests."""
+    provider = GrpcEnvironmentProvider("localhost:50051")
+    provider._stub = None
+    return provider
 
 
 class TestEnvironmentProviderInterface:

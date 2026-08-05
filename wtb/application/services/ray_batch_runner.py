@@ -42,6 +42,7 @@ Usage:
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from dataclasses import dataclass, field
+import base64
 import logging
 import threading
 import time
@@ -50,6 +51,7 @@ import copy
 
 from wtb.domain.models.batch_test import (
     BatchTest,
+    BatchTestStatus,
     BatchTestResult,
     VariantCombination,
 )
@@ -94,6 +96,12 @@ if TYPE_CHECKING:
     from wtb.domain.interfaces.batch_runner import IEnvironmentProvider
 
 logger = logging.getLogger(__name__)
+
+def _decode_pickled_payload(payload: Any) -> Any:
+    """Decode public metadata payloads while preserving legacy bytes."""
+    if isinstance(payload, str):
+        return base64.b64decode(payload.encode("ascii"), validate=True)
+    return payload
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -318,7 +326,7 @@ def _create_variant_execution_actor_class():
             initial_state: Dict[str, Any],
             batch_test_id: str,
             workspace_data: Optional[Dict[str, Any]] = None,
-            graph_factory_pickled: Optional[bytes] = None,
+            graph_factory_pickled: Optional[Any] = None,
         ) -> Dict[str, Any]:
             """
             Execute a single variant combination with optional workspace isolation.
@@ -345,6 +353,9 @@ def _create_variant_execution_actor_class():
             # v1.8: Extract graph factory reference for LangGraph execution with checkpoints
             graph_factory_module = combination.get("graph_factory_module")
             graph_factory_name = combination.get("graph_factory_name")
+            graph_pickled = (combination.get("metadata") or {}).get(
+                "_graph_pickled"
+            )
             workspace: Optional[Workspace] = None
             
             logger.info(
@@ -384,6 +395,7 @@ def _create_variant_execution_actor_class():
                     graph_factory_module=graph_factory_module,
                     graph_factory_name=graph_factory_name,
                     graph_factory_pickled=graph_factory_pickled,
+                    graph_pickled=graph_pickled,
                 )
                 
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -460,7 +472,8 @@ def _create_variant_execution_actor_class():
             workspace: Optional[Workspace] = None,
             graph_factory_module: Optional[str] = None,
             graph_factory_name: Optional[str] = None,
-            graph_factory_pickled: Optional[bytes] = None,
+            graph_factory_pickled: Optional[Any] = None,
+            graph_pickled: Optional[Any] = None,
         ) -> Dict[str, Any]:
             """
             Run workflow execution with variants applied.
@@ -562,7 +575,25 @@ def _create_variant_execution_actor_class():
                 # v1.8: Create LangGraph graph from factory if available
                 # This enables automatic checkpointing at each super-step
                 langgraph_graph = None
-                if graph_factory_module and graph_factory_name:
+                if graph_pickled:
+                    try:
+                        try:
+                            import cloudpickle
+                        except ImportError:
+                            from ray import cloudpickle
+                        langgraph_graph = cloudpickle.loads(
+                            _decode_pickled_payload(graph_pickled)
+                        )
+                        logger.info(
+                            "Actor %s: Loaded serialized registered-variant graph",
+                            self._actor_id,
+                        )
+                    except Exception as graph_error:
+                        raise RuntimeError(
+                            "Failed to load serialized registered-variant graph: "
+                            f"{graph_error}"
+                        ) from graph_error
+                elif graph_factory_module and graph_factory_name:
                     try:
                         from wtb.application.services.graph_loader import load_graph_factory
                         factory = load_graph_factory(graph_factory_module, graph_factory_name)
@@ -575,7 +606,9 @@ def _create_variant_execution_actor_class():
                         if graph_factory_pickled:
                             try:
                                 import cloudpickle
-                                factory = cloudpickle.loads(graph_factory_pickled)
+                                factory = cloudpickle.loads(
+                                    _decode_pickled_payload(graph_factory_pickled)
+                                )
                                 langgraph_graph = factory()
                                 logger.info(
                                     f"Actor {self._actor_id}: Created LangGraph graph "
@@ -920,6 +953,20 @@ class _RayRunningTest:
     completed: int = 0
     failed: int = 0
     cancelled: bool = False
+    cancelled_variants: int = 0
+    termination_confirmed: bool = False
+    termination_error: Optional[str] = None
+    terminal_owner: Optional[str] = None
+    cancellation_in_progress: bool = False
+    actor_termination_confirmed: bool = False
+    cancellation_finished: threading.Event = field(
+        default_factory=threading.Event,
+        repr=False,
+    )
+    finished_event: threading.Event = field(
+        default_factory=threading.Event,
+        repr=False,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -969,6 +1016,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         event_bridge: Optional["RayEventBridge"] = None,
         enable_audit: bool = True,
         environment_provider: Optional["IEnvironmentProvider"] = None,
+        owns_environment_provider: bool = False,
     ):
         """
         Initialize Ray runner with optional FileTracker, Workspace, and event bridge integration.
@@ -976,6 +1024,8 @@ class RayBatchTestRunner(IBatchTestRunner):
         Args:
             config: Ray configuration
             agentgit_db_url: AgentGit database URL/path
+            owns_environment_provider: Close the injected provider on shutdown.
+                                        Injected providers are borrowed by default.
             wtb_db_url: WTB database URL
             workflow_loader: Optional custom workflow loader function
             filetracker_config: Optional FileTrackingConfig.to_dict() for file tracking
@@ -1000,10 +1050,29 @@ class RayBatchTestRunner(IBatchTestRunner):
         # Actor pool management
         self._actors: List[Any] = []  # Ray actor handles
         self._actor_pool = None
-        
-        # Running tests tracking (thread-safe via lock)
+        # A failed actor termination makes resource cleanup unsafe. Preserve
+        # handles until shutdown can retry instead of pretending they stopped.
+        self._poisoned = False
+        self._pending_event_cleanup_ids: set[str] = set()
+        self._unsafe_batch_ids: set[str] = set()
+        self._orphaned_refs: List[Any] = []
+
+        # One runner owns one shared actor pool. Batch registration and actor
+        # lifecycle operations use separate locks so cancellation can safely
+        # coordinate with pool creation and task submission.
         self._running_tests: Dict[str, _RayRunningTest] = {}
         self._running_tests_lock = threading.Lock()
+        self._actor_pool_lock = threading.RLock()
+        self._shutdown_lock = threading.Lock()
+        self._provider_close_lock = threading.Lock()
+        self._provider_close_event: Optional[threading.Event] = None
+        self._provider_close_error: Optional[BaseException] = None
+        self._provider_closed = False
+        # One total budget covers cancellation, actor termination, run
+        # finalization, environment cleanup, and provider close.
+        self._shutdown_timeout_seconds = 5.0
+        self._shutting_down = False
+        self._closed = False
         
         # Ray state
         self._ray_initialized = False
@@ -1043,7 +1112,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                         db_url=self._wtb_db_url,
                     ),
                     use_outbox=True,
-                    audit_trail_factory=lambda: WTBAuditTrail() if enable_audit else None,
+                    audit_trail_factory=(lambda: WTBAuditTrail()) if enable_audit else None,
                 )
                 logger.info("RayBatchTestRunner: Event bridge initialized with outbox pattern")
             except Exception as e:
@@ -1078,6 +1147,10 @@ class RayBatchTestRunner(IBatchTestRunner):
         
         # UV Venv environment provider (gRPC Docker service)
         self._environment_provider = environment_provider
+        self._owns_environment_provider = bool(
+            environment_provider is not None and owns_environment_provider
+        )
+        self._environment_namespace = f"ray-{uuid.uuid4().hex[:12]}"
         self._provisioned_env_ids: List[str] = []
     
     @staticmethod
@@ -1108,9 +1181,12 @@ class RayBatchTestRunner(IBatchTestRunner):
             try:
                 ray.init(**init_kwargs)
                 logger.info(f"Ray initialized with config: {init_kwargs}")
-            except Exception as e:
-                logger.warning(f"Ray init with args failed, trying local: {e}")
-                ray.init()
+            except Exception as init_error:
+                configured_target = init_kwargs.get("address", "local")
+                raise BatchRunnerError(
+                    "Failed to initialize configured Ray runtime "
+                    f"at {configured_target}: {init_error}"
+                ) from init_error
         
         self._ray_initialized = True
     
@@ -1126,7 +1202,47 @@ class RayBatchTestRunner(IBatchTestRunner):
             num_workers: Number of actors to create
         """
         if self._actor_pool is not None:
-            return
+            if len(self._actors) == num_workers:
+                return
+
+            # Sequential batches may request different parallelism. The pool
+            # is idle here because run_batch_test permits one owner.
+            failed_actors = []
+            resize_errors = []
+            for actor in list(self._actors):
+                try:
+                    ray.kill(actor, no_restart=True)
+                except Exception as resize_error:
+                    failed_actors.append(actor)
+                    resize_errors.append(f"actor termination: {resize_error}")
+
+            self._actors = failed_actors
+            self._actor_pool = None
+            if failed_actors:
+                self._poisoned = True
+                raise BatchRunnerError(
+                    "Cannot resize Ray actor pool because actor termination "
+                    f"was incomplete: {resize_errors[0]}"
+                )
+
+            if self._environment_provider and self._provisioned_env_ids:
+                remaining_env_ids = []
+                for env_id in list(self._provisioned_env_ids):
+                    try:
+                        self._environment_provider.cleanup_environment(env_id)
+                    except Exception as resize_error:
+                        remaining_env_ids.append(env_id)
+                        resize_errors.append(
+                            f"environment {env_id}: {resize_error}"
+                        )
+                self._provisioned_env_ids = remaining_env_ids
+
+            if resize_errors:
+                self._poisoned = True
+                raise BatchRunnerError(
+                    "Cannot resize Ray actor pool because cleanup was "
+                    f"incomplete: {resize_errors[0]}"
+                )
         
         self._ensure_ray_initialized()
         
@@ -1139,53 +1255,122 @@ class RayBatchTestRunner(IBatchTestRunner):
             f"EnvProvider: {env_status})"
         )
         
-        self._actors = []
-        for i in range(num_workers):
-            actor_id = f"actor_{i}"
-            ray_runtime_env: Dict[str, Any] = self._build_ray_runtime_env(actor_id, {})
-            
-            if self._environment_provider is not None:
-                try:
-                    env_config = {"packages": [], "workflow_id": f"ray-batch-{actor_id}"}
-                    self._environment_provider.create_environment(actor_id, env_config)
-                    self._provisioned_env_ids.append(actor_id)
+        if self._actors:
+            self._poisoned = True
+            raise BatchRunnerError(
+                "Cannot create Ray actor pool while uncommitted actor handles "
+                "remain; call shutdown() to retry cleanup"
+            )
+
+        created_actors: List[Any] = []
+        attempted_env_ids: List[str] = []
+        try:
+            for i in range(num_workers):
+                logical_actor_id = f"actor_{i}"
+                actor_id = f"{self._environment_namespace}-{logical_actor_id}"
+                environment_id = actor_id
+                ray_runtime_env: Dict[str, Any] = self._build_ray_runtime_env(
+                    actor_id,
+                    {},
+                )
+
+                if self._environment_provider is not None:
+                    attempted_env_ids.append(environment_id)
+                    env_config = {
+                        "packages": [],
+                        "workflow_id": f"ray-batch-{self._environment_namespace}",
+                        "node_id": actor_id,
+                    }
+                    self._environment_provider.create_environment(
+                        environment_id,
+                        env_config,
+                    )
+                    self._provisioned_env_ids.append(environment_id)
                     raw_env = self._environment_provider.get_runtime_env(
-                        actor_id
+                        environment_id
                     ) or {}
-                    ray_runtime_env = self._build_ray_runtime_env(actor_id, raw_env)
+                    ray_runtime_env = self._build_ray_runtime_env(
+                        actor_id,
+                        raw_env,
+                    )
                     logger.info(
                         f"Actor {actor_id}: UV venv provisioned via "
                         f"{type(self._environment_provider).__name__} - "
                         f"env_path={raw_env.get('env_path', 'N/A')}, "
                         f"python_path={raw_env.get('python_path', 'N/A')}"
                     )
-                except Exception as e:
-                    logger.warning(
-                        f"Actor {actor_id}: environment provisioning failed, "
-                        f"using default runtime_env: {e}"
+
+                actor_options = {
+                    "num_cpus": self._config.num_cpus_per_task,
+                    "memory": int(
+                        self._config.memory_per_task_gb * 1024 * 1024 * 1024
+                    ),
+                    "max_restarts": self._config.max_retries,
+                }
+                if ray_runtime_env:
+                    actor_options["runtime_env"] = ray_runtime_env
+
+                actor = VariantExecutionActor.options(**actor_options).remote(
+                    agentgit_db_url=self._agentgit_db_url,
+                    wtb_db_url=self._wtb_db_url,
+                    actor_id=actor_id,
+                    filetracker_config=self._filetracker_config,
+                    workspace_config=self._workspace_config,
+                )
+                created_actors.append(actor)
+
+            actor_pool = ray.util.ActorPool(created_actors)
+        except Exception as creation_error:
+            failed_actors = []
+            rollback_errors = []
+            for actor in created_actors:
+                try:
+                    ray.kill(actor, no_restart=True)
+                except Exception as rollback_error:
+                    failed_actors.append(actor)
+                    rollback_errors.append(
+                        f"actor termination: {rollback_error}"
                     )
-                    ray_runtime_env = {}
             
-            actor_options = {
-                "num_cpus": self._config.num_cpus_per_task,
-                "memory": int(self._config.memory_per_task_gb * 1024 * 1024 * 1024),
-                "max_restarts": self._config.max_retries,
-            }
-            if ray_runtime_env:
-                actor_options["runtime_env"] = ray_runtime_env
-            
-            actor = VariantExecutionActor.options(**actor_options).remote(
-                agentgit_db_url=self._agentgit_db_url,
-                wtb_db_url=self._wtb_db_url,
-                actor_id=actor_id,
-                filetracker_config=self._filetracker_config,
-                workspace_config=self._workspace_config,
-            )
-            self._actors.append(actor)
+            if self._environment_provider is not None:
+                if failed_actors:
+                    # A potentially-live actor may still be starting against
+                    # any attempted environment. Preserve every ID until
+                    # shutdown confirms actor termination.
+                    for env_id in attempted_env_ids:
+                        if env_id not in self._provisioned_env_ids:
+                            self._provisioned_env_ids.append(env_id)
+                else:
+                    for env_id in attempted_env_ids:
+                        try:
+                            self._environment_provider.cleanup_environment(env_id)
+                        except Exception as rollback_error:
+                            rollback_errors.append(
+                                f"environment {env_id}: {rollback_error}"
+                            )
+                            if env_id not in self._provisioned_env_ids:
+                                self._provisioned_env_ids.append(env_id)
+                        else:
+                            if env_id in self._provisioned_env_ids:
+                                self._provisioned_env_ids.remove(env_id)
+
+            self._actors = failed_actors
+            self._actor_pool = None
+            if rollback_errors:
+                self._poisoned = True
+                raise BatchRunnerError(
+                    "Failed to create Ray actor pool and rollback incomplete: "
+                    f"{creation_error}; {rollback_errors[0]}"
+                ) from creation_error
+
+            raise BatchRunnerError(
+                f"Failed to create Ray actor pool: {creation_error}"
+            ) from creation_error
         
-        self._actor_pool = ray.util.ActorPool(self._actors)
-        
-        logger.info(f"Actor pool created with {len(self._actors)} actors")
+        # Commit shared state only after every actor and the ActorPool exist.
+        self._actors = created_actors
+        self._actor_pool = actor_pool
+        logger.info("Actor pool created with %s actors", len(self._actors))
     
     @staticmethod
     def _build_ray_runtime_env(
@@ -1208,6 +1393,9 @@ class RayBatchTestRunner(IBatchTestRunner):
         
         ray_env: Dict[str, Any] = {}
         env_vars: Dict[str, str] = dict((raw_env or {}).get("env_vars", {}) or {})
+        # Provider paths may be container-local. Re-introduce VIRTUAL_ENV only
+        # when Ray can select the matching host-accessible interpreter.
+        env_vars.pop("VIRTUAL_ENV", None)
         metadata_vars: Dict[str, str] = {
             "WTB_UV_ENV_TYPE": raw_env.get("type", "unknown"),
             "WTB_UV_ENV_PATH": raw_env.get("env_path", ""),
@@ -1238,8 +1426,25 @@ class RayBatchTestRunner(IBatchTestRunner):
         py_exec = raw_env.get("py_executable", "")
         venv_path = raw_env.get("venv_path", "")
         
-        if py_exec and _os.path.isfile(py_exec):
-            metadata_vars["VIRTUAL_ENV"] = venv_path
+        supports_py_executable = False
+        try:
+            from ray.runtime_env import RuntimeEnv
+
+            supports_py_executable = (
+                "py_executable"
+                in (getattr(RuntimeEnv, "known_fields", ()) or ())
+            )
+        except (ImportError, AttributeError):
+            pass
+
+        if (
+            py_exec
+            and venv_path
+            and _os.path.isfile(py_exec)
+            and supports_py_executable
+        ):
+            ray_env["py_executable"] = str(py_exec)
+            env_vars["VIRTUAL_ENV"] = str(venv_path)
             logger.info(
                 f"Actor {actor_id}: local venv detected, "
                 f"setting VIRTUAL_ENV={venv_path}"
@@ -1317,6 +1522,146 @@ class RayBatchTestRunner(IBatchTestRunner):
                 )
             
             return workflow.to_dict()
+    def _cleanup_batch_resources(
+        self,
+        batch_test: BatchTest,
+    ) -> Optional[BatchRunnerError]:
+        """Cleanup independent batch resources and retain every failed retry."""
+        cleanup_errors: List[str] = []
+
+        if self._event_bridge:
+            try:
+                self._event_bridge.cleanup_batch(batch_test.id)
+            except Exception as event_error:
+                self._poisoned = True
+                self._pending_event_cleanup_ids.add(batch_test.id)
+                cleanup_errors.append(f"event bridge: {event_error}")
+                logger.exception(
+                    "Failed to cleanup event resources for batch %s",
+                    batch_test.id,
+                )
+            else:
+                self._pending_event_cleanup_ids.discard(batch_test.id)
+
+        is_complete = batch_test.status is BatchTestStatus.COMPLETED
+        workspace_config = self._workspace_config or {}
+        if is_complete:
+            should_cleanup_workspace = workspace_config.get(
+                "cleanup_on_complete",
+                True,
+            )
+            workspace_reason = "batch_complete"
+        else:
+            should_cleanup_workspace = not workspace_config.get(
+                "preserve_on_failure",
+                True,
+            )
+            workspace_reason = "batch_failed"
+
+        # A failed actor termination may leave code writing into a workspace.
+        # Preserve it until shutdown confirms termination, regardless of the
+        # configured retention policy.
+        if batch_test.id in self._unsafe_batch_ids:
+            logger.error(
+                "Preserving workspaces for unsafe batch %s",
+                batch_test.id,
+            )
+        elif self._workspace_manager and should_cleanup_workspace:
+            try:
+                cleaned = self._workspace_manager.cleanup_batch(
+                    batch_id=batch_test.id,
+                    reason=workspace_reason,
+                )
+                if cleaned > 0:
+                    logger.info(
+                        "Cleaned up %s workspaces for batch %s",
+                        cleaned,
+                        batch_test.id,
+                    )
+            except Exception as workspace_error:
+                self._poisoned = True
+                self._unsafe_batch_ids.add(batch_test.id)
+                cleanup_errors.append(f"workspace: {workspace_error}")
+                logger.exception(
+                    "Failed to cleanup workspaces for batch %s",
+                    batch_test.id,
+                )
+        elif self._workspace_manager:
+            logger.info(
+                "Preserving workspaces for batch %s by lifecycle policy",
+                batch_test.id,
+            )
+
+        if cleanup_errors:
+            return BatchRunnerError(
+                "Ray batch resource cleanup incomplete for "
+                f"{batch_test.id}: {'; '.join(cleanup_errors)}"
+            )
+        return None
+
+    def _claim_terminal_owner(
+        self,
+        running_test: _RayRunningTest,
+        owner: str,
+    ) -> str:
+        """Claim one immutable terminal owner and return the winner."""
+        with self._running_tests_lock:
+            if running_test.terminal_owner is None:
+                running_test.terminal_owner = owner
+            return running_test.terminal_owner
+
+    def _is_confirmed_cancel(
+        self,
+        running_test: _RayRunningTest,
+    ) -> bool:
+        """Return whether cancellation safely owns the terminal outcome."""
+        with self._running_tests_lock:
+            return (
+                running_test.terminal_owner == "cancel"
+                and running_test.actor_termination_confirmed
+                and running_test.termination_confirmed
+                and running_test.termination_error is None
+            )
+
+    def _cancel_stopped_actors(
+        self,
+        running_test: _RayRunningTest,
+    ) -> bool:
+        """Return whether cancellation already terminated every actor."""
+        with self._running_tests_lock:
+            return (
+                running_test.terminal_owner == "cancel"
+                and running_test.actor_termination_confirmed
+            )
+
+    def _wait_for_cancellation_result(
+        self,
+        running_test: _RayRunningTest,
+    ) -> tuple[bool, Optional[str]]:
+        """Wait until the cancellation owner publishes its final verdict."""
+        while True:
+            with self._running_tests_lock:
+                if not running_test.cancellation_in_progress:
+                    return (
+                        running_test.termination_confirmed,
+                        running_test.termination_error,
+                    )
+            running_test.cancellation_finished.wait()
+
+    def _reconcile_cancelled_variants(
+        self,
+        running_test: _RayRunningTest,
+    ) -> int:
+        """Recompute terminal cancellation totals after result processing stops."""
+        with self._running_tests_lock:
+            running_test.cancelled_variants = max(
+                0,
+                running_test.total_variants
+                - running_test.completed
+                - running_test.failed,
+            )
+            return running_test.cancelled_variants
+
     
     def run_batch_test(self, batch_test: BatchTest) -> BatchTest:
         """
@@ -1343,21 +1688,37 @@ class RayBatchTestRunner(IBatchTestRunner):
         """
         if not RAY_AVAILABLE:
             raise BatchRunnerError("Ray is not available")
-        
+
         if not batch_test.variant_combinations:
             raise BatchRunnerError("No variant combinations to execute")
         
-        # Start batch test
-        batch_test.start()
+        # This runner has one shared actor pool. Register its owner atomically
+        # so concurrent batches cannot select or terminate each other's actors.
+        with self._running_tests_lock:
+            if self._closed:
+                raise BatchRunnerError("Ray batch runner is closed")
+            if self._poisoned:
+                raise BatchRunnerError(
+                    "Ray batch runner is poisoned after incomplete actor termination; "
+                    "call shutdown() to retry cleanup before reusing it"
+                )
+            if self._shutting_down:
+                raise BatchRunnerError("Ray batch runner is shutting down")
+            if self._running_tests:
+                active_id = next(iter(self._running_tests))
+                raise BatchRunnerError(
+                    f"Ray batch {active_id} is already running on this runner"
+                )
+
+            batch_test.start()
+            running_test = _RayRunningTest(
+                batch_test_id=batch_test.id,
+                started_at=datetime.now(),
+                total_variants=len(batch_test.variant_combinations),
+            )
+            self._running_tests[batch_test.id] = running_test
         
-        # Track running state
-        running_test = _RayRunningTest(
-            batch_test_id=batch_test.id,
-            started_at=datetime.now(),
-            total_variants=len(batch_test.variant_combinations),
-        )
-        self._running_tests[batch_test.id] = running_test
-        
+        pending_refs: List[Any] = []
         try:
             # Determine parallelism
             num_workers = min(
@@ -1366,8 +1727,11 @@ class RayBatchTestRunner(IBatchTestRunner):
                 self._config.max_pending_tasks,
             )
             
-            # Create actor pool
-            self._create_actor_pool(num_workers)
+            # Pool creation and cancellation share a lock. A cancellation
+            # requested before creation acquires no new actors.
+            with self._actor_pool_lock:
+                if not running_test.cancelled:
+                    self._create_actor_pool(num_workers)
             
             # Emit batch test started event
             if self._event_bridge:
@@ -1393,7 +1757,10 @@ class RayBatchTestRunner(IBatchTestRunner):
                     num_actors=num_workers,
                     cpus_per_actor=self._config.num_cpus_per_task,
                     memory_per_actor_gb=self._config.memory_per_task_gb,
-                    actor_ids=[f"actor_{i}" for i in range(num_workers)],
+                    actor_ids=[
+                        f"{self._environment_namespace}-actor_{i}"
+                        for i in range(num_workers)
+                    ],
                 )
             
             # Load and serialize workflow
@@ -1413,7 +1780,6 @@ class RayBatchTestRunner(IBatchTestRunner):
             )
             
             # Submit all variants with backpressure
-            pending_refs = []
             ref_to_combo: Dict[Any, VariantCombination] = {}
             ref_to_workspace: Dict[Any, Optional[Workspace]] = {}  # Track workspaces (2026-01-16)
             
@@ -1466,21 +1832,26 @@ class RayBatchTestRunner(IBatchTestRunner):
                         total_in_queue=len(batch_test.variant_combinations),
                     )
                 
-                # Submit to pool
-                actor = self._get_available_actor()
-                ref = actor.execute_variant.remote(
-                    workflow_dict=ray.get(workflow_ref),
-                    combination=combo_dict,
-                    initial_state=ray.get(initial_state_ref),
-                    batch_test_id=ray.get(batch_test_id_ref),
-                    workspace_data=workspace_data,  # Pass workspace (2026-01-16)
-                    graph_factory_pickled=graph_factory_pickled,
-                )
-                
-                pending_refs.append(ref)
-                ref_to_combo[ref] = combo
-                ref_to_workspace[ref] = workspace  # Track workspace for cleanup
-                running_test.pending_refs.append(ref)
+                # Cancellation cannot return between actor selection and ref
+                # registration. It either prevents submission or kills the
+                # actor that accepted the fully-tracked task.
+                with self._actor_pool_lock:
+                    if running_test.cancelled:
+                        break
+                    actor = self._get_available_actor()
+                    ref = actor.execute_variant.remote(
+                        workflow_dict=ray.get(workflow_ref),
+                        combination=combo_dict,
+                        initial_state=ray.get(initial_state_ref),
+                        batch_test_id=ray.get(batch_test_id_ref),
+                        workspace_data=workspace_data,  # Pass workspace (2026-01-16)
+                        graph_factory_pickled=graph_factory_pickled,
+                    )
+
+                    pending_refs.append(ref)
+                    ref_to_combo[ref] = combo
+                    ref_to_workspace[ref] = workspace  # Track workspace for cleanup
+                    running_test.pending_refs.append(ref)
                 
                 # Backpressure: Wait if too many pending
                 if len(pending_refs) >= self._config.max_pending_tasks:
@@ -1502,8 +1873,38 @@ class RayBatchTestRunner(IBatchTestRunner):
                     timeout=self._config.task_timeout_seconds,
                 )
             
-            # Finalize batch test
-            if running_test.cancelled:
+            # Build the comparison before committing a terminal state. This
+            # keeps matrix failures as a single RUNNING -> FAILED transition.
+            with self._running_tests_lock:
+                terminal_owner = running_test.terminal_owner
+
+            if terminal_owner is None:
+                if running_test.failed == len(batch_test.variant_combinations):
+                    terminal_owner = self._claim_terminal_owner(
+                        running_test,
+                        "run_failed",
+                    )
+                else:
+                    batch_test.build_comparison_matrix()
+                    terminal_owner = self._claim_terminal_owner(
+                        running_test,
+                        "run_completed",
+                    )
+
+            # A cancellation request is not a safe terminal result until
+            # actor termination and required environment cleanup complete.
+            if terminal_owner == "cancel":
+                termination_confirmed, termination_error = (
+                    self._wait_for_cancellation_result(running_test)
+                )
+                if termination_error:
+                    raise BatchRunnerError(termination_error)
+                if not termination_confirmed:
+                    raise BatchRunnerError(
+                        "Ray batch cancellation ended without confirmed actor termination"
+                    )
+
+                self._reconcile_cancelled_variants(running_test)
                 batch_test.cancel()
                 
                 # Emit cancelled event
@@ -1514,9 +1915,9 @@ class RayBatchTestRunner(IBatchTestRunner):
                         reason="User cancelled",
                         cancelled_by="user",
                         variants_completed=running_test.completed,
-                        variants_cancelled=len(running_test.pending_refs),
+                        variants_cancelled=running_test.cancelled_variants,
                     )
-            elif running_test.failed == len(batch_test.variant_combinations):
+            elif terminal_owner == "run_failed":
                 batch_test.fail("All variants failed")
                 
                 # Emit failed event
@@ -1529,9 +1930,8 @@ class RayBatchTestRunner(IBatchTestRunner):
                         variants_succeeded=running_test.completed,
                         variants_failed=running_test.failed,
                     )
-            else:
+            elif terminal_owner == "run_completed":
                 batch_test.complete()
-                batch_test.build_comparison_matrix()
                 
                 # Calculate total files tracked
                 total_files_tracked = sum(
@@ -1559,6 +1959,11 @@ class RayBatchTestRunner(IBatchTestRunner):
                         total_files_tracked=total_files_tracked,
                         has_comparison_matrix=True,
                     )
+            else:
+                raise BatchRunnerError(
+                    "Ray batch finalization cannot proceed while terminal "
+                    f"state is owned by {terminal_owner}"
+                )
             
             logger.info(
                 f"Batch test {batch_test.id} completed: "
@@ -1568,8 +1973,88 @@ class RayBatchTestRunner(IBatchTestRunner):
             return batch_test
             
         except Exception as e:
+            # Seal an unowned failure before a late cancel can claim a
+            # contradictory outcome. If cancellation already owns the result,
+            # wait for its environment-cleanup verdict before deciding.
+            with self._running_tests_lock:
+                terminal_owner = running_test.terminal_owner
+                claimed_run_failure = terminal_owner is None
+                if claimed_run_failure:
+                    running_test.terminal_owner = "run_failed"
+                    terminal_owner = "run_failed"
+            # Unknown orchestration failures may leave submitted actor work
+            # running. Terminate it before workspace cleanup, or preserve all
+            # handles/resources and poison the runner if termination fails.
+            if (
+                running_test.pending_refs
+                and batch_test.id not in self._unsafe_batch_ids
+            ):
+                termination_issue = self._terminate_failed_batch_work(
+                    batch_test.id,
+                    pending_refs,
+                    running_test,
+                    reason=type(e).__name__,
+                )
+                if termination_issue:
+                    logger.error(
+                        "Ray batch %s failure cleanup incomplete: %s",
+                        batch_test.id,
+                        termination_issue,
+                    )
+
+            if terminal_owner == "cancel":
+                self._wait_for_cancellation_result(running_test)
+            confirmed_cancel = self._is_confirmed_cancel(running_test)
+
+            if confirmed_cancel:
+                # Cancellation already stopped every actor and cleaned its
+                # environments. Preserve it despite late result/event errors.
+                logger.warning(
+                    "Ignoring post-cancellation Ray batch error for %s: %s",
+                    batch_test.id,
+                    e,
+                )
+                if batch_test.status is BatchTestStatus.RUNNING:
+                    self._reconcile_cancelled_variants(running_test)
+                    batch_test.cancel()
+                    if self._event_bridge:
+                        try:
+                            self._event_bridge.on_batch_test_cancelled(
+                                batch_test_id=batch_test.id,
+                                workflow_id=batch_test.workflow_id,
+                                reason="User cancelled",
+                                cancelled_by="user",
+                                variants_completed=running_test.completed,
+                                variants_cancelled=running_test.cancelled_variants,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Failed to publish terminal cancellation for %s",
+                                batch_test.id,
+                            )
+                return batch_test
+
+            if (
+                terminal_owner == "run_completed"
+                or (terminal_owner == "run_failed" and not claimed_run_failure)
+            ):
+                # The aggregate is already terminal. Surface the callback error
+                # without a contradictory second state transition.
+                logger.error(
+                    "Ray batch %s post-terminal finalization failed: %s",
+                    batch_test.id,
+                    e,
+                )
+                raise BatchRunnerError(
+                    f"Batch test {terminal_owner} finalization failed: {e}"
+                ) from e
+
             logger.error(f"Ray batch test {batch_test.id} failed: {e}")
-            batch_test.fail(str(e))
+            if batch_test.status in {
+                BatchTestStatus.PENDING,
+                BatchTestStatus.RUNNING,
+            }:
+                batch_test.fail(str(e))
             
             # Emit failed event
             if self._event_bridge:
@@ -1580,28 +2065,27 @@ class RayBatchTestRunner(IBatchTestRunner):
                     error_message=str(e),
                     variants_succeeded=running_test.completed,
                     variants_failed=running_test.failed,
-                    variants_pending=len(running_test.pending_refs),
+                    variants_pending=max(
+                        0,
+                        running_test.total_variants
+                        - running_test.completed
+                        - running_test.failed,
+                    ),
                 )
             
             raise BatchRunnerError(f"Batch test failed: {e}") from e
             
         finally:
-            # Cleanup event bridge resources
-            if self._event_bridge:
-                self._event_bridge.cleanup_batch(batch_test.id)
-            self._running_tests.pop(batch_test.id, None)
-            
-            # Cleanup workspaces for this batch (2026-01-16)
-            if self._workspace_manager:
-                try:
-                    cleaned = self._workspace_manager.cleanup_batch(
-                        batch_id=batch_test.id,
-                        reason="batch_complete",
-                    )
-                    if cleaned > 0:
-                        logger.info(f"Cleaned up {cleaned} workspaces for batch {batch_test.id}")
-                except Exception as ws_error:
-                    logger.warning(f"Workspace cleanup failed for batch {batch_test.id}: {ws_error}")
+            cleanup_error: Optional[BatchRunnerError] = None
+            try:
+                cleanup_error = self._cleanup_batch_resources(batch_test)
+            finally:
+                with self._running_tests_lock:
+                    self._running_tests.pop(batch_test.id, None)
+                running_test.finished_event.set()
+
+            if cleanup_error is not None:
+                raise cleanup_error
     
     def _get_available_actor(self) -> Any:
         """Get an available actor from the pool (round-robin)."""
@@ -1613,6 +2097,84 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._actors = self._actors[1:] + [self._actors[0]]
         return actor
     
+    def _terminate_failed_batch_work(
+        self,
+        batch_test_id: str,
+        pending_refs: List[Any],
+        running_test: _RayRunningTest,
+        reason: str,
+    ) -> Optional[str]:
+        """Terminate submitted work after an unexpected orchestration failure."""
+        if self._cancel_stopped_actors(running_test):
+            # The actor pool was already terminated safely by cancel(). Late
+            # event/result processing errors cannot resurrect submitted work.
+            pending_refs.clear()
+            running_test.pending_refs.clear()
+            return None
+
+        with self._actor_pool_lock:
+            # cancel() may have won while this path waited for lifecycle lock.
+            if self._cancel_stopped_actors(running_test):
+                pending_refs.clear()
+                running_test.pending_refs.clear()
+                return None
+
+            actors = list(self._actors)
+            failed_actors = []
+            termination_errors = []
+            for actor in actors:
+                try:
+                    ray.kill(actor, no_restart=True)
+                except Exception as termination_error:
+                    failed_actors.append(actor)
+                    termination_errors.append(str(termination_error))
+                    logger.error(
+                        "Failed to terminate actor after %s: %s",
+                        reason,
+                        termination_error,
+                    )
+
+            if pending_refs and not actors:
+                termination_errors.append(
+                    "no actor handles available for submitted refs"
+                )
+
+            self._actors = failed_actors
+            self._actor_pool = None
+            if termination_errors:
+                self._poisoned = True
+                self._unsafe_batch_ids.add(batch_test_id)
+                self._orphaned_refs.extend(pending_refs)
+                return termination_errors[0]
+
+            self._actors.clear()
+            pending_refs.clear()
+            running_test.pending_refs.clear()
+
+            cleanup_errors = []
+            if self._environment_provider and self._provisioned_env_ids:
+                remaining_env_ids = []
+                for env_id in list(self._provisioned_env_ids):
+                    try:
+                        self._environment_provider.cleanup_environment(env_id)
+                    except Exception as cleanup_error:
+                        remaining_env_ids.append(env_id)
+                        cleanup_errors.append(
+                            f"environment {env_id}: {cleanup_error}"
+                        )
+                        logger.warning(
+                            "Failed to cleanup env %s after %s: %s",
+                            env_id,
+                            reason,
+                            cleanup_error,
+                        )
+                self._provisioned_env_ids = remaining_env_ids
+
+            if cleanup_errors:
+                self._poisoned = True
+                return cleanup_errors[0]
+
+            return None
     def _process_completed_refs(
         self,
         pending_refs: List[Any],
@@ -1622,7 +2184,8 @@ class RayBatchTestRunner(IBatchTestRunner):
         timeout: float,
     ):
         """
-        Process completed ObjectRefs and add results to batch test.
+        Process completed ObjectRefs and abort the actor pool if the configured
+        no-progress window expires.
         
         Args:
             pending_refs: List of pending ObjectRefs (modified in place)
@@ -1640,6 +2203,92 @@ class RayBatchTestRunner(IBatchTestRunner):
             num_returns=min(len(pending_refs), 1),
             timeout=timeout,
         )
+
+        if not ready_refs:
+            timeout_message = (
+                f"No Ray task completed within {timeout} seconds; "
+                "terminating the actor pool"
+            )
+            logger.error(timeout_message)
+
+            with self._actor_pool_lock:
+                # Commit exactly one terminal owner while cancel cannot mutate
+                # the actor pool. A late cancel observes "timeout" and cannot
+                # report a contradictory successful cancellation.
+                with self._running_tests_lock:
+                    if running_test.terminal_owner == "cancel":
+                        return
+                    if running_test.terminal_owner is None:
+                        running_test.terminal_owner = "timeout"
+                    elif running_test.terminal_owner != "timeout":
+                        raise BatchRunnerError(
+                            "Ray timeout cannot replace terminal owner "
+                            f"{running_test.terminal_owner}"
+                        )
+
+                failed_actors = []
+                kill_errors = []
+                for actor in list(self._actors):
+                    try:
+                        ray.kill(actor, no_restart=True)
+                    except Exception as kill_error:
+                        failed_actors.append(actor)
+                        kill_errors.append(str(kill_error))
+                        logger.error(
+                            "Failed to terminate timed-out Ray actor: %s",
+                            kill_error,
+                        )
+
+                self._actor_pool = None
+
+                if failed_actors:
+                    # At least one actor may still be executing. Keep every
+                    # potentially-live ref and resource so shutdown can retry.
+                    self._actors = failed_actors
+                    self._poisoned = True
+                    self._unsafe_batch_ids.add(batch_test.id)
+                    self._orphaned_refs.extend(pending_refs)
+                    timeout_message += (
+                        f" ({len(kill_errors)} actor termination error(s); "
+                        "runner poisoned)"
+                    )
+                    raise BatchRunnerError(timeout_message)
+
+                self._actors.clear()
+                pending_refs.clear()
+                running_test.pending_refs.clear()
+                ref_to_combo.clear()
+
+                if self._environment_provider and self._provisioned_env_ids:
+                    remaining_env_ids = []
+                    for env_id in list(self._provisioned_env_ids):
+                        try:
+                            self._environment_provider.cleanup_environment(env_id)
+                        except Exception as cleanup_error:
+                            remaining_env_ids.append(env_id)
+                            logger.warning(
+                                "Failed to clean up timed-out env %s: %s",
+                                env_id,
+                                cleanup_error,
+                            )
+                    self._provisioned_env_ids = remaining_env_ids
+                    if remaining_env_ids:
+                        self._poisoned = True
+                        timeout_message += (
+                            " (environment cleanup incomplete; runner poisoned)"
+                        )
+
+            # Timeout owns the terminal outcome once committed above.
+
+            # The batch aborts here, including combinations that backpressure
+            # had not submitted yet. Keep the terminal event totals complete.
+            aborted_count = max(
+                0,
+                running_test.total_variants - running_test.completed - running_test.failed,
+            )
+            running_test.failed += aborted_count
+
+            raise BatchRunnerError(timeout_message)
         
         # Update pending_refs in place
         pending_refs.clear()
@@ -1707,7 +2356,18 @@ class RayBatchTestRunner(IBatchTestRunner):
                             nodes_completed=result_dict.get("node_count", 0),
                             checkpoints_created=result_dict.get("checkpoint_count", 0),
                         )
-                    
+
+            except (
+                ray.exceptions.TaskCancelledError,
+                ray.exceptions.RayActorError,
+            ) as cancellation_error:
+                if not running_test.cancelled:
+                    raise
+                logger.info(
+                    "Ray task for %s reached cancellation terminal state: %s",
+                    combo.name if combo else "unknown",
+                    cancellation_error,
+                )
             except ray.exceptions.RayTaskError as e:
                 # Actor task raised an exception
                 logger.error(f"Ray task error for {combo.name if combo else 'unknown'}: {e}")
@@ -1764,18 +2424,20 @@ class RayBatchTestRunner(IBatchTestRunner):
     
     def get_status(self, batch_test_id: str) -> BatchRunnerStatus:
         """Get status of a batch test."""
-        if batch_test_id in self._running_tests:
-            running = self._running_tests[batch_test_id]
+        with self._running_tests_lock:
+            running = self._running_tests.get(batch_test_id)
+            if running is None:
+                return BatchRunnerStatus.IDLE
             if running.cancelled:
                 return BatchRunnerStatus.CANCELLING
             return BatchRunnerStatus.RUNNING
-        return BatchRunnerStatus.IDLE
     
     def get_progress(self, batch_test_id: str) -> Optional[BatchRunnerProgress]:
         """Get progress for a running batch test."""
-        running = self._running_tests.get(batch_test_id)
-        if running is None:
-            return None
+        with self._running_tests_lock:
+            running = self._running_tests.get(batch_test_id)
+            if running is None:
+                return None
         
         completed = running.completed + running.failed
         elapsed = (datetime.now() - running.started_at).total_seconds() * 1000
@@ -1797,33 +2459,256 @@ class RayBatchTestRunner(IBatchTestRunner):
             estimated_remaining_ms=estimated_remaining,
         )
     
-    def cancel(self, batch_test_id: str) -> bool:
+    @staticmethod
+    def _remaining_budget(deadline: Optional[float]) -> Optional[float]:
+        """Return remaining seconds for an absolute monotonic deadline."""
+        if deadline is None:
+            return None
+        return max(0.0, deadline - time.monotonic())
+
+    @staticmethod
+    def _run_with_deadline(
+        operation: Callable[[], Any],
+        deadline: Optional[float],
+        description: str,
+    ) -> Any:
+        """Run an external blocking operation within the remaining budget."""
+        if deadline is None:
+            return operation()
+
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining <= 0:
+            raise TimeoutError(f"{description} exceeded shutdown deadline")
+
+        completed = threading.Event()
+        outcome: Dict[str, Any] = {}
+
+        def invoke() -> None:
+            try:
+                outcome["value"] = operation()
+            except BaseException as error:
+                outcome["error"] = error
+            finally:
+                completed.set()
+
+        worker = threading.Thread(
+            target=invoke,
+            name="wtb-bounded-cleanup",
+            daemon=True,
+        )
+        worker.start()
+        if not completed.wait(timeout=remaining):
+            raise TimeoutError(f"{description} exceeded shutdown deadline")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+
+    def _cleanup_environment_with_deadline(
+        self,
+        env_id: str,
+        deadline: Optional[float],
+    ) -> None:
+        """Cleanup one environment without exceeding an optional deadline."""
+        if self._environment_provider is None:
+            return
+
+        if deadline is None:
+            self._environment_provider.cleanup_environment(env_id)
+            return
+
+        remaining = self._remaining_budget(deadline)
+        if remaining is None or remaining <= 0:
+            raise TimeoutError(
+                f"Environment cleanup for {env_id} exceeded shutdown deadline"
+            )
+
+        self._run_with_deadline(
+            lambda: self._environment_provider.cleanup_environment(
+                env_id,
+                timeout=remaining,
+            ),
+            deadline,
+            f"Environment cleanup for {env_id}",
+        )
+
+    def cancel(
+        self,
+        batch_test_id: str,
+        _lock_timeout: Optional[float] = None,
+    ) -> bool:
         """
         Cancel a running batch test.
         
         Args:
             batch_test_id: ID of the batch test to cancel
+            _lock_timeout: Internal total shutdown budget in seconds.
             
         Returns:
-            True if cancellation was initiated
+            True if cancellation reached a confirmed safe terminal state;
+            False if not found or termination could not be confirmed
         """
-        running = self._running_tests.get(batch_test_id)
-        if running is None:
-            return False
+        cancel_deadline = (
+            None
+            if _lock_timeout is None
+            else time.monotonic() + max(0.0, _lock_timeout)
+        )
+        wait_for_existing = False
+        with self._running_tests_lock:
+            running = self._running_tests.get(batch_test_id)
+            if running is None:
+                return False
+
+            if running.terminal_owner not in (None, "cancel"):
+                logger.info(
+                    "Ray batch cancellation rejected because terminal state "
+                    "is owned by %s",
+                    running.terminal_owner,
+                )
+                return False
+
+            if running.cancellation_in_progress:
+                wait_for_existing = True
+            elif running.terminal_owner == "cancel":
+                return (
+                    running.termination_confirmed
+                    and running.termination_error is None
+                )
+            else:
+                # A cancellation failure is terminal for this run. Recovery
+                # belongs to shutdown, which can retry preserved resources.
+                running.terminal_owner = "cancel"
+                running.cancelled = True
+                running.cancelled_variants = max(
+                    0,
+                    running.total_variants
+                    - running.completed
+                    - running.failed,
+                )
+                running.cancellation_in_progress = True
+                running.termination_confirmed = False
+                running.termination_error = None
+                running.cancellation_finished.clear()
+
+        if wait_for_existing:
+            completed = running.cancellation_finished.wait(
+                timeout=self._remaining_budget(cancel_deadline),
+            )
+            if not completed:
+                return False
+            with self._running_tests_lock:
+                return (
+                    running.termination_confirmed
+                    and running.termination_error is None
+                )
         
-        running.cancelled = True
-        
-        # Cancel pending Ray tasks
-        cancelled_count = 0
-        for ref in running.pending_refs:
-            try:
-                ray.cancel(ref, force=True)
-                cancelled_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to cancel Ray task: {e}")
-        
-        logger.info(f"Batch test {batch_test_id} cancellation initiated")
-        return True
+        success = False
+        error_message: Optional[str] = None
+        remaining = self._remaining_budget(cancel_deadline)
+        acquired = (
+            self._actor_pool_lock.acquire()
+            if remaining is None
+            else self._actor_pool_lock.acquire(
+                timeout=remaining,
+            )
+        )
+        try:
+            if not acquired:
+                error_message = (
+                    "Ray batch actor termination lock acquisition timed out"
+                )
+                self._poisoned = True
+                self._unsafe_batch_ids.add(batch_test_id)
+                self._orphaned_refs.extend(running.pending_refs)
+            else:
+                # Regular/threaded Ray actors only receive a cooperative
+                # cancellation flag. Kill the pool exactly once for this run.
+                termination_errors = []
+                if not running.actor_termination_confirmed:
+                    actors = list(self._actors)
+                    failed_actors = []
+                    for actor in actors:
+                        try:
+                            self._run_with_deadline(
+                                lambda actor=actor: ray.kill(
+                                    actor, no_restart=True
+                                ),
+                                cancel_deadline,
+                                "Ray actor termination during cancellation",
+                            )
+                        except Exception as error:
+                            failed_actors.append(actor)
+                            termination_errors.append(str(error))
+                            logger.warning(
+                                "Failed to terminate actor during cancellation: %s",
+                                error,
+                            )
+
+                    if running.pending_refs and not actors:
+                        termination_errors.append(
+                            "no actor handles available for submitted refs"
+                        )
+
+                    self._actors = failed_actors
+                    self._actor_pool = None
+                    if not termination_errors:
+                        running.actor_termination_confirmed = True
+
+                if termination_errors:
+                    self._poisoned = True
+                    self._unsafe_batch_ids.add(batch_test_id)
+                    self._orphaned_refs.extend(running.pending_refs)
+                    error_message = (
+                        "Ray batch actor termination was incomplete: "
+                        f"{termination_errors[0]}"
+                    )
+                else:
+                    cleanup_errors = []
+                    if self._environment_provider and self._provisioned_env_ids:
+                        remaining_env_ids = []
+                        for env_id in list(self._provisioned_env_ids):
+                            try:
+                                self._cleanup_environment_with_deadline(
+                                    env_id,
+                                    cancel_deadline,
+                                )
+                            except Exception as cleanup_error:
+                                remaining_env_ids.append(env_id)
+                                cleanup_errors.append(str(cleanup_error))
+                                logger.warning(
+                                    "Failed to cleanup cancelled env %s: %s",
+                                    env_id,
+                                    cleanup_error,
+                                )
+                        self._provisioned_env_ids = remaining_env_ids
+
+                    if cleanup_errors:
+                        self._poisoned = True
+                        error_message = (
+                            "Ray batch cancellation environment cleanup was "
+                            f"incomplete: {cleanup_errors[0]}"
+                        )
+                    else:
+                        success = True
+        finally:
+            if acquired:
+                self._actor_pool_lock.release()
+            with self._running_tests_lock:
+                running.termination_confirmed = success
+                running.termination_error = error_message
+                if success:
+                    running.pending_refs.clear()
+                running.cancellation_in_progress = False
+                running.cancellation_finished.set()
+
+        if success:
+            logger.info("Batch test %s cancellation confirmed", batch_test_id)
+        else:
+            logger.error(
+                "Ray batch %s cancellation was not confirmed: %s",
+                batch_test_id,
+                error_message,
+            )
+        return success
     
     @property
     def event_bridge(self) -> Optional["RayEventBridge"]:
@@ -1845,47 +2730,246 @@ class RayBatchTestRunner(IBatchTestRunner):
         return None
     
     def shutdown(self) -> None:
+        """Serialize shutdown so shared resources close exactly once."""
+        with self._shutdown_lock:
+            self._shutdown_locked()
+
+    def _close_owned_environment_provider(
+        self,
+        deadline: Optional[float],
+    ) -> None:
+        """Close an owned provider once, reusing an in-flight close on retry."""
+        if not self._environment_provider or not self._owns_environment_provider:
+            return
+        close = getattr(self._environment_provider, "close", None)
+        if not callable(close):
+            return
+
+        should_start = False
+        with self._provider_close_lock:
+            if self._provider_closed:
+                return
+            close_event = self._provider_close_event
+            if close_event is None:
+                remaining = self._remaining_budget(deadline)
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError(
+                        "Environment provider close exceeded shutdown deadline"
+                    )
+                close_event = threading.Event()
+                self._provider_close_event = close_event
+                self._provider_close_error = None
+                should_start = True
+
+        assert close_event is not None
+        if should_start:
+
+            def invoke_close() -> None:
+                close_error: Optional[BaseException] = None
+                try:
+                    close()
+                except BaseException as error:
+                    close_error = error
+                finally:
+                    with self._provider_close_lock:
+                        self._provider_close_error = close_error
+                        if close_error is None:
+                            self._provider_closed = True
+                    close_event.set()
+
+            worker = threading.Thread(
+                target=invoke_close,
+                name="wtb-environment-provider-close",
+                daemon=True,
+            )
+            try:
+                worker.start()
+            except BaseException:
+                with self._provider_close_lock:
+                    if self._provider_close_event is close_event:
+                        self._provider_close_event = None
+                        self._provider_close_error = None
+                raise
+
+        remaining = self._remaining_budget(deadline)
+        if remaining is None:
+            close_event.wait()
+        elif remaining <= 0 or not close_event.wait(timeout=remaining):
+            raise TimeoutError(
+                "Environment provider close exceeded shutdown deadline"
+            )
+
+        with self._provider_close_lock:
+            close_error = self._provider_close_error
+            if close_error is not None and self._provider_close_event is close_event:
+                self._provider_close_event = None
+                self._provider_close_error = None
+        if close_error is not None:
+            raise close_error
+
+    def _shutdown_locked(self) -> None:
         """
         Shutdown Ray resources.
         
-        Kills all actors and cleans up state.
+        Kills all actors and cleans up state. If Ray cannot confirm actor
+        termination, live handles and resources remain tracked for a retry.
         """
         logger.info("Shutting down RayBatchTestRunner")
         
-        # Cancel any running tests
-        for batch_test_id in list(self._running_tests.keys()):
-            self.cancel(batch_test_id)
+        # Stop accepting new work before taking the active-run snapshot.
+        # The deadline includes actor-lock acquisition inside cancel().
+        shutdown_deadline = (
+            time.monotonic() + self._shutdown_timeout_seconds
+        )
+        with self._running_tests_lock:
+            if self._closed:
+                return
+            self._shutting_down = True
+            active_tests = list(self._running_tests.values())
+
+        for running in active_tests:
+            remaining = max(0.0, shutdown_deadline - time.monotonic())
+            self.cancel(
+                running.batch_test_id,
+                _lock_timeout=remaining,
+            )
         
-        # Kill actors
-        for actor in self._actors:
-            try:
-                ray.kill(actor)
-            except Exception as e:
-                logger.warning(f"Failed to kill actor: {e}")
+        # cancel() confirms actor termination, but the run thread still owns
+        # result/event/workspace finalization. Do not close shared providers
+        # until every run has completed that finally block.
+        for running in active_tests:
+            remaining = max(0.0, shutdown_deadline - time.monotonic())
+            if not running.finished_event.wait(timeout=remaining):
+                self._poisoned = True
+                raise BatchRunnerError(
+                    "RayBatchTestRunner shutdown timed out waiting for active "
+                    f"batch {running.batch_test_id} to finish"
+                )
         
-        self._actors.clear()
-        self._actor_pool = None
-        self._running_tests.clear()
+        with self._running_tests_lock:
+            if self._running_tests:
+                self._poisoned = True
+                active_ids = ", ".join(self._running_tests)
+                raise BatchRunnerError(
+                    "RayBatchTestRunner shutdown found unfinished batches: "
+                    f"{active_ids}"
+                )
+
+        with self._actor_pool_lock:
+            failed_actors = []
+            termination_errors = []
+            for actor in list(self._actors):
+                try:
+                    self._run_with_deadline(
+                        lambda actor=actor: ray.kill(
+                            actor, no_restart=True
+                        ),
+                        shutdown_deadline,
+                        "Ray actor termination during shutdown",
+                    )
+                except Exception as error:
+                    failed_actors.append(actor)
+                    termination_errors.append(str(error))
+                    logger.warning("Failed to kill actor: %s", error)
+
+            self._actors = failed_actors
+            self._actor_pool = None
+            if failed_actors:
+                self._poisoned = True
+                raise BatchRunnerError(
+                    "RayBatchTestRunner shutdown could not confirm termination of "
+                    f"{len(failed_actors)} actor(s): {termination_errors[0]}"
+                )
+
+            self._actors.clear()
         
+        self._orphaned_refs.clear()
+        cleanup_errors = []
+
+        if self._event_bridge and self._pending_event_cleanup_ids:
+            remaining_event_cleanup_ids = set()
+            for batch_id in list(self._pending_event_cleanup_ids):
+                try:
+                    self._run_with_deadline(
+                        lambda batch_id=batch_id: self._event_bridge.cleanup_batch(
+                            batch_id
+                        ),
+                        shutdown_deadline,
+                        f"Event cleanup for batch {batch_id}",
+                    )
+                except Exception as error:
+                    remaining_event_cleanup_ids.add(batch_id)
+                    cleanup_errors.append(f"event batch {batch_id}: {error}")
+                    logger.warning(
+                        "Failed to retry event cleanup for batch %s: %s",
+                        batch_id,
+                        error,
+                    )
+            self._pending_event_cleanup_ids = remaining_event_cleanup_ids
+
         if self._environment_provider and self._provisioned_env_ids:
             logger.info(
                 f"Cleaning up {len(self._provisioned_env_ids)} provisioned UV venvs"
             )
-            for env_id in self._provisioned_env_ids:
+            remaining_env_ids = []
+            for env_id in list(self._provisioned_env_ids):
                 try:
-                    self._environment_provider.cleanup_environment(env_id)
+                    self._cleanup_environment_with_deadline(
+                        env_id,
+                        shutdown_deadline,
+                    )
                 except Exception as e:
+                    remaining_env_ids.append(env_id)
+                    cleanup_errors.append(f"environment {env_id}: {e}")
                     logger.warning(f"Failed to cleanup env {env_id}: {e}")
-            self._provisioned_env_ids.clear()
-        
-        if self._environment_provider:
-            _close = getattr(self._environment_provider, "close", None)
-            if callable(_close):
+            self._provisioned_env_ids = remaining_env_ids
+
+        if self._unsafe_batch_ids:
+            remaining_unsafe_batches = set()
+            for batch_id in list(self._unsafe_batch_ids):
+                if not self._workspace_manager:
+                    continue
                 try:
-                    _close()
+                    self._run_with_deadline(
+                        lambda batch_id=batch_id: self._workspace_manager.cleanup_batch(
+                            batch_id=batch_id,
+                            reason="runner_shutdown_after_timeout",
+                        ),
+                        shutdown_deadline,
+                        f"Workspace cleanup for batch {batch_id}",
+                    )
                 except Exception as e:
-                    logger.warning(f"Failed to close environment provider: {e}")
-        
+                    remaining_unsafe_batches.add(batch_id)
+                    cleanup_errors.append(f"workspace batch {batch_id}: {e}")
+                    logger.warning(
+                        "Failed to cleanup preserved workspaces for batch %s: %s",
+                        batch_id,
+                        e,
+                    )
+            self._unsafe_batch_ids = remaining_unsafe_batches
+
+        if cleanup_errors:
+            self._poisoned = True
+            raise BatchRunnerError(
+                "RayBatchTestRunner shutdown cleanup incomplete: "
+                f"{cleanup_errors[0]}"
+            )
+
+        if self._environment_provider and self._owns_environment_provider:
+            try:
+                self._close_owned_environment_provider(shutdown_deadline)
+            except Exception as e:
+                self._poisoned = True
+                raise BatchRunnerError(
+                    "RayBatchTestRunner shutdown cleanup incomplete: "
+                    f"environment provider close: {e}"
+                ) from e
+
+        self._poisoned = False
+        with self._running_tests_lock:
+            self._closed = True
+            # Keep the terminal gate closed because providers were closed.
+            self._shutting_down = True
         logger.info("RayBatchTestRunner shutdown complete")
     
     def get_actor_stats(self) -> List[Dict[str, Any]]:

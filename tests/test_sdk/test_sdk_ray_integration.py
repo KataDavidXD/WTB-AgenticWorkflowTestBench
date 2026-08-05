@@ -14,7 +14,9 @@ For full Ray integration tests, set RAY_INTEGRATION_TESTS=1:
     RAY_INTEGRATION_TESTS=1 pytest tests/test_sdk/test_sdk_ray_integration.py -v
 """
 
+import base64
 import pytest
+import json
 import os
 import time
 import uuid
@@ -127,6 +129,54 @@ class TestBatchTestRunnerFactory:
         assert isinstance(runner, ThreadPoolBatchTestRunner)
         
         runner.shutdown()
+
+    def test_ray_enabled_without_config_uses_ray_defaults(self):
+        """ray_enabled must not silently select the threadpool runner."""
+        from unittest.mock import patch, sentinel
+
+        config = WTBConfig.for_testing()
+        config.ray_enabled = True
+        config.ray_config = None
+
+        with (
+            patch.object(
+                BatchTestRunnerFactory,
+                "create_ray",
+                return_value=sentinel.ray_runner,
+            ) as create_ray,
+            patch.object(BatchTestRunnerFactory, "create_threadpool") as create_threadpool,
+        ):
+            runner = BatchTestRunnerFactory.create(config)
+
+        assert runner is sentinel.ray_runner
+        create_ray.assert_called_once_with(config)
+        create_threadpool.assert_not_called()
+
+    def test_execution_config_defaults_to_threadpool(self):
+        """The default project must match the default test-bench runner."""
+        from wtb.sdk import ExecutionConfig
+
+        assert ExecutionConfig().batch_executor == "threadpool"
+
+    def test_bench_close_retries_after_batch_runner_shutdown_failure(self, wtb_inmemory):
+        """A failed actor shutdown must remain retryable through the SDK."""
+        from unittest.mock import MagicMock
+        from wtb.domain.interfaces.batch_runner import BatchRunnerError
+
+        runner = MagicMock()
+        runner.shutdown.side_effect = [
+            BatchRunnerError("actor termination unconfirmed"),
+            None,
+        ]
+        wtb_inmemory._batch_runner = runner
+
+        with pytest.raises(BatchRunnerError, match="termination unconfirmed"):
+            wtb_inmemory.close()
+
+        assert wtb_inmemory._closed is False
+        wtb_inmemory.close()
+        assert wtb_inmemory._closed is True
+        assert runner.shutdown.call_count == 2
     
     @pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not installed")
     def test_create_ray_runner(self, ray_initialized, tmp_path):
@@ -172,6 +222,38 @@ class TestSDKBatchTesting:
         assert isinstance(result, BatchTest)
         assert result.status in [BatchTestStatus.COMPLETED, BatchTestStatus.FAILED]
     
+
+    def test_run_batch_test_sequential_executes_successfully(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+    ):
+        """Sequential mode must execute the public LangGraph batch path."""
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"sequential_success_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        wtb_langgraph.register_project(project)
+
+        result = wtb_langgraph.run_batch_test(
+            project=project.name,
+            variant_matrix=[{}],
+            test_cases=[{"messages": [], "count": 0}],
+        )
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert len(result.results) == 1
+        item = result.results[0]
+        assert item.success is True
+        assert item.error_message is None
+
+        execution = wtb_langgraph.get_execution(item.execution_id)
+        assert execution.status is ExecutionStatus.COMPLETED
+        assert execution.state.workflow_variables["messages"] == ["A", "B", "C"]
+        assert execution.state.workflow_variables["count"] == 3
     def test_batch_test_with_multiple_variants(self, wtb_inmemory, project_with_variants):
         """Test batch test with multiple variants."""
         wtb_inmemory.register_project(project_with_variants)
@@ -209,6 +291,386 @@ class TestSDKBatchTesting:
         assert hasattr(result, 'results')
         assert hasattr(result, 'variant_combinations')
         assert hasattr(result, 'status')
+
+    def test_project_executor_mismatch_fails_before_running(
+        self,
+        wtb_inmemory,
+        simple_graph_factory,
+    ):
+        """A project requesting Ray must not silently run on threadpool."""
+        from unittest.mock import patch
+        from wtb.domain.interfaces.batch_runner import BatchRunnerError
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"ray_required_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="ray"),
+        )
+        wtb_inmemory.register_project(project)
+
+        with (
+            patch.object(wtb_inmemory._batch_runner, "run_batch_test") as run_batch,
+            pytest.raises(BatchRunnerError, match="requires batch_executor='ray'"),
+        ):
+            wtb_inmemory.run_batch_test(
+                project=project.name,
+                variant_matrix=[{"node_b": "default"}],
+                test_cases=[],
+            )
+
+        run_batch.assert_not_called()
+
+    def test_sequential_project_bypasses_configured_runner(
+        self,
+        wtb_inmemory,
+        simple_graph_factory,
+    ):
+        """A sequential project must use the inline SDK execution path."""
+        from unittest.mock import patch, sentinel
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"sequential_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        wtb_inmemory.register_project(project)
+        variant_matrix = [{"node_b": "default"}]
+        test_cases = [{"messages": [], "count": 0}]
+
+        with (
+            patch.object(
+                wtb_inmemory,
+                "_run_batch_sequential",
+                return_value=sentinel.batch_result,
+            ) as run_sequential,
+            patch.object(wtb_inmemory._batch_runner, "run_batch_test") as run_batch,
+        ):
+            result = wtb_inmemory.run_batch_test(
+                project=project.name,
+                variant_matrix=variant_matrix,
+                test_cases=test_cases,
+            )
+
+        assert result is sentinel.batch_result
+        run_sequential.assert_called_once_with(project.name, variant_matrix, test_cases)
+        run_batch.assert_not_called()
+
+
+    @pytest.mark.parametrize("executor", ["ray", "threadpool"])
+    def test_requested_executor_without_runner_does_not_fallback_to_sequential(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+        executor,
+    ):
+        """An unavailable requested runner must not silently change semantics."""
+        from wtb.domain.interfaces.batch_runner import BatchRunnerError
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"{executor}_without_runner_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor=executor),
+        )
+        wtb_langgraph.register_project(project)
+        assert wtb_langgraph._batch_runner is None
+
+        with pytest.raises(BatchRunnerError):
+            wtb_langgraph.run_batch_test(
+                project=project.name,
+                variant_matrix=[{}],
+                test_cases=[{"messages": [], "count": 0}],
+            )
+
+    def test_threadpool_executes_registered_node_variant(self, wtb_sqlite):
+        """ThreadPool must execute the selected registered implementation."""
+        from tests.integration.test_real_file_control_flow_modes import (
+            create_file_control_graph,
+        )
+        try:
+            import cloudpickle
+        except ImportError:
+            from ray import cloudpickle
+        from wtb.sdk import ExecutionConfig
+
+        def registered_failure(state):
+            raise RuntimeError("registered variant executed")
+
+        project = WorkflowProject(
+            name=f"threadpool_registered_{uuid.uuid4().hex[:8]}",
+            graph_factory=create_file_control_graph,
+            execution=ExecutionConfig(batch_executor="threadpool"),
+        )
+        project.register_variant(
+            "finalize",
+            "registered_failure",
+            registered_failure,
+        )
+        wtb_sqlite.register_project(project)
+
+        result = wtb_sqlite.run_batch_test(
+            project=project.name,
+            variant_matrix=[{"finalize": "registered_failure"}],
+            test_cases=[
+                {
+                    "messages": [],
+                    "suffix": "base",
+                    "result": "",
+                    "_output_files": {},
+                }
+            ],
+        )
+
+        json.dumps(result.to_dict())
+        encoded_graph = (
+            result.variant_combinations[0].metadata["_graph_pickled"]
+        )
+        assert isinstance(encoded_graph, str)
+        assert encoded_graph.isascii()
+        restored_graph = cloudpickle.loads(
+            base64.b64decode(encoded_graph, validate=True)
+        )
+        assert restored_graph is not None
+        assert result.status is BatchTestStatus.FAILED
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "registered variant executed" in (
+            result.results[0].error_message or ""
+        )
+
+    def test_sequential_all_failed_marks_batch_failed(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+    ):
+        """Sequential batches with no successful result must fail."""
+        from wtb.sdk import ExecutionConfig
+
+        def failing_variant(state):
+            raise RuntimeError("expected sequential failure")
+
+        project = WorkflowProject(
+            name=f"sequential_failure_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        project.register_variant("node_b", "fail", failing_variant)
+        wtb_langgraph.register_project(project)
+
+        result = wtb_langgraph.run_batch_test(
+            project=project.name,
+            variant_matrix=[{"node_b": "fail"}],
+            test_cases=[{"messages": [], "count": 0}],
+        )
+
+        assert result.status is BatchTestStatus.FAILED
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "expected sequential failure" in (
+            result.results[0].error_message or ""
+        )
+
+    def test_sequential_rejects_empty_variant_matrix(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+    ):
+        """Sequential mode must reject a batch with no combinations."""
+        from wtb.domain.interfaces.batch_runner import BatchRunnerError
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"sequential_empty_matrix_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        wtb_langgraph.register_project(project)
+
+        with pytest.raises(BatchRunnerError, match="No variant combinations"):
+            wtb_langgraph.run_batch_test(
+                project=project.name,
+                variant_matrix=[],
+                test_cases=[{"messages": [], "count": 0}],
+            )
+
+    def test_sequential_empty_test_cases_runs_default_case(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+    ):
+        """Empty test cases use one default initial-state case in every mode."""
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"sequential_default_case_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        wtb_langgraph.register_project(project)
+
+        result = wtb_langgraph.run_batch_test(
+            project=project.name,
+            variant_matrix=[{}],
+            test_cases=[],
+        )
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert len(result.results) == 1
+        assert result.results[0].success is True
+
+    def test_multi_case_batch_rebuilds_aggregate_metadata(self, wtb_inmemory):
+        """Aggregated results must rebuild IDs, best result, and comparison data."""
+        from tests.integration.test_real_file_control_flow_modes import (
+            create_file_control_graph,
+        )
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"multi_case_aggregate_{uuid.uuid4().hex[:8]}",
+            graph_factory=create_file_control_graph,
+            execution=ExecutionConfig(batch_executor="threadpool"),
+        )
+        wtb_inmemory.register_project(project)
+
+        result = wtb_inmemory.run_batch_test(
+            project=project.name,
+            variant_matrix=[{"finalize": "marked"}],
+            test_cases=[
+                {
+                    "messages": [],
+                    "suffix": "first",
+                    "result": "",
+                    "_output_files": {},
+                },
+                {
+                    "messages": [],
+                    "suffix": "second",
+                    "result": "",
+                    "_output_files": {},
+                },
+            ],
+        )
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert len(result.results) == 2
+        assert all(item.success for item in result.results)
+        result_ids = {item.execution_id for item in result.results}
+        assert set(result.execution_ids) == result_ids
+        assert len(result.execution_ids) == 2
+        assert result.comparison_matrix is not None
+        matrix_ids = {
+            row["execution_id"]
+            for row in result.comparison_matrix["data"]
+        }
+        assert matrix_ids == result_ids
+
+    @pytest.mark.parametrize(
+        ("child_outcome", "expected_status"),
+        [
+            ("cancelled", BatchTestStatus.CANCELLED),
+            ("failed", BatchTestStatus.FAILED),
+            ("partial", BatchTestStatus.FAILED),
+        ],
+    )
+    def test_multi_case_aggregate_preserves_child_terminal_status(
+        self,
+        wtb_inmemory,
+        simple_project,
+        child_outcome,
+        expected_status,
+    ):
+        """A partial child failure/cancel must not aggregate as completed."""
+        from unittest.mock import MagicMock
+
+        wtb_inmemory.register_project(simple_project)
+        runner = MagicMock()
+        outcomes = iter(("completed", child_outcome))
+
+        def run_case(batch):
+            outcome = next(outcomes)
+            batch.start()
+            if outcome == "completed":
+                batch.add_result(
+                    BatchTestResult(
+                        combination_name="variant_0",
+                        execution_id="completed-case",
+                        success=True,
+                        overall_score=1.0,
+                    )
+                )
+                batch.complete()
+            elif outcome == "cancelled":
+                batch.cancel()
+            elif outcome == "failed":
+                batch.fail("child case failed")
+            else:
+                batch.complete()
+            return batch
+
+        runner.run_batch_test.side_effect = run_case
+        wtb_inmemory._batch_runner = runner
+
+        result = wtb_inmemory.run_batch_test(
+            project=simple_project.name,
+            variant_matrix=[{}],
+            test_cases=[
+                {"messages": [], "count": 0},
+                {"messages": ["second"], "count": 1},
+            ],
+        )
+
+        assert result.status is expected_status
+        assert len(result.results) == 1
+        assert result.results[0].execution_id == "completed-case"
+
+    def test_case_batches_keep_pickled_graph_factory_metadata(self, wtb_inmemory):
+        """Every case batch must retain an unimportable graph factory."""
+        import sys
+        from unittest.mock import MagicMock, patch
+        from wtb.sdk import ExecutionConfig
+
+        def interactive_graph_factory():
+            return object()
+
+        interactive_graph_factory.__module__ = "__main__"
+        project = WorkflowProject(
+            name=f"interactive_{uuid.uuid4().hex[:8]}",
+            graph_factory=interactive_graph_factory,
+            execution=ExecutionConfig(batch_executor="threadpool"),
+        )
+        wtb_inmemory.register_project(project)
+
+        runner = MagicMock()
+        runner.run_batch_test.side_effect = lambda batch: batch
+        wtb_inmemory._batch_runner = runner
+        pickled_factory = b"pickled-graph-factory"
+        fake_cloudpickle = MagicMock()
+        fake_cloudpickle.dumps.return_value = pickled_factory
+
+        with (
+            patch.object(sys.modules["__main__"], "__spec__", None),
+            patch.dict(sys.modules, {"cloudpickle": fake_cloudpickle}),
+        ):
+            wtb_inmemory.run_batch_test(
+                project=project.name,
+                variant_matrix=[{"node": "variant"}],
+                test_cases=[{"case": 1}, {"case": 2}],
+            )
+
+        case_batches = [call.args[0] for call in runner.run_batch_test.call_args_list]
+        assert all(json.dumps(batch.to_dict()) for batch in case_batches)
+        assert len(case_batches) == 2
+        assert [batch.metadata["_graph_factory_pickled"] for batch in case_batches] == [
+            base64.b64encode(pickled_factory).decode("ascii"),
+            base64.b64encode(pickled_factory).decode("ascii"),
+        ]
+        assert all(
+            base64.b64decode(batch.metadata["_graph_factory_pickled"]) == pickled_factory
+            for batch in case_batches
+        )
+        assert case_batches[0].variant_combinations is not case_batches[1].variant_combinations
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

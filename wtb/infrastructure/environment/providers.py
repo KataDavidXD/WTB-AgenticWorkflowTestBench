@@ -24,6 +24,7 @@ Usage:
 """
 
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from weakref import WeakValueDictionary
 from dataclasses import dataclass, field
 from pathlib import Path
 import hashlib
@@ -70,7 +71,11 @@ class InProcessEnvironmentProvider(IEnvironmentProvider):
         self._environments[variant_id] = env
         return env
     
-    def cleanup_environment(self, variant_id: str) -> None:
+    def cleanup_environment(
+        self,
+        variant_id: str,
+        timeout: Optional[float] = None,
+    ) -> None:
         """Remove environment reference."""
         self._environments.pop(variant_id, None)
     
@@ -185,7 +190,11 @@ class RayEnvironmentProvider(IEnvironmentProvider):
         
         return env_config.to_dict()
     
-    def cleanup_environment(self, variant_id: str) -> None:
+    def cleanup_environment(
+        self,
+        variant_id: str,
+        timeout: Optional[float] = None,
+    ) -> None:
         """
         Cleanup an environment.
         
@@ -283,6 +292,10 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         self._default_python = default_python
         self._environments: Dict[str, Dict[str, Any]] = {}  # variant_id -> env_info
         self._env_lock = threading.Lock()
+        self._operation_locks: WeakValueDictionary[
+            str, threading.RLock
+        ] = WeakValueDictionary()
+        self._operation_locks_guard = threading.Lock()
         self._channel = None
         self._stub = None
         self._venv_cache = venv_cache
@@ -323,7 +336,25 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             return f"{env_path}\\.venv\\Scripts\\python.exe"
         return f"{env_path}/.venv/bin/python"
     
+    def _get_operation_lock(self, environment_id: str) -> threading.RLock:
+        """Return a same-key lock retained while any caller uses or waits on it."""
+        with self._operation_locks_guard:
+            lock = self._operation_locks.get(environment_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._operation_locks[environment_id] = lock
+            return lock
+
     def create_environment(
+        self,
+        variant_id: str,
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Serialize create against cleanup for the same environment key."""
+        with self._get_operation_lock(variant_id):
+            return self._create_environment_serialized(variant_id, config)
+
+    def _create_environment_serialized(
         self,
         variant_id: str,
         config: Dict[str, Any],
@@ -355,6 +386,14 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
                 ...
             }
         """
+        with self._env_lock:
+            existing_env = self._environments.get(variant_id)
+        if existing_env is not None:
+            # A same-key create is a replacement transaction. The old remote
+            # identity must be deleted successfully before its retry state can
+            # be replaced by the new environment.
+            self._cleanup_environment_serialized(variant_id)
+
         if self._stub is None:
             logger.warning(f"gRPC not available, returning stub response for {variant_id}")
             stub_info: Dict[str, Any] = {
@@ -375,6 +414,16 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             version_id = config.get("version_id", "")
             packages = config.get("packages", [])
             python_version = config.get("python_version", self._default_python)
+
+            pending_info: Dict[str, Any] = {
+                "type": "grpc_uv_pending",
+                "workflow_id": workflow_id,
+                "node_id": node_id,
+                "version_id": version_id,
+                "status": "PENDING",
+            }
+            with self._env_lock:
+                self._environments[variant_id] = pending_info
             
             request = pb2.CreateEnvRequest(
                 workflow_id=workflow_id,
@@ -385,15 +434,26 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             )
             
             response = self._stub.CreateEnv(request, timeout=self._timeout)
-            
-            env_path = response.env_path
+
+            response_status = str(getattr(response, "status", "")).strip().upper()
+            if response_status not in {"READY", "CREATED", "OK", "SUCCESS"}:
+                raise RuntimeError(
+                    f"CreateEnv for {variant_id} returned status "
+                    f"{response_status or '<empty>'}"
+                )
+
+            env_path = str(getattr(response, "env_path", "")).strip()
+            if not env_path:
+                raise RuntimeError(
+                    f"CreateEnv for {variant_id} returned empty env_path"
+                )
             python_path = self._get_python_path(env_path)
             
             env_info = {
                 "type": "grpc_uv",
-                "workflow_id": response.workflow_id,
-                "node_id": response.node_id,
-                "version_id": response.version_id,
+                "workflow_id": getattr(response, "workflow_id", "") or workflow_id,
+                "node_id": getattr(response, "node_id", "") or node_id,
+                "version_id": getattr(response, "version_id", "") or version_id,
                 "env_path": env_path,
                 "python_path": python_path,
                 "venv_path": f"{env_path}/.venv",
@@ -411,33 +471,110 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             logger.error(f"Failed to create gRPC environment for {variant_id}: {e}")
             raise
     
-    def cleanup_environment(self, variant_id: str) -> None:
+    def _delete_remote_environment(
+        self,
+        environment_id: str,
+        env_info: Dict[str, Any],
+        timeout: Optional[float] = None,
+    ) -> None:
+        """Delete one remote environment and validate its business status."""
+        if (
+            env_info.get("type") in {"grpc_uv_stub", "grpc_uv_cache"}
+            or env_info.get("from_cache") is True
+        ):
+            # These environments were materialized locally and have no remote
+            # resource identity, regardless of the current channel state.
+            return
+
+        stub = self._stub
+        if stub is None:
+            raise RuntimeError(
+                f"DeleteEnv for {environment_id} cannot be confirmed because "
+                "the gRPC stub is unavailable"
+            )
+
+        from wtb.infrastructure.environment.uv_manager.grpc_generated import (
+            env_manager_pb2 as pb2,
+        )
+
+        workflow_id = env_info.get("workflow_id", "")
+        node_id = env_info.get("node_id", "")
+        if not workflow_id or not node_id:
+            raise RuntimeError(
+                f"DeleteEnv for {environment_id} has incomplete remote identity"
+            )
+
+        request = pb2.DeleteEnvRequest(
+            workflow_id=workflow_id,
+            node_id=node_id,
+            version_id=env_info.get("version_id", ""),
+        )
+        response = stub.DeleteEnv(
+            request,
+            timeout=self._timeout if timeout is None else timeout,
+        )
+        status = str(getattr(response, "status", "")).strip().upper()
+        # NOT_FOUND is an idempotent success: the requested resource is
+        # already absent, which is the cleanup postcondition.
+        if status not in {"DELETED", "OK", "NOT_FOUND"}:
+            raise RuntimeError(
+                f"DeleteEnv for {environment_id} returned status "
+                f"{status or '<empty>'}"
+            )
+        logger.info(
+            "Deleted gRPC environment %s (status=%s)",
+            environment_id,
+            status,
+        )
+
+    def cleanup_environment(
+        self,
+        variant_id: str,
+        timeout: Optional[float] = None,
+    ) -> None:
+        """Serialize cleanup against create for the same environment key."""
+        with self._get_operation_lock(variant_id):
+            self._cleanup_environment_serialized(variant_id, timeout=timeout)
+
+
+    def _cleanup_environment_serialized(
+        self,
+        variant_id: str,
+        timeout: Optional[float] = None,
+    ) -> None:
         """
         Cleanup environment.
         
-        Note: Actual cleanup is handled by service TTL.
-        This just removes local tracking.
+        The service TTL remains a fallback, but an explicit remote deletion
+        failure is propagated and kept locally so callers can retry.
+
+        Raises:
+            Exception: If the remote deletion fails or returns a non-success
+                status. Local tracking is retained for retry.
         """
         with self._env_lock:
-            env_info = self._environments.pop(variant_id, None)
+            env_info = self._environments.get(variant_id)
+        if env_info is None:
+            return
         
-        if env_info and self._stub is not None:
-            try:
-                from wtb.infrastructure.environment.uv_manager.grpc_generated import (
-                    env_manager_pb2 as pb2,
-                )
-                
-                request = pb2.DeleteEnvRequest(
-                    workflow_id=env_info.get("workflow_id", ""),
-                    node_id=env_info.get("node_id", ""),
-                    version_id=env_info.get("version_id", ""),
-                )
-                
-                self._stub.DeleteEnv(request, timeout=self._timeout)
-                logger.info(f"Deleted gRPC environment for {variant_id}")
-                
-            except Exception as e:
-                logger.warning(f"Failed to delete gRPC environment for {variant_id}: {e}")
+        try:
+            self._delete_remote_environment(
+                variant_id,
+                env_info,
+                timeout=timeout,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to delete gRPC environment for %s",
+                variant_id,
+            )
+            raise
+
+        # Do not pop an environment that was replaced while the RPC was in
+        # flight. Concurrent retries are safe because NOT_FOUND is accepted.
+        with self._env_lock:
+            if self._environments.get(variant_id) is env_info:
+                self._environments.pop(variant_id, None)
     
     def get_runtime_env(self, variant_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -446,28 +583,47 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         Returns a dict that can be used with Ray's runtime_env feature
         or to configure subprocess execution.
         """
-        env_info = self._environments.get(variant_id)
+        with self._env_lock:
+            env_info = self._environments.get(variant_id)
+            if env_info is not None:
+                env_info = dict(env_info)
         if not env_info:
             return None
-        
+
         env_path = env_info.get("env_path", "")
         python_path = env_info.get("python_path", "")
         venv_path = env_info.get("venv_path", "")
-        
-        return {
-            "type": "grpc_uv",
+        runtime_env: Dict[str, Any] = {
+            "type": env_info.get("type", "grpc_uv"),
             "env_path": env_path,
             "python_path": python_path,
             "venv_path": venv_path,
-            # For Ray runtime_env
-            "env_vars": {
-                "VIRTUAL_ENV": venv_path,
-            },
-            # Ray py_executable
-            "py_executable": python_path,
         }
+        if venv_path:
+            runtime_env["env_vars"] = {"VIRTUAL_ENV": venv_path}
+        if python_path:
+            runtime_env["py_executable"] = python_path
+        return runtime_env
     
     def create_workspace_environment(
+        self,
+        workspace_id: str,
+        workspace_path: str,
+        python_version: Optional[str] = None,
+        packages: Optional[List[str]] = None,
+        use_cache: bool = True,
+    ) -> Dict[str, Any]:
+        """Serialize the complete workspace environment lifecycle by key."""
+        with self._get_operation_lock(workspace_id):
+            return self._create_workspace_environment_serialized(
+                workspace_id=workspace_id,
+                workspace_path=workspace_path,
+                python_version=python_version,
+                packages=packages,
+                use_cache=use_cache,
+            )
+
+    def _create_workspace_environment_serialized(
         self,
         workspace_id: str,
         workspace_path: str,
@@ -492,6 +648,13 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             Environment info dict with paths and spec_hash
         """
         python_ver = python_version or self._default_python
+        with self._env_lock:
+            existing_env = self._environments.get(workspace_id)
+        if existing_env is not None:
+            # Cache hits are replacements too; never overwrite a remote
+            # identity whose deletion has not been confirmed.
+            self._cleanup_environment_serialized(workspace_id)
+
         pkg_list = packages or []
         
         # Compute spec hash for cache lookup
@@ -511,7 +674,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
                     spec_hash=spec_hash,
                     from_cache=True,
                 )
-                self._environments[workspace_id] = env_info
+                with self._env_lock:
+                    self._environments[workspace_id] = env_info
                 
                 # Publish event
                 self._publish_venv_reused_event(workspace_id, spec_hash)
@@ -519,7 +683,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
                 return env_info
         
         # Create new venv via gRPC
-        env_info = self.create_environment(workspace_id, {
+        env_info = self._create_environment_serialized(workspace_id, {
             "workflow_id": workspace_id,
             "node_id": "workspace",
             "packages": pkg_list,
@@ -545,7 +709,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             "from_cache": False,
         })
         
-        self._environments[workspace_id] = env_info
+        with self._env_lock:
+            self._environments[workspace_id] = env_info
         
         # Add to cache if available
         if use_cache and self._venv_cache and workspace_venv_path.exists():
@@ -599,7 +764,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         """Build environment info dictionary."""
         venv_path = f"{env_path}/.venv"
         return {
-            "type": "grpc_uv",
+            "type": "grpc_uv_cache" if from_cache else "grpc_uv",
             "workspace_id": workspace_id,
             "env_path": env_path,
             "venv_path": venv_path,
@@ -635,6 +800,13 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         return current_hash == expected_spec_hash
     
     def invalidate_environment(self, workspace_id: str) -> bool:
+        """Serialize invalidation against create for the same workspace."""
+        with self._get_operation_lock(workspace_id):
+            return self._invalidate_environment_serialized(workspace_id)
+
+
+
+    def _invalidate_environment_serialized(self, workspace_id: str) -> bool:
         """
         Invalidate environment for workspace (spec changed).
         
@@ -643,29 +815,32 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             
         Returns:
             True if invalidated, False if not found
+
+        Raises:
+            Exception: If remote deletion cannot be confirmed. Tracking is
+                retained so invalidation can be retried.
         """
         with self._env_lock:
-            env_info = self._environments.pop(workspace_id, None)
+            env_info = self._environments.get(workspace_id)
         if not env_info:
             return False
         
-        # Delete remote environment via gRPC directly (not via cleanup_environment
-        # which would try to pop from _environments again and find nothing).
-        if self._stub is not None:
-            try:
-                from wtb.infrastructure.environment.uv_manager.grpc_generated import (
-                    env_manager_pb2 as pb2,
-                )
-                request = pb2.DeleteEnvRequest(
-                    workflow_id=env_info.get("workflow_id", ""),
-                    node_id=env_info.get("node_id", ""),
-                    version_id=env_info.get("version_id", ""),
-                )
-                self._stub.DeleteEnv(request, timeout=10)
-            except Exception as e:
-                logger.warning(f"gRPC cleanup failed for {workspace_id}: {e}")
+        try:
+            self._delete_remote_environment(
+                workspace_id,
+                env_info,
+                timeout=10,
+            )
+        except Exception:
+            logger.exception("gRPC cleanup failed for %s", workspace_id)
+            raise
         
-        # Publish event
+        with self._env_lock:
+            if self._environments.get(workspace_id) is not env_info:
+                return False
+            self._environments.pop(workspace_id, None)
+
+        # Publish event only after invalidation reaches a committed state.
         if self._event_bus:
             from wtb.domain.events.workspace_events import VenvInvalidatedEvent
             try:
@@ -675,8 +850,11 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
                     new_spec_hash="",
                     reason="manual_invalidation",
                 ))
-            except Exception as e:
-                logger.warning(f"Failed to publish invalidation event: {e}")
+            except Exception as event_error:
+                logger.warning(
+                    "Failed to publish invalidation event: %s",
+                    event_error,
+                )
         
         return True
     

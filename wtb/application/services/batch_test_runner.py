@@ -32,6 +32,7 @@ Usage:
     result = runner.run_batch_test(batch_test)
 """
 
+import base64
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from threading import Lock
 from typing import Dict, Any, List, Optional, Callable, TYPE_CHECKING
@@ -206,12 +207,13 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             futures_to_combo: Dict[Future, VariantCombination] = {}
             
             for combo in batch_test.variant_combinations:
+                runtime_graph = getattr(combo, "_runtime_graph", None)
                 future = self._executor.submit(
                     self._execute_variant,
                     batch_test.workflow_id,
                     combo,
                     batch_test.initial_state.copy(),
-                    None,  # workflow_graph
+                    runtime_graph,
                     batch_workflow,
                 )
                 futures_to_combo[future] = combo
@@ -299,6 +301,27 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         execution_id = str(uuid.uuid4())
         
         try:
+            if workflow_graph is None:
+                graph_pickled = (combo.metadata or {}).get("_graph_pickled")
+                if graph_pickled:
+                    try:
+                        try:
+                            import cloudpickle
+                        except ImportError:
+                            from ray import cloudpickle
+                        graph_payload = (
+                            base64.b64decode(graph_pickled.encode("ascii"), validate=True)
+                            if isinstance(graph_pickled, str)
+                            else graph_pickled
+                        )
+                        workflow_graph = cloudpickle.loads(graph_payload)
+                    except Exception as graph_error:
+                        raise BatchRunnerExecutionError(
+                            f"Failed to load serialized variant graph: {graph_error}",
+                            batch_test_id="",
+                            failed_variant=combo.name,
+                        ) from graph_error
+
             # v1.7: Use controller factory if available (preferred)
             if self._controller_factory is not None:
                 return self._execute_with_controller_factory(
@@ -309,7 +332,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             # Legacy path: use uow_factory + state_adapter_factory
             return self._execute_with_legacy_factories(
                 workflow_id, combo, initial_state, start_time, execution_id,
-                batch_workflow,
+                workflow_graph, batch_workflow,
             )
                 
         except Exception as e:
@@ -421,6 +444,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         initial_state: Dict[str, Any],
         start_time: float,
         execution_id: str,
+        workflow_graph: Optional[Any] = None,
         batch_workflow: Optional[Any] = None,
     ) -> BatchTestResult:
         """
@@ -476,7 +500,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 initial_state=variant_state,
             )
             
-            execution = controller.run(execution.id)
+            execution = controller.run(execution.id, graph=workflow_graph)
             
             # Calculate metrics
             result_metrics = self._extract_metrics(execution)

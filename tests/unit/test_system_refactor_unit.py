@@ -505,6 +505,8 @@ class TestInvalidateEnvironment:
         provider = GrpcEnvironmentProvider.__new__(GrpcEnvironmentProvider)
         provider._environments = {}
         provider._env_lock = __import__("threading").Lock()
+        provider._operation_locks = {}
+        provider._operation_locks_guard = __import__("threading").Lock()
         provider._stub = None
         provider._event_bus = None
 
@@ -529,6 +531,8 @@ class TestInvalidateEnvironment:
         provider = GrpcEnvironmentProvider.__new__(GrpcEnvironmentProvider)
         provider._environments = {}
         provider._env_lock = __import__("threading").Lock()
+        provider._operation_locks = {}
+        provider._operation_locks_guard = __import__("threading").Lock()
         provider._stub = None
         provider._event_bus = None
 

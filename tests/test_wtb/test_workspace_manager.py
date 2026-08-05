@@ -565,6 +565,37 @@ class TestWorkspaceManager:
         ]
         assert len(cleanup_events) == 1
     
+    def test_cleanup_workspace_delete_failure_remains_tracked_for_retry(
+        self,
+        workspace_manager,
+        mock_event_bus,
+    ):
+        """A failed directory deletion must remain visible and retryable."""
+        workspace = workspace_manager.create_workspace(
+            batch_id="batch-retry",
+            variant_name="test",
+            execution_id="exec-retry",
+        )
+
+        with (
+            patch(
+                "wtb.infrastructure.workspace.manager.shutil.rmtree",
+                side_effect=PermissionError("workspace is busy"),
+            ),
+            pytest.raises(PermissionError, match="workspace is busy"),
+        ):
+            workspace_manager.cleanup_workspace(workspace.workspace_id)
+
+        assert workspace_manager.get_workspace(workspace.workspace_id) is workspace
+        assert workspace.root_path.exists()
+        assert not any(
+            isinstance(event, WorkspaceCleanedUpEvent)
+            for event in mock_event_bus.published_events
+        )
+
+        assert workspace_manager.cleanup_workspace(workspace.workspace_id) is True
+        assert workspace_manager.get_workspace(workspace.workspace_id) is None
+        assert not workspace.root_path.exists()
     def test_cleanup_workspace_preserve(self, workspace_manager):
         """Test workspace cleanup with preserve flag."""
         workspace = workspace_manager.create_workspace(
@@ -604,6 +635,36 @@ class TestWorkspaceManager:
         assert workspace_manager.get_workspace(ws1.workspace_id) is None
         assert workspace_manager.get_workspace(ws2.workspace_id) is None
     
+
+    def test_empty_batch_directory_delete_failure_is_retryable(
+        self,
+        workspace_manager,
+    ):
+        """An empty batch directory failure must propagate for later retry."""
+        batch_id = "batch-dir-retry"
+        workspace = workspace_manager.create_workspace(
+            batch_id=batch_id,
+            variant_name="v1",
+            execution_id="exec-dir-retry",
+        )
+        batch_dir = workspace.root_path.parent
+
+        with (
+            patch.object(
+                Path,
+                "rmdir",
+                side_effect=PermissionError("batch directory is busy"),
+            ),
+            pytest.raises(PermissionError, match="batch directory is busy"),
+        ):
+            workspace_manager.cleanup_batch(batch_id)
+
+        assert workspace_manager.get_workspace(workspace.workspace_id) is None
+        assert batch_dir.exists()
+
+        assert workspace_manager.cleanup_batch(batch_id) == 0
+        assert not batch_dir.exists()
+
     def test_create_branch_workspace(self, workspace_manager, source_files):
         """Test creating branch workspace from existing."""
         # Create source workspace

@@ -19,6 +19,7 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "langgraph>=0.2.60",
     "langgraph-checkpoint>=2.0.10",
+    "cloudpickle>=3.0.0",
     "aiofiles>=24.1.0",
     "aiosqlite>=0.20.0",
 ]

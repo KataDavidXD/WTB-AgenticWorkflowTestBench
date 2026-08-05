@@ -62,6 +62,7 @@ from wtb.sdk import (
     WorkflowProject,
     FileTrackingConfig,
     RayConfig,
+    ExecutionConfig,
     BatchRollbackResult,
     BatchTestResult,
 )
@@ -302,6 +303,9 @@ def create_sdk_project(output_dir: Path, graph_factory) -> WorkflowProject:
             auto_commit=True,
             commit_on="checkpoint",  # Commit files at each checkpoint
             snapshot_strategy="incremental",
+        ),
+        execution=ExecutionConfig(
+            batch_executor="ray" if RAY_AVAILABLE else "threadpool",
         ),
     )
     

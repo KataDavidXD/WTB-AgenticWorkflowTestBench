@@ -140,7 +140,8 @@ class RayConfig:
         max_retries: Max retries for failed tasks
         runtime_env: Optional runtime environment specification
         object_store_memory_gb: Object store memory allocation
-        task_timeout_seconds: Timeout for individual task execution
+        task_timeout_seconds: Maximum wait for any batch progress before the
+            actor pool is terminated
     """
     ray_address: str = "auto"
     num_cpus_per_task: float = 1.0

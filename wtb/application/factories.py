@@ -371,9 +371,8 @@ class BatchTestRunnerFactory:
             config = get_config()
         
         ray_enabled = getattr(config, 'ray_enabled', False)
-        ray_config = getattr(config, 'ray_config', None)
         
-        if ray_enabled and ray_config is not None:
+        if ray_enabled:
             return BatchTestRunnerFactory.create_ray(config)
         else:
             return BatchTestRunnerFactory.create_threadpool(config)
@@ -442,6 +441,7 @@ class BatchTestRunnerFactory:
                 else None
             ),
             environment_provider=env_provider,
+            owns_environment_provider=env_provider is not None,
         )
     
     @staticmethod

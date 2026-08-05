@@ -526,6 +526,27 @@ class TestBatchTest:
         assert len(batch.variant_combinations) == 2
         assert batch.status == BatchTestStatus.PENDING
     
+    def test_runtime_graph_is_nonpublic_and_noncomparable(self):
+        """Thread-local graph handles must not leak into the value contract."""
+        first = VariantCombination(
+            name="Config A",
+            variants={"node1": "v1"},
+            _runtime_graph=object(),
+        )
+        second = VariantCombination(
+            name="Config A",
+            variants={"node1": "v1"},
+            _runtime_graph=object(),
+        )
+
+        serialized = first.to_dict()
+
+        assert first == second
+        assert "_runtime_graph" not in serialized
+        assert VariantCombination.from_dict(
+            serialized
+        )._runtime_graph is None
+
     def test_batch_test_lifecycle(self):
         """Test batch test lifecycle."""
         batch = BatchTest(name="Test", workflow_id="wf1")

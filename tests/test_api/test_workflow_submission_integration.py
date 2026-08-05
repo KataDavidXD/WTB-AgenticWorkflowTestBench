@@ -138,7 +138,7 @@ def configured_project(mock_graph_factory, sample_node_implementations) -> Workf
             },
         ),
         execution=ExecutionConfig(
-            batch_executor="ray",
+            batch_executor="threadpool",
             node_resources={
                 "retriever": NodeResourceConfig(num_cpus=2, memory="4GB"),
                 "generator": NodeResourceConfig(num_cpus=1, memory="2GB"),
