@@ -10,9 +10,9 @@ Run with:
 """
 
 import copy
-import pytest
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SimulatedDataStore – lightweight in-memory store with transaction support
@@ -29,14 +29,14 @@ class SimulatedDataStore:
     """
 
     def __init__(self) -> None:
-        self._tables: Dict[str, List[Dict[str, Any]]] = {}
-        self._snapshot: Optional[Dict[str, List[Dict[str, Any]]]] = None
+        self._tables: dict[str, list[dict[str, Any]]] = {}
+        self._snapshot: dict[str, list[dict[str, Any]]] | None = None
         self._in_transaction = False
 
-    def insert(self, table: str, record: Dict[str, Any]) -> None:
+    def insert(self, table: str, record: dict[str, Any]) -> None:
         self._tables.setdefault(table, []).append(record)
 
-    def query(self, table: str) -> List[Dict[str, Any]]:
+    def query(self, table: str) -> list[dict[str, Any]]:
         return list(self._tables.get(table, []))
 
     def begin_transaction(self) -> None:
@@ -73,7 +73,7 @@ def make_line_item(
     record_id: str,
     order_id: str,
     product: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a line item in the canonical format used by scenarios."""
     return {
         "table": table,
@@ -83,17 +83,17 @@ def make_line_item(
 
 
 def filter_line_items_correct(
-    items: List[Dict[str, Any]],
+    items: list[dict[str, Any]],
     target_order_id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Correct filtering – uses li['data'].get('order_id')."""
     return [li for li in items if li["data"].get("order_id") == target_order_id]
 
 
 def filter_line_items_buggy(
-    items: List[Dict[str, Any]],
+    items: list[dict[str, Any]],
     target_order_id: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Buggy filtering – accesses 'order_id' at the top level (wrong)."""
     return [li for li in items if li.get("order_id") == target_order_id]
 
@@ -107,7 +107,7 @@ class TestScenarioBFiltering:
     """Verify Scenario B line-item filtering uses the data field."""
 
     @pytest.fixture
-    def line_items(self) -> List[Dict[str, Any]]:
+    def line_items(self) -> list[dict[str, Any]]:
         return [
             make_line_item("orders", "1", "o1", "Widget"),
             make_line_item("orders", "2", "o1", "Gadget"),
@@ -115,13 +115,13 @@ class TestScenarioBFiltering:
             make_line_item("orders", "4", "o3", "Doohickey"),
         ]
 
-    def test_verify_uses_data_field(self, line_items: List[Dict[str, Any]]) -> None:
+    def test_verify_uses_data_field(self, line_items: list[dict[str, Any]]) -> None:
         """Correct filter drills into li['data'] to find order_id."""
         result = filter_line_items_correct(line_items, "o1")
         assert len(result) == 2
         assert all(r["data"]["order_id"] == "o1" for r in result)
 
-    def test_buggy_filter_returns_nothing(self, line_items: List[Dict[str, Any]]) -> None:
+    def test_buggy_filter_returns_nothing(self, line_items: list[dict[str, Any]]) -> None:
         """
         The old (buggy) approach checks li.get('order_id') at the root
         level where 'order_id' doesn't exist, so nothing is returned.
@@ -129,13 +129,13 @@ class TestScenarioBFiltering:
         result = filter_line_items_buggy(line_items, "o1")
         assert len(result) == 0
 
-    def test_correct_filter_single_match(self, line_items: List[Dict[str, Any]]) -> None:
+    def test_correct_filter_single_match(self, line_items: list[dict[str, Any]]) -> None:
         result = filter_line_items_correct(line_items, "o2")
         assert len(result) == 1
         assert result[0]["id"] == "3"
         assert result[0]["data"]["product"] == "Sprocket"
 
-    def test_correct_filter_no_match(self, line_items: List[Dict[str, Any]]) -> None:
+    def test_correct_filter_no_match(self, line_items: list[dict[str, Any]]) -> None:
         result = filter_line_items_correct(line_items, "nonexistent")
         assert len(result) == 0
 
@@ -144,7 +144,7 @@ class TestScenarioBFiltering:
         result = filter_line_items_correct(items, "same")
         assert len(result) == 5
 
-    def test_data_field_structure(self, line_items: List[Dict[str, Any]]) -> None:
+    def test_data_field_structure(self, line_items: list[dict[str, Any]]) -> None:
         """Every line item has the expected nested structure."""
         for li in line_items:
             assert "table" in li
