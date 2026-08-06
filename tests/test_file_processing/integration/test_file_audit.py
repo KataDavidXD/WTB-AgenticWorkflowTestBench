@@ -17,29 +17,26 @@ Design Principles:
 - Pattern: Audit trail for compliance and debugging
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
-from enum import Enum
 import uuid
-import json
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
+import pytest
+
 from wtb.domain.events.file_processing_events import (
     FileCommitCreatedEvent,
     FileRestoredEvent,
 )
+from wtb.domain.models.file_processing import (
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
+)
 from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Audit Trail Simulation
@@ -65,18 +62,18 @@ class AuditEntry:
     event_type: AuditEventType
     execution_id: str
     timestamp: datetime
-    details: Dict[str, Any]
-    user_id: Optional[str] = None
-    checkpoint_id: Optional[int] = None
-    commit_id: Optional[str] = None
-    node_id: Optional[str] = None
+    details: dict[str, Any]
+    user_id: str | None = None
+    checkpoint_id: int | None = None
+    commit_id: str | None = None
+    node_id: str | None = None
     
     @classmethod
     def create(
         cls,
         event_type: AuditEventType,
         execution_id: str,
-        details: Dict[str, Any],
+        details: dict[str, Any],
         **kwargs,
     ) -> "AuditEntry":
         return cls(
@@ -88,7 +85,7 @@ class AuditEntry:
             **kwargs,
         )
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "audit_id": self.audit_id,
             "event_type": self.event_type.value,
@@ -110,8 +107,8 @@ class FileAuditTrail:
     debugging, and time-travel analysis.
     """
     
-    def __init__(self, event_bus: Optional[WTBEventBus] = None):
-        self._entries: List[AuditEntry] = []
+    def __init__(self, event_bus: WTBEventBus | None = None):
+        self._entries: list[AuditEntry] = []
         self._event_bus = event_bus
         
         if event_bus:
@@ -159,7 +156,7 @@ class FileAuditTrail:
         self,
         event_type: AuditEventType,
         execution_id: str,
-        details: Dict[str, Any],
+        details: dict[str, Any],
         **kwargs,
     ) -> AuditEntry:
         """Record an audit entry."""
@@ -172,19 +169,19 @@ class FileAuditTrail:
         self._entries.append(entry)
         return entry
     
-    def get_by_execution(self, execution_id: str) -> List[AuditEntry]:
+    def get_by_execution(self, execution_id: str) -> list[AuditEntry]:
         """Get all entries for an execution."""
         return [e for e in self._entries if e.execution_id == execution_id]
     
-    def get_by_commit(self, commit_id: str) -> List[AuditEntry]:
+    def get_by_commit(self, commit_id: str) -> list[AuditEntry]:
         """Get all entries for a commit."""
         return [e for e in self._entries if e.commit_id == commit_id]
     
-    def get_by_checkpoint(self, checkpoint_id: int) -> List[AuditEntry]:
+    def get_by_checkpoint(self, checkpoint_id: int) -> list[AuditEntry]:
         """Get all entries for a checkpoint."""
         return [e for e in self._entries if e.checkpoint_id == checkpoint_id]
     
-    def get_by_type(self, event_type: AuditEventType) -> List[AuditEntry]:
+    def get_by_type(self, event_type: AuditEventType) -> list[AuditEntry]:
         """Get all entries of a specific type."""
         return [e for e in self._entries if e.event_type == event_type]
     
@@ -192,14 +189,14 @@ class FileAuditTrail:
         self,
         start: datetime,
         end: datetime,
-    ) -> List[AuditEntry]:
+    ) -> list[AuditEntry]:
         """Get entries within a time range."""
         return [
             e for e in self._entries
             if start <= e.timestamp <= end
         ]
     
-    def get_execution_timeline(self, execution_id: str) -> List[Dict[str, Any]]:
+    def get_execution_timeline(self, execution_id: str) -> list[dict[str, Any]]:
         """Get timeline of events for an execution."""
         entries = self.get_by_execution(execution_id)
         sorted_entries = sorted(entries, key=lambda e: e.timestamp)
@@ -215,7 +212,7 @@ class FileAuditTrail:
             for e in sorted_entries
         ]
     
-    def count_by_type(self) -> Dict[str, int]:
+    def count_by_type(self) -> dict[str, int]:
         """Get count of entries by type."""
         counts = {}
         for entry in self._entries:
@@ -228,7 +225,7 @@ class FileAuditTrail:
         self._entries.clear()
     
     @property
-    def all_entries(self) -> List[AuditEntry]:
+    def all_entries(self) -> list[AuditEntry]:
         """Get all entries."""
         return list(self._entries)
 
@@ -264,16 +261,16 @@ class LangGraphFileIntegration:
         self._event_bus = event_bus
         
         # Simulated LangGraph state
-        self._checkpoints: Dict[str, Dict[int, Dict]] = {}  # thread_id -> {step -> checkpoint}
-        self._current_step: Dict[str, int] = {}
+        self._checkpoints: dict[str, dict[int, dict]] = {}  # thread_id -> {step -> checkpoint}
+        self._current_step: dict[str, int] = {}
     
     def execute_node_with_files(
         self,
         thread_id: str,
         node_id: str,
-        file_paths: List[str],
-        state_update: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        file_paths: list[str],
+        state_update: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Execute a node with file tracking and audit.
         
@@ -381,7 +378,7 @@ class LangGraphFileIntegration:
         target_step: int,
         restore_files: bool = False,
         output_dir: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Rollback to a previous step with optional file restoration.
         
@@ -470,13 +467,13 @@ class LangGraphFileIntegration:
         
         return new_thread_id
     
-    def get_checkpoint(self, thread_id: str, step: int) -> Optional[Dict]:
+    def get_checkpoint(self, thread_id: str, step: int) -> dict | None:
         """Get checkpoint data."""
         if thread_id in self._checkpoints:
             return self._checkpoints[thread_id].get(step)
         return None
     
-    def get_all_checkpoints(self, thread_id: str) -> List[Dict]:
+    def get_all_checkpoints(self, thread_id: str) -> list[dict]:
         """Get all checkpoints for a thread."""
         if thread_id in self._checkpoints:
             return list(self._checkpoints[thread_id].values())

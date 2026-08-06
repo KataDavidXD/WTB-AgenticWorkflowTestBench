@@ -20,35 +20,26 @@ Design Principles:
 Note: Tests use mocks when Ray is not available.
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable
-from dataclasses import dataclass, field
-from enum import Enum
-import uuid
 import threading
 import time
-import copy
-from unittest.mock import MagicMock, Mock, patch
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
+import pytest
+
 from wtb.domain.events.file_processing_events import (
     FileCommitCreatedEvent,
-    FileRestoredEvent,
-    BlobCreatedEvent,
-    FileTrackingStartedEvent,
-    FileTrackingCompletedEvent,
+)
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
 )
 from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Ray Simulation (for testing without Ray)
@@ -69,9 +60,9 @@ class ActorFileState:
     """File state tracked by an actor."""
     actor_id: str
     execution_id: str
-    commits: Dict[int, CommitId] = field(default_factory=dict)  # step -> commit_id
+    commits: dict[int, CommitId] = field(default_factory=dict)  # step -> commit_id
     current_step: int = 0
-    file_hashes: Dict[str, BlobId] = field(default_factory=dict)  # path -> hash
+    file_hashes: dict[str, BlobId] = field(default_factory=dict)  # path -> hash
 
 
 @dataclass
@@ -80,9 +71,9 @@ class DistributedFileResult:
     actor_id: str
     execution_id: str
     success: bool
-    commit_id: Optional[str] = None
+    commit_id: str | None = None
     files_tracked: int = 0
-    error: Optional[str] = None
+    error: str | None = None
     duration_ms: float = 0
 
 
@@ -110,14 +101,14 @@ class SimulatedActor:
         self._link_repo = link_repo
         self._event_bus = event_bus
         self._state = ActorState.INITIALIZING
-        self._file_states: Dict[str, ActorFileState] = {}
+        self._file_states: dict[str, ActorFileState] = {}
         self._lock = threading.Lock()
         self._state = ActorState.READY
     
     def track_files(
         self,
         execution_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         checkpoint_id: int,
         message: str = None,
     ) -> DistributedFileResult:
@@ -233,7 +224,7 @@ class SimulatedActor:
                     error=str(e),
                 )
     
-    def get_state(self, execution_id: str) -> Optional[ActorFileState]:
+    def get_state(self, execution_id: str) -> ActorFileState | None:
         """Get actor's file state for execution."""
         return self._file_states.get(execution_id)
     
@@ -241,7 +232,7 @@ class SimulatedActor:
         self,
         execution_id: str,
         checkpoint_id: int,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Get commit ID at specific checkpoint."""
         state = self._file_states.get(execution_id)
         if state and checkpoint_id in state.commits:
@@ -302,7 +293,7 @@ class SimulatedActorPool:
         return self._actors[index]
     
     @property
-    def actors(self) -> List[SimulatedActor]:
+    def actors(self) -> list[SimulatedActor]:
         """Get all actors."""
         return self._actors
 
@@ -345,12 +336,12 @@ class DistributedFileService:
         self._commit_repo = commit_repo
         self._link_repo = link_repo
         self._event_bus = event_bus
-        self._audit_entries: List[Dict[str, Any]] = []
+        self._audit_entries: list[dict[str, Any]] = []
     
     def track_files_distributed(
         self,
         execution_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         checkpoint_id: int,
     ) -> DistributedFileResult:
         """Track files using actor pool."""
@@ -380,7 +371,7 @@ class DistributedFileService:
         execution_id: str,
         checkpoint_id: int,
         actor_id: str = None,
-    ) -> List[DistributedFileResult]:
+    ) -> list[DistributedFileResult]:
         """Rollback all actors to checkpoint."""
         results = []
         
@@ -408,7 +399,7 @@ class DistributedFileService:
         self,
         execution_id: str,
         checkpoint_id: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Verify that all actors have consistent state at checkpoint.
         
@@ -444,9 +435,9 @@ class DistributedFileService:
     def track_same_commit_scenario(
         self,
         execution_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         num_actors: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Test same-commit scenario across actors.
         
@@ -486,7 +477,7 @@ class DistributedFileService:
             },
         }
     
-    def get_audit_entries(self) -> List[Dict[str, Any]]:
+    def get_audit_entries(self) -> list[dict[str, Any]]:
         """Get audit entries."""
         return list(self._audit_entries)
 

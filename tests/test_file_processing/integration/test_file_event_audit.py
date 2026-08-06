@@ -17,36 +17,34 @@ Design Principles:
 - Pattern: Event sourcing with audit trail
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
-from enum import Enum
-import uuid
 import threading
 import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
+import pytest
+
 from wtb.domain.events.file_processing_events import (
-    FileCommitCreatedEvent,
-    FileRestoredEvent,
-    FileCommitVerifiedEvent,
-    CheckpointFileLinkCreatedEvent,
     BlobCreatedEvent,
-    FileTrackingStartedEvent,
+    CheckpointFileLinkCreatedEvent,
+    FileCommitCreatedEvent,
+    FileCommitVerifiedEvent,
+    FileRestoredEvent,
     FileTrackingCompletedEvent,
     FileTrackingFailedEvent,
+    FileTrackingStartedEvent,
+)
+from wtb.domain.models.file_processing import (
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
 )
 from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Unified File Processing Service
@@ -77,13 +75,13 @@ class UnifiedAuditEntry:
     timestamp: datetime
     execution_id: str
     operation: str
-    event_type: Optional[str]
+    event_type: str | None
     status: str
-    details: Dict[str, Any]
-    related_commit_id: Optional[str] = None
-    related_checkpoint_id: Optional[int] = None
-    duration_ms: Optional[float] = None
-    error: Optional[str] = None
+    details: dict[str, Any]
+    related_commit_id: str | None = None
+    related_checkpoint_id: int | None = None
+    duration_ms: float | None = None
+    error: str | None = None
 
 
 class UnifiedFileProcessingService:
@@ -111,7 +109,7 @@ class UnifiedFileProcessingService:
         self._event_bus = event_bus
         self._audit_config = audit_config or AuditConfig()
         
-        self._audit_entries: List[UnifiedAuditEntry] = []
+        self._audit_entries: list[UnifiedAuditEntry] = []
         self._operation_stats = {
             "tracks": 0,
             "restores": 0,
@@ -126,7 +124,7 @@ class UnifiedFileProcessingService:
         operation: str,
         event_type: str = None,
         status: str = "success",
-        details: Dict = None,
+        details: dict = None,
         commit_id: str = None,
         checkpoint_id: int = None,
         duration_ms: float = None,
@@ -151,11 +149,11 @@ class UnifiedFileProcessingService:
     
     def track_files(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         execution_id: str,
         checkpoint_id: int = None,
         message: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Track files with full event and audit integration.
         
@@ -306,7 +304,7 @@ class UnifiedFileProcessingService:
         checkpoint_id: int,
         output_dir: str,
         execution_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Restore files from checkpoint with full event and audit integration.
         """
@@ -373,7 +371,7 @@ class UnifiedFileProcessingService:
         self,
         commit_id: str,
         execution_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Verify commit integrity with event and audit."""
         start_time = time.time()
         
@@ -432,7 +430,7 @@ class UnifiedFileProcessingService:
         execution_id: str = None,
         operation: str = None,
         status: str = None,
-    ) -> List[UnifiedAuditEntry]:
+    ) -> list[UnifiedAuditEntry]:
         """Query audit entries with filters."""
         entries = self._audit_entries
         
@@ -445,7 +443,7 @@ class UnifiedFileProcessingService:
         
         return entries
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get operation statistics."""
         return dict(self._operation_stats)
     

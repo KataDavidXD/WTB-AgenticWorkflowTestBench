@@ -15,28 +15,26 @@ Test Categories:
 4. Interface Contract Compliance
 """
 
-import pytest
 from datetime import datetime
-from typing import List
+
+import pytest
 
 from wtb.domain.interfaces.file_tracking import (
-    IFileTrackingService,
-    FileTrackingLink,
-    TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
-    CommitNotFoundError,
     CheckpointLinkError,
+    CommitNotFoundError,
+    FileRestoreResult,
+    FileTrackingLink,
+    FileTrackingResult,
+    IFileTrackingService,
+    TrackedFile,
 )
 from wtb.domain.models.file_processing import (
     CheckpointFileLink,
+    CommitId,
     FileCommit,
     FileMemento,
-    CommitId,
-    BlobId,
 )
 from wtb.infrastructure.file_tracking import MockFileTrackingService
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test: FileTrackingLink Interface VO

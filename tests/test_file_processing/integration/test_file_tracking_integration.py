@@ -18,32 +18,25 @@ Test Categories:
 4. Transaction Consistency
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List
+
+import pytest
 
 from wtb.domain.interfaces.file_tracking import (
-    IFileTrackingService,
     FileTrackingLink,
-    TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
 )
 from wtb.domain.models.file_processing import (
     CheckpointFileLink,
+    CommitId,
     FileCommit,
     FileMemento,
-    CommitId,
-    BlobId,
 )
-from wtb.infrastructure.file_tracking import MockFileTrackingService
 from wtb.infrastructure.database.repositories.file_processing_repository import (
     InMemoryCheckpointFileLinkRepository,
 )
-
+from wtb.infrastructure.file_tracking import MockFileTrackingService
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -59,7 +52,7 @@ def temp_workspace():
 
 
 @pytest.fixture
-def sample_output_files(temp_workspace) -> Dict[str, Path]:
+def sample_output_files(temp_workspace) -> dict[str, Path]:
     """Create sample output files in workspace."""
     files = {}
     

@@ -17,37 +17,32 @@ Design Principles:
 - Pattern: Observer pattern for event notification
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any
-from dataclasses import dataclass, field
 import threading
-import time
 import uuid
+from pathlib import Path
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
+import pytest
+
 from wtb.domain.events.file_processing_events import (
-    FileCommitCreatedEvent,
-    FileRestoredEvent,
-    FileCommitVerifiedEvent,
-    CheckpointFileLinkCreatedEvent,
-    CheckpointFileLinkVerifiedEvent,
     BlobCreatedEvent,
     BlobDeletedEvent,
-    FileTrackingStartedEvent,
+    CheckpointFileLinkCreatedEvent,
+    CheckpointFileLinkVerifiedEvent,
+    FileCommitCreatedEvent,
+    FileCommitVerifiedEvent,
+    FileRestoredEvent,
     FileTrackingCompletedEvent,
     FileTrackingFailedEvent,
+    FileTrackingStartedEvent,
+)
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
 )
 from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Event-Aware File Service
@@ -69,7 +64,7 @@ class EventAwareFileService:
     
     def track_files(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         execution_id: str,
         message: str = None,
     ) -> FileCommit:
@@ -142,7 +137,7 @@ class EventAwareFileService:
         commit_id: str,
         output_dir: str,
         execution_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Restore files from commit and publish events.
         
