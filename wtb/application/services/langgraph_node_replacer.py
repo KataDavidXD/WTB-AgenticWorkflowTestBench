@@ -57,17 +57,17 @@ Usage:
     )
 """
 
-from typing import Dict, Any, List, Optional, Callable, Type, TypeVar
-from dataclasses import dataclass, field
-from datetime import datetime
-from copy import deepcopy
 import logging
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
 # Type variable for state
-S = TypeVar('S', bound=Dict[str, Any])
+S = TypeVar('S', bound=dict[str, Any])
 
 # LangGraph availability check
 LANGGRAPH_AVAILABLE = False
@@ -106,13 +106,13 @@ class LangGraphNodeVariant:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     node_id: str = ""
     variant_name: str = ""
-    node_fn: Optional[Callable] = None
+    node_fn: Callable | None = None
     description: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
     created_at: datetime = field(default_factory=datetime.now)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary (excluding node_fn)."""
         return {
             "id": self.id,
@@ -125,7 +125,7 @@ class LangGraphNodeVariant:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], node_fn: Callable = None) -> "LangGraphNodeVariant":
+    def from_dict(cls, data: dict[str, Any], node_fn: Callable = None) -> "LangGraphNodeVariant":
         """Deserialize from dictionary."""
         return cls(
             id=data.get("id", str(uuid.uuid4())),
@@ -147,10 +147,10 @@ class VariantSet:
     Maps node_id -> variant_name for batch testing.
     """
     name: str
-    variants: Dict[str, str] = field(default_factory=dict)  # node_id -> variant_name
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    variants: dict[str, str] = field(default_factory=dict)  # node_id -> variant_name
+    metadata: dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "variants": self.variants,
@@ -169,7 +169,7 @@ class GraphNodeInfo:
     node_id: str
     node_fn: Callable
     node_type: str  # "function", "subgraph", "tool"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -177,7 +177,7 @@ class GraphEdgeInfo:
     """Information about an edge in a LangGraph graph."""
     source: str
     target: str
-    condition: Optional[Callable] = None
+    condition: Callable | None = None
     is_conditional: bool = False
 
 
@@ -191,9 +191,9 @@ class GraphStructure:
     
     def __init__(
         self,
-        state_schema: Type,
-        nodes: Dict[str, GraphNodeInfo] = None,
-        edges: List[GraphEdgeInfo] = None,
+        state_schema: type,
+        nodes: dict[str, GraphNodeInfo] = None,
+        edges: list[GraphEdgeInfo] = None,
         entry_point: str = "",
     ):
         self.state_schema = state_schema
@@ -218,7 +218,7 @@ class GraphStructure:
         self,
         source: str,
         condition: Callable,
-        targets: Dict[str, str]
+        targets: dict[str, str]
     ) -> None:
         """Add conditional edges from source."""
         for condition_result, target in targets.items():
@@ -302,10 +302,10 @@ class LangGraphNodeReplacer:
     def __init__(self):
         """Initialize the node replacer."""
         # Variant registry: node_id -> {variant_name -> LangGraphNodeVariant}
-        self._variants: Dict[str, Dict[str, LangGraphNodeVariant]] = {}
+        self._variants: dict[str, dict[str, LangGraphNodeVariant]] = {}
         
         # Original node functions cache: node_id -> Callable
-        self._original_nodes: Dict[str, Callable] = {}
+        self._original_nodes: dict[str, Callable] = {}
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Variant Registration
@@ -317,7 +317,7 @@ class LangGraphNodeReplacer:
         variant_name: str,
         node_fn: Callable,
         description: str = "",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> LangGraphNodeVariant:
         """
         Register a node variant.
@@ -383,15 +383,15 @@ class LangGraphNodeReplacer:
         self,
         node_id: str,
         variant_name: str
-    ) -> Optional[LangGraphNodeVariant]:
+    ) -> LangGraphNodeVariant | None:
         """Get a specific variant."""
         return self._variants.get(node_id, {}).get(variant_name)
     
-    def get_variants(self, node_id: str) -> List[LangGraphNodeVariant]:
+    def get_variants(self, node_id: str) -> list[LangGraphNodeVariant]:
         """Get all variants for a node."""
         return list(self._variants.get(node_id, {}).values())
     
-    def get_all_variants(self) -> Dict[str, List[LangGraphNodeVariant]]:
+    def get_all_variants(self) -> dict[str, list[LangGraphNodeVariant]]:
         """Get all registered variants."""
         return {
             node_id: list(variants.values())
@@ -413,7 +413,7 @@ class LangGraphNodeReplacer:
     def create_variant_graph(
         self,
         base_structure: GraphStructure,
-        variant_set: Dict[str, str],  # node_id -> variant_name
+        variant_set: dict[str, str],  # node_id -> variant_name
     ) -> "StateGraph":
         """
         Create a new graph with variants applied.
@@ -476,7 +476,7 @@ class LangGraphNodeReplacer:
     def create_variant_structure(
         self,
         base_structure: GraphStructure,
-        variant_set: Dict[str, str],
+        variant_set: dict[str, str],
     ) -> GraphStructure:
         """
         Create a modified GraphStructure with variants applied.
@@ -523,8 +523,8 @@ class LangGraphNodeReplacer:
     
     def generate_variant_combinations(
         self,
-        nodes: Optional[List[str]] = None
-    ) -> List[VariantSet]:
+        nodes: list[str] | None = None
+    ) -> list[VariantSet]:
         """
         Generate all variant combinations for batch testing.
         
@@ -574,8 +574,8 @@ class LangGraphNodeReplacer:
     
     def generate_pairwise_combinations(
         self,
-        nodes: Optional[List[str]] = None
-    ) -> List[VariantSet]:
+        nodes: list[str] | None = None
+    ) -> list[VariantSet]:
         """
         Generate pairwise variant combinations (reduced set).
         
@@ -604,11 +604,11 @@ class LangGraphNodeReplacer:
     # Utility Methods
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_original_node(self, node_id: str) -> Optional[Callable]:
+    def get_original_node(self, node_id: str) -> Callable | None:
         """Get the original node function."""
         return self._original_nodes.get(node_id)
     
-    def clear_variants(self, node_id: Optional[str] = None) -> None:
+    def clear_variants(self, node_id: str | None = None) -> None:
         """
         Clear registered variants.
         
@@ -620,7 +620,7 @@ class LangGraphNodeReplacer:
         else:
             self._variants.clear()
     
-    def export_variant_registry(self) -> Dict[str, Any]:
+    def export_variant_registry(self) -> dict[str, Any]:
         """Export variant registry as serializable dict."""
         return {
             node_id: {
@@ -638,7 +638,7 @@ class LangGraphNodeReplacer:
 
 def capture_graph_structure(
     graph_builder_fn: Callable[[GraphStructure], None],
-    state_schema: Type,
+    state_schema: type,
 ) -> GraphStructure:
     """
     Capture graph structure using a builder function.

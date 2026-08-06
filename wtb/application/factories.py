@@ -17,27 +17,30 @@ ACID Compliance (v1.7):
 """
 
 import warnings
-from typing import Optional, Callable, TYPE_CHECKING
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from wtb.application.services.batch_execution_coordinator import (
+        BatchExecutionCoordinator,
+    )
     from wtb.sdk.test_bench import WTBTestBench
-    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
 
+from wtb.config import WTBConfig, get_config
+from wtb.domain.interfaces.batch_runner import IBatchTestRunner
+from wtb.domain.interfaces.node_executor import INodeExecutor
 from wtb.domain.interfaces.state_adapter import IStateAdapter
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
-from wtb.domain.interfaces.node_executor import INodeExecutor
-from wtb.domain.interfaces.batch_runner import IBatchTestRunner
-from wtb.config import WTBConfig, get_config
-from wtb.infrastructure.database import (
-    UnitOfWorkFactory,
-    InMemoryUnitOfWork,
-)
 from wtb.infrastructure.adapters import InMemoryStateAdapter
+from wtb.infrastructure.database import (
+    InMemoryUnitOfWork,
+    UnitOfWorkFactory,
+)
 
-from .services.execution_controller import ExecutionController, DefaultNodeExecutor
-from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
+from .services.execution_controller import DefaultNodeExecutor, ExecutionController
 from .services.node_replacer import NodeReplacer
+from .services.outbox_controller_decorator import OutboxExecutionControllerDecorator
 
 
 @dataclass
@@ -112,7 +115,7 @@ class ExecutionControllerFactory:
     - get_factory_callable() returns factory for batch runners
     """
     
-    def __init__(self, config: Optional[WTBConfig] = None):
+    def __init__(self, config: WTBConfig | None = None):
         """
         Initialize factory with configuration.
         
@@ -124,7 +127,7 @@ class ExecutionControllerFactory:
     def create_isolated(
         self,
         file_tracking_service=None,
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
     ) -> ManagedController:
         """
         Create an isolated ExecutionController with its own UoW.
@@ -144,6 +147,7 @@ class ExecutionControllerFactory:
             ft_config = self._config.file_tracking_config
             if ft_config.enabled and not ft_config.postgres_url:
                 from pathlib import Path
+
                 from wtb.infrastructure.file_tracking import SqliteFileTrackingService
 
                 file_tracking_service = SqliteFileTrackingService(
@@ -216,7 +220,7 @@ class ExecutionControllerFactory:
     @classmethod
     def get_factory_callable(
         cls,
-        config: Optional[WTBConfig] = None,
+        config: WTBConfig | None = None,
     ) -> Callable[[], ManagedController]:
         """
         Get a factory callable for batch runners.
@@ -245,7 +249,7 @@ class ExecutionControllerFactory:
     # ═══════════════════════════════════════════════════════════════════════════
     
     @staticmethod
-    def create(config: Optional[WTBConfig] = None) -> ExecutionController:
+    def create(config: WTBConfig | None = None) -> ExecutionController:
         """
         Create ExecutionController based on configuration.
         
@@ -271,7 +275,7 @@ class ExecutionControllerFactory:
         return ExecutionControllerFactory._create_controller(uow, state_adapter)
     
     @staticmethod
-    def _create_state_adapter(config: WTBConfig, uow: Optional[IUnitOfWork]) -> IStateAdapter:
+    def _create_state_adapter(config: WTBConfig, uow: IUnitOfWork | None) -> IStateAdapter:
         """Create state adapter based on config."""
         mode = config.state_adapter_mode
         if mode == "inmemory":
@@ -281,9 +285,9 @@ class ExecutionControllerFactory:
 
         try:
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter,
-                LangGraphConfig,
                 LANGGRAPH_AVAILABLE,
+                LangGraphConfig,
+                LangGraphStateAdapter,
             )
         except ImportError as error:
             raise ImportError(
@@ -332,9 +336,9 @@ class ExecutionControllerFactory:
     def _create_controller(
         uow: IUnitOfWork,
         state_adapter: IStateAdapter,
-        node_executor: Optional[INodeExecutor] = None,
+        node_executor: INodeExecutor | None = None,
         file_tracking_service=None,
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
     ) -> ExecutionController:
         """
         Create controller with given dependencies.
@@ -364,7 +368,7 @@ class ExecutionControllerFactory:
     def create_with_dependencies(
         uow: IUnitOfWork,
         state_adapter: IStateAdapter,
-        node_executor: Optional[INodeExecutor] = None,
+        node_executor: INodeExecutor | None = None,
     ) -> ExecutionController:
         """Create controller with explicit dependencies."""
         return ExecutionControllerFactory._create_controller(
@@ -373,7 +377,7 @@ class ExecutionControllerFactory:
     
     @staticmethod
     def create_for_testing(
-        node_executor: Optional[INodeExecutor] = None,
+        node_executor: INodeExecutor | None = None,
     ) -> ExecutionController:
         """Create controller for unit tests."""
         uow = InMemoryUnitOfWork()
@@ -386,7 +390,7 @@ class ExecutionControllerFactory:
     @staticmethod
     def create_for_development(
         data_dir: str = "data",
-        node_executor: Optional[INodeExecutor] = None,
+        node_executor: INodeExecutor | None = None,
     ) -> ExecutionController:
         """Create controller for development."""
         config = WTBConfig.for_development(data_dir)
@@ -397,7 +401,7 @@ class NodeReplacerFactory:
     """Factory for creating NodeReplacer with proper dependencies."""
     
     @staticmethod
-    def create(config: Optional[WTBConfig] = None) -> NodeReplacer:
+    def create(config: WTBConfig | None = None) -> NodeReplacer:
         """Create NodeReplacer based on configuration."""
         warnings.warn(
             "NodeReplacerFactory.create() leaks UoW. Use create_with_dependencies() with a managed UnitOfWork instead.",
@@ -451,7 +455,7 @@ class BatchTestRunnerFactory:
     """
     
     @staticmethod
-    def create(config: Optional[WTBConfig] = None) -> IBatchTestRunner:
+    def create(config: WTBConfig | None = None) -> IBatchTestRunner:
         """Create batch test runner based on configuration."""
         if config is None:
             config = get_config()
@@ -465,7 +469,7 @@ class BatchTestRunnerFactory:
     
     @staticmethod
     def create_threadpool(
-        config: Optional[WTBConfig] = None,
+        config: WTBConfig | None = None,
         max_workers: int = 4,
         execution_timeout_seconds: float = 300.0,
     ) -> IBatchTestRunner:
@@ -490,7 +494,7 @@ class BatchTestRunnerFactory:
         )
     
     @staticmethod
-    def create_ray(config: Optional[WTBConfig] = None) -> IBatchTestRunner:
+    def create_ray(config: WTBConfig | None = None) -> IBatchTestRunner:
         """
         Create Ray-based batch test runner.
         
@@ -499,8 +503,9 @@ class BatchTestRunnerFactory:
         ``GrpcEnvironmentProvider`` is created and injected so that
         Ray actors provision isolated UV venvs via the Docker service.
         """
-        from .services.ray_batch_runner import RayBatchTestRunner
         from wtb.config import RayConfig
+
+        from .services.ray_batch_runner import RayBatchTestRunner
         
         if config is None:
             config = get_config()
@@ -537,8 +542,9 @@ class BatchTestRunnerFactory:
         
         Uses in-memory dependencies for isolation.
         """
-        from .services.batch_test_runner import ThreadPoolBatchTestRunner
         from wtb.config import WTBConfig
+
+        from .services.batch_test_runner import ThreadPoolBatchTestRunner
         
         # Create test config with in-memory settings
         test_config = WTBConfig.for_testing()
@@ -571,7 +577,7 @@ class BatchCoordinatorFactory:
     """
     
     @staticmethod
-    def create_default(config: Optional[WTBConfig] = None) -> "BatchExecutionCoordinator":
+    def create_default(config: WTBConfig | None = None) -> "BatchExecutionCoordinator":
         """
         Create BatchExecutionCoordinator with default configuration.
         
@@ -605,6 +611,7 @@ class BatchCoordinatorFactory:
             ft_config = config.file_tracking_config
             if not ft_config.postgres_url:
                 from pathlib import Path
+
                 from wtb.infrastructure.file_tracking import SqliteFileTrackingService
 
                 file_tracking = SqliteFileTrackingService(
@@ -653,11 +660,12 @@ class BatchCoordinatorFactory:
         
         Uses SQLite persistence with LangGraph checkpointer.
         """
+        import os
+
         from wtb.application.services.batch_execution_coordinator import (
             BatchExecutionCoordinator,
             DefaultExecutionControllerFactory,
         )
-        import os
         
         os.makedirs(data_dir, exist_ok=True)
         
@@ -700,10 +708,10 @@ class WTBTestBenchFactory:
     """
     
     @staticmethod
-    def create(config: Optional[WTBConfig] = None) -> "WTBTestBench":
+    def create(config: WTBConfig | None = None) -> "WTBTestBench":
         """Create WTBTestBench based on configuration."""
-        from wtb.sdk.test_bench import WTBTestBench
         from wtb.application.services import ProjectService, VariantService
+        from wtb.sdk.test_bench import WTBTestBench
         
         if config is None:
             config = get_config()
@@ -757,8 +765,8 @@ class WTBTestBenchFactory:
     @staticmethod
     def create_for_testing() -> "WTBTestBench":
         """Create WTBTestBench for unit tests."""
-        from wtb.sdk.test_bench import WTBTestBench
         from wtb.application.services import ProjectService, VariantService
+        from wtb.sdk.test_bench import WTBTestBench
         
         uow = InMemoryUnitOfWork()
         state_adapter = InMemoryStateAdapter()
@@ -797,7 +805,7 @@ class WTBTestBenchFactory:
         data_dir: str = "data",
         enable_file_tracking: bool = False,
         enable_ray: bool = False,
-        grpc_env_url: Optional[str] = None,
+        grpc_env_url: str | None = None,
     ) -> "WTBTestBench":
         """
         Create WTBTestBench for development.
@@ -815,10 +823,11 @@ class WTBTestBenchFactory:
                           alongside ``enable_ray=True``, each Ray actor
                           gets an isolated virtual environment.
         """
-        from wtb.sdk.test_bench import WTBTestBench
-        from wtb.application.services import ProjectService, VariantService
         import os
         from pathlib import Path
+
+        from wtb.application.services import ProjectService, VariantService
+        from wtb.sdk.test_bench import WTBTestBench
         
         os.makedirs(data_dir, exist_ok=True)
         
@@ -834,8 +843,8 @@ class WTBTestBenchFactory:
         file_tracking_service = None
         output_dir = None
         if enable_file_tracking:
-            from wtb.infrastructure.file_tracking import SqliteFileTrackingService
             from wtb.config import FileTrackingConfig
+            from wtb.infrastructure.file_tracking import SqliteFileTrackingService
 
             file_tracking_service = SqliteFileTrackingService(
                 workspace_path=Path(data_dir),
@@ -893,7 +902,7 @@ class WTBTestBenchFactory:
     @staticmethod
     def create_with_langgraph(
         checkpointer_type: str = "sqlite",
-        connection_string: Optional[str] = None,
+        connection_string: str | None = None,
         data_dir: str = "data",
         enable_file_tracking: bool = False,
     ) -> "WTBTestBench":
@@ -906,10 +915,11 @@ class WTBTestBenchFactory:
             data_dir: Directory for database files (used with sqlite)
             enable_file_tracking: Enable file tracking for rollback
         """
-        from wtb.sdk.test_bench import WTBTestBench
-        from wtb.application.services import ProjectService, VariantService
         import os
         from pathlib import Path
+
+        from wtb.application.services import ProjectService, VariantService
+        from wtb.sdk.test_bench import WTBTestBench
 
         supported_checkpointers = {"memory", "sqlite", "postgres"}
         if checkpointer_type not in supported_checkpointers:
@@ -923,9 +933,9 @@ class WTBTestBenchFactory:
 
         try:
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter,
-                LangGraphConfig,
                 LANGGRAPH_AVAILABLE,
+                LangGraphConfig,
+                LangGraphStateAdapter,
             )
         except ImportError as error:
             raise ImportError(

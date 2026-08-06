@@ -39,43 +39,49 @@ Usage:
     result = runner.run_batch_test(batch_test)
 """
 
-from typing import Dict, Any, List, Optional, Callable
-from datetime import datetime
-from dataclasses import dataclass, field
 import base64
+import copy
+import inspect
 import logging
+import math
 import threading
 import time
 import uuid
-import copy
-import inspect
-import math
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
 
+# Type hint imports (avoid circular imports)
+from typing import TYPE_CHECKING, Any, Optional
+
+from wtb.application.services.external_storage import (
+    ActorLocalStoragePaths,
+    resolve_actor_local_storage_paths,
+)
+
+# REUSE RayConfig from wtb.config - no duplication
+from wtb.config import RayConfig
+from wtb.domain.interfaces.batch_runner import (
+    BatchRunnerError,
+    BatchRunnerProgress,
+    BatchRunnerStatus,
+    IBatchTestRunner,
+)
+from wtb.domain.interfaces.state_adapter import IStateAdapter
+from wtb.domain.interfaces.unit_of_work import IUnitOfWork
 from wtb.domain.models.batch_test import (
     BatchTest,
-    BatchTestStatus,
     BatchTestResult,
+    BatchTestStatus,
     VariantCombination,
     normalize_finite_metrics,
 )
 from wtb.domain.models.workflow import (
-    TestWorkflow,
-    WorkflowNode,
-    WorkflowEdge,
     Execution,
     ExecutionStatus,
-)
-from wtb.domain.interfaces.batch_runner import (
-    IBatchTestRunner,
-    BatchRunnerStatus,
-    BatchRunnerProgress,
-    BatchRunnerError,
-)
-from wtb.domain.interfaces.state_adapter import IStateAdapter
-from wtb.domain.interfaces.unit_of_work import IUnitOfWork
-from wtb.application.services.external_storage import (
-    ActorLocalStoragePaths,
-    resolve_actor_local_storage_paths,
+    TestWorkflow,
+    WorkflowEdge,
+    WorkflowNode,
 )
 
 # Workspace isolation imports (2026-01-16)
@@ -86,17 +92,14 @@ from wtb.domain.models.workspace import (
 )
 from wtb.infrastructure.workspace.manager import WorkspaceManager
 
-# REUSE RayConfig from wtb.config - no duplication
-from wtb.config import RayConfig
-
-# Type hint imports (avoid circular imports)
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from wtb.infrastructure.events.ray_event_bridge import RayEventBridge
-    from wtb.domain.interfaces.file_tracking import IFileTrackingService
-    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+    from wtb.application.services.batch_execution_coordinator import (
+        BatchExecutionCoordinator,
+    )
     from wtb.config import WTBConfig
     from wtb.domain.interfaces.batch_runner import IEnvironmentProvider
+    from wtb.domain.interfaces.file_tracking import IFileTrackingService
+    from wtb.infrastructure.events.ray_event_bridge import RayEventBridge
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +124,11 @@ class VariantExecutionResult:
     """
     execution_id: str
     combination_name: str
-    combination_variants: Dict[str, str]
+    combination_variants: dict[str, str]
     success: bool
     duration_ms: int
-    metrics: Dict[str, float] = field(default_factory=dict)
-    error: Optional[str] = None
+    metrics: dict[str, float] = field(default_factory=dict)
+    error: str | None = None
     checkpoint_count: int = 0
     node_count: int = 0
     
@@ -191,8 +194,8 @@ def _create_variant_execution_actor_class():
             agentgit_db_url: str,
             wtb_db_url: str,
             actor_id: str,
-            filetracker_config: Optional[Dict[str, Any]] = None,
-            workspace_config: Optional[Dict[str, Any]] = None,
+            filetracker_config: dict[str, Any] | None = None,
+            workspace_config: dict[str, Any] | None = None,
         ):
             """
             Initialize actor with database URLs and optional FileTracker/Workspace config.
@@ -219,7 +222,7 @@ def _create_variant_execution_actor_class():
             self._langgraph_state_adapter_factory = None
             self._execution_controller = None
             self._file_tracking_service = None
-            self._workspace_manager: Optional[WorkspaceManager] = None
+            self._workspace_manager: WorkspaceManager | None = None
             self._initialized = False
             
             # Metrics tracking
@@ -250,9 +253,9 @@ def _create_variant_execution_actor_class():
                 # Construct LangGraph only for executions with an explicit graph.
                 def create_langgraph_state_adapter():
                     from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                        LangGraphStateAdapter,
-                        LangGraphConfig,
                         CheckpointerType,
+                        LangGraphConfig,
+                        LangGraphStateAdapter,
                     )
                     config = LangGraphConfig(
                         checkpointer_type=CheckpointerType.SQLITE,
@@ -276,7 +279,9 @@ def _create_variant_execution_actor_class():
                 # Initialize FileTracking service if configured
                 if self._filetracker_config and self._filetracker_config.get("enabled"):
                     try:
-                        from wtb.infrastructure.file_tracking import RayFileTrackerService
+                        from wtb.infrastructure.file_tracking import (
+                            RayFileTrackerService,
+                        )
                         file_tracking_service = RayFileTrackerService(
                             self._filetracker_config
                         )
@@ -322,14 +327,14 @@ def _create_variant_execution_actor_class():
         
         def execute_variant(
             self,
-            workflow_dict: Dict[str, Any],
-            combination: Dict[str, Any],
-            initial_state: Dict[str, Any],
+            workflow_dict: dict[str, Any],
+            combination: dict[str, Any],
+            initial_state: dict[str, Any],
             batch_test_id: str,
-            workspace_data: Optional[Dict[str, Any]] = None,
-            graph_factory_pickled: Optional[Any] = None,
-            execution_id: Optional[str] = None,
-        ) -> Dict[str, Any]:
+            workspace_data: dict[str, Any] | None = None,
+            graph_factory_pickled: Any | None = None,
+            execution_id: str | None = None,
+        ) -> dict[str, Any]:
             """
             Execute a single variant combination with optional workspace isolation.
             
@@ -359,7 +364,7 @@ def _create_variant_execution_actor_class():
             graph_pickled = (combination.get("metadata") or {}).get(
                 "_graph_pickled"
             )
-            workspace: Optional[Workspace] = None
+            workspace: Workspace | None = None
             
             logger.info(
                 f"Actor {self._actor_id}: Starting execution {execution_id} "
@@ -469,11 +474,11 @@ def _create_variant_execution_actor_class():
 
         def _preflight_langgraph_graph(
             self,
-            graph_factory_module: Optional[str] = None,
-            graph_factory_name: Optional[str] = None,
-            graph_factory_pickled: Optional[Any] = None,
-            graph_pickled: Optional[Any] = None,
-        ) -> Optional[Any]:
+            graph_factory_module: str | None = None,
+            graph_factory_name: str | None = None,
+            graph_factory_pickled: Any | None = None,
+            graph_pickled: Any | None = None,
+        ) -> Any | None:
             """Load and validate graph inputs before opening a persistence UoW."""
             if graph_pickled is not None:
                 try:
@@ -551,7 +556,7 @@ def _create_variant_execution_actor_class():
 
         def _create_execution_state_adapter(
             self,
-            langgraph_graph: Optional[Any],
+            langgraph_graph: Any | None,
         ) -> IStateAdapter:
             """Return an execution-local adapter for graph or domain-node mode."""
             if langgraph_graph is None:
@@ -574,17 +579,17 @@ def _create_variant_execution_actor_class():
 
         def _run_workflow_execution(
             self,
-            workflow_dict: Dict[str, Any],
-            variants: Dict[str, str],
-            initial_state: Dict[str, Any],
+            workflow_dict: dict[str, Any],
+            variants: dict[str, str],
+            initial_state: dict[str, Any],
             execution_id: str,
             batch_test_id: str,
-            workspace: Optional[Workspace] = None,
-            graph_factory_module: Optional[str] = None,
-            graph_factory_name: Optional[str] = None,
-            graph_factory_pickled: Optional[Any] = None,
-            graph_pickled: Optional[Any] = None,
-        ) -> Dict[str, Any]:
+            workspace: Workspace | None = None,
+            graph_factory_module: str | None = None,
+            graph_factory_name: str | None = None,
+            graph_factory_pickled: Any | None = None,
+            graph_pickled: Any | None = None,
+        ) -> dict[str, Any]:
             """
             Run workflow execution with variants applied.
             
@@ -647,21 +652,22 @@ def _create_variant_execution_actor_class():
         def _run_workflow_execution_with_adapter(
             self,
             *,
-            workflow_dict: Dict[str, Any],
-            variants: Dict[str, str],
-            initial_state: Dict[str, Any],
+            workflow_dict: dict[str, Any],
+            variants: dict[str, str],
+            initial_state: dict[str, Any],
             execution_id: str,
             batch_test_id: str,
-            workspace: Optional[Workspace],
-            langgraph_graph: Optional[Any],
+            workspace: Workspace | None,
+            langgraph_graph: Any | None,
             state_adapter: IStateAdapter,
-        ) -> Dict[str, Any]:
+        ) -> dict[str, Any]:
+            from pathlib import Path
+
             from wtb.application.services.execution_controller import (
-                ExecutionController,
                 DefaultNodeExecutor,
+                ExecutionController,
                 NodeBoundaryClaimConflict,
             )
-            from pathlib import Path
             
             # Create isolated UoW for this execution (ACID: Isolation)
             uow = self._uow_factory()
@@ -741,7 +747,7 @@ def _create_variant_execution_actor_class():
                 
                 # Write _output_files from state to workspace (2026-01-17)
                 # This bridges state data to actual files that FileTracker can track
-                output_file_paths: List[str] = []
+                output_file_paths: list[str] = []
                 if workspace and execution.state:
                     # Check workflow_variables for _output_files
                     output_files_data = execution.state.workflow_variables.get("_output_files", {})
@@ -866,8 +872,8 @@ def _create_variant_execution_actor_class():
         
         def _reconstruct_workflow(
             self,
-            workflow_dict: Dict[str, Any],
-            variants: Dict[str, str],
+            workflow_dict: dict[str, Any],
+            variants: dict[str, str],
         ) -> TestWorkflow:
             """
             Reconstruct TestWorkflow from dict and apply variants.
@@ -913,9 +919,9 @@ def _create_variant_execution_actor_class():
         def _collect_output_files(
             self, 
             execution: Execution,
-            workspace: Optional[Workspace] = None,
-            additional_paths: Optional[List[str]] = None,
-        ) -> List[str]:
+            workspace: Workspace | None = None,
+            additional_paths: list[str] | None = None,
+        ) -> list[str]:
             """
             Collect output files from execution for tracking.
             
@@ -935,10 +941,10 @@ def _create_variant_execution_actor_class():
             Returns:
                 List of file paths to track
             """
-            import os
             import fnmatch
+            import os
             
-            output_files: List[str] = []
+            output_files: list[str] = []
             
             # Get tracking patterns from config
             auto_patterns = self._filetracker_config.get(
@@ -1015,11 +1021,11 @@ def _create_variant_execution_actor_class():
             
             return list(set(filtered_files))  # Remove duplicates
         
-        def _calculate_metrics(self, execution: Execution) -> Dict[str, float]:
+        def _calculate_metrics(self, execution: Execution) -> dict[str, float]:
             """
             Extract metrics with the same semantics as the ThreadPool runner.
             """
-            metrics: Dict[str, float] = {}
+            metrics: dict[str, float] = {}
 
             if execution.state and execution.state.workflow_variables:
                 variables = execution.state.workflow_variables
@@ -1044,7 +1050,7 @@ def _create_variant_execution_actor_class():
             
             return normalize_finite_metrics(metrics)
         
-        def health_check(self) -> Dict[str, Any]:
+        def health_check(self) -> dict[str, Any]:
             """
             Health check for actor monitoring.
             """
@@ -1058,7 +1064,7 @@ def _create_variant_execution_actor_class():
                 "healthy": True,
             }
         
-        def get_stats(self) -> Dict[str, Any]:
+        def get_stats(self) -> dict[str, Any]:
             """Get actor statistics."""
             return {
                 "actor_id": self._actor_id,
@@ -1090,15 +1096,15 @@ class _RayRunningTest:
     batch_test_id: str
     started_at: datetime
     total_variants: int
-    pending_refs: List[Any] = field(default_factory=list)  # Ray ObjectRefs
-    completed_results: List[Dict[str, Any]] = field(default_factory=list)
+    pending_refs: list[Any] = field(default_factory=list)  # Ray ObjectRefs
+    completed_results: list[dict[str, Any]] = field(default_factory=list)
     completed: int = 0
     failed: int = 0
     cancelled: bool = False
     cancelled_variants: int = 0
     termination_confirmed: bool = False
-    termination_error: Optional[str] = None
-    terminal_owner: Optional[str] = None
+    termination_error: str | None = None
+    terminal_owner: str | None = None
     cancellation_in_progress: bool = False
     actor_termination_confirmed: bool = False
     cancellation_finished: threading.Event = field(
@@ -1152,9 +1158,9 @@ class RayBatchTestRunner(IBatchTestRunner):
         config: RayConfig,
         agentgit_db_url: str,
         wtb_db_url: str,
-        workflow_loader: Optional[Callable[[str, IUnitOfWork], TestWorkflow]] = None,
-        filetracker_config: Optional[Dict[str, Any]] = None,
-        workspace_config: Optional[Dict[str, Any]] = None,
+        workflow_loader: Callable[[str, IUnitOfWork], TestWorkflow] | None = None,
+        filetracker_config: dict[str, Any] | None = None,
+        workspace_config: dict[str, Any] | None = None,
         event_bridge: Optional["RayEventBridge"] = None,
         enable_audit: bool = True,
         environment_provider: Optional["IEnvironmentProvider"] = None,
@@ -1190,25 +1196,25 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._workspace_config = workspace_config
         
         # Actor pool management
-        self._actors: List[Any] = []  # Ray actor handles
+        self._actors: list[Any] = []  # Ray actor handles
         self._actor_pool = None
         # A failed actor termination makes resource cleanup unsafe. Preserve
         # handles until shutdown can retry instead of pretending they stopped.
         self._poisoned = False
         self._pending_event_cleanup_ids: set[str] = set()
         self._unsafe_batch_ids: set[str] = set()
-        self._orphaned_refs: List[Any] = []
+        self._orphaned_refs: list[Any] = []
 
         # One runner owns one shared actor pool. Batch registration and actor
         # lifecycle operations use separate locks so cancellation can safely
         # coordinate with pool creation and task submission.
-        self._running_tests: Dict[str, _RayRunningTest] = {}
+        self._running_tests: dict[str, _RayRunningTest] = {}
         self._running_tests_lock = threading.Lock()
         self._actor_pool_lock = threading.RLock()
         self._shutdown_lock = threading.Lock()
         self._provider_close_lock = threading.Lock()
-        self._provider_close_event: Optional[threading.Event] = None
-        self._provider_close_error: Optional[BaseException] = None
+        self._provider_close_event: threading.Event | None = None
+        self._provider_close_error: BaseException | None = None
         self._provider_closed = False
         # One total budget covers cancellation, actor termination, run
         # finalization, environment cleanup, and provider close.
@@ -1221,7 +1227,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._owns_ray_runtime = False
         
         # Workspace manager (2026-01-16)
-        self._workspace_manager: Optional[WorkspaceManager] = None
+        self._workspace_manager: WorkspaceManager | None = None
         self._workspace_enabled = (
             workspace_config is not None and
             workspace_config.get("enabled", False)
@@ -1240,12 +1246,12 @@ class RayBatchTestRunner(IBatchTestRunner):
         # Initialize event bridge if not provided
         if self._event_bridge is None:
             try:
+                from wtb.infrastructure.database import UnitOfWorkFactory
                 from wtb.infrastructure.events import (
-                    get_wtb_event_bus,
                     RayEventBridge,
                     WTBAuditTrail,
+                    get_wtb_event_bus,
                 )
-                from wtb.infrastructure.database import UnitOfWorkFactory
                 
                 # Create event bridge with outbox pattern
                 self._event_bridge = RayEventBridge(
@@ -1294,7 +1300,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             environment_provider is not None and owns_environment_provider
         )
         self._environment_namespace = f"ray-{uuid.uuid4().hex[:12]}"
-        self._provisioned_env_ids: List[str] = []
+        self._provisioned_env_ids: list[str] = []
     
     @staticmethod
     def is_available() -> bool:
@@ -1406,14 +1412,14 @@ class RayBatchTestRunner(IBatchTestRunner):
                 "remain; call shutdown() to retry cleanup"
             )
 
-        created_actors: List[Any] = []
-        attempted_env_ids: List[str] = []
+        created_actors: list[Any] = []
+        attempted_env_ids: list[str] = []
         try:
             for i in range(num_workers):
                 logical_actor_id = f"actor_{i}"
                 actor_id = f"{self._environment_namespace}-{logical_actor_id}"
                 environment_id = actor_id
-                ray_runtime_env: Dict[str, Any] = self._build_ray_runtime_env(
+                ray_runtime_env: dict[str, Any] = self._build_ray_runtime_env(
                     actor_id,
                     {},
                 )
@@ -1519,8 +1525,8 @@ class RayBatchTestRunner(IBatchTestRunner):
     @staticmethod
     def _build_ray_runtime_env(
         actor_id: str,
-        raw_env: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        raw_env: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Translate a provider's raw environment response into a valid
         Ray ``runtime_env`` dict.
@@ -1535,12 +1541,12 @@ class RayBatchTestRunner(IBatchTestRunner):
         """
         import os as _os
         
-        ray_env: Dict[str, Any] = {}
-        env_vars: Dict[str, str] = dict((raw_env or {}).get("env_vars", {}) or {})
+        ray_env: dict[str, Any] = {}
+        env_vars: dict[str, str] = dict((raw_env or {}).get("env_vars", {}) or {})
         # Provider paths may be container-local. Re-introduce VIRTUAL_ENV only
         # when Ray can select the matching host-accessible interpreter.
         env_vars.pop("VIRTUAL_ENV", None)
-        metadata_vars: Dict[str, str] = {
+        metadata_vars: dict[str, str] = {
             "WTB_UV_ENV_TYPE": raw_env.get("type", "unknown"),
             "WTB_UV_ENV_PATH": raw_env.get("env_path", ""),
             "WTB_UV_PYTHON_PATH": raw_env.get("python_path", ""),
@@ -1604,7 +1610,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         ray_env["env_vars"] = env_vars
         return ray_env
     
-    def _load_workflow(self, workflow_id: str) -> Dict[str, Any]:
+    def _load_workflow(self, workflow_id: str) -> dict[str, Any]:
         """
         Load workflow and serialize for Ray transmission.
         
@@ -1669,9 +1675,9 @@ class RayBatchTestRunner(IBatchTestRunner):
     def _cleanup_batch_resources(
         self,
         batch_test: BatchTest,
-    ) -> Optional[BatchRunnerError]:
+    ) -> BatchRunnerError | None:
         """Cleanup independent batch resources and retain every failed retry."""
-        cleanup_errors: List[str] = []
+        cleanup_errors: list[str] = []
 
         if self._event_bridge:
             try:
@@ -1781,7 +1787,7 @@ class RayBatchTestRunner(IBatchTestRunner):
     def _wait_for_cancellation_result(
         self,
         running_test: _RayRunningTest,
-    ) -> tuple[bool, Optional[str]]:
+    ) -> tuple[bool, str | None]:
         """Wait until the cancellation owner publishes its final verdict."""
         while True:
             with self._running_tests_lock:
@@ -1888,7 +1894,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             )
             self._running_tests[batch_test.id] = running_test
         
-        pending_refs: List[Any] = []
+        pending_refs: list[Any] = []
         try:
             # Determine parallelism
             num_workers = min(
@@ -1950,9 +1956,9 @@ class RayBatchTestRunner(IBatchTestRunner):
             )
             
             # Submit all variants with backpressure
-            ref_to_combo: Dict[Any, VariantCombination] = {}
-            ref_to_execution_id: Dict[Any, str] = {}
-            ref_to_workspace: Dict[Any, Optional[Workspace]] = {}  # Track workspaces (2026-01-16)
+            ref_to_combo: dict[Any, VariantCombination] = {}
+            ref_to_execution_id: dict[Any, str] = {}
+            ref_to_workspace: dict[Any, Workspace | None] = {}  # Track workspaces (2026-01-16)
             
             for combo in batch_test.variant_combinations:
                 if running_test.cancelled:
@@ -1964,8 +1970,8 @@ class RayBatchTestRunner(IBatchTestRunner):
                 execution_id = str(uuid.uuid4())
                 
                 # Create workspace for this variant if enabled (2026-01-16)
-                workspace: Optional[Workspace] = None
-                workspace_data: Optional[Dict[str, Any]] = None
+                workspace: Workspace | None = None
+                workspace_data: dict[str, Any] | None = None
                 if self._workspace_manager:
                     try:
                         # Get source paths from filetracker config
@@ -2255,7 +2261,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             raise BatchRunnerError(f"Batch test failed: {e}") from e
             
         finally:
-            cleanup_error: Optional[BatchRunnerError] = None
+            cleanup_error: BatchRunnerError | None = None
             try:
                 cleanup_error = self._cleanup_batch_resources(batch_test)
             finally:
@@ -2279,10 +2285,10 @@ class RayBatchTestRunner(IBatchTestRunner):
     def _terminate_failed_batch_work(
         self,
         batch_test_id: str,
-        pending_refs: List[Any],
+        pending_refs: list[Any],
         running_test: _RayRunningTest,
         reason: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Terminate submitted work after an unexpected orchestration failure."""
         if self._cancel_stopped_actors(running_test):
             # The actor pool was already terminated safely by cancel(). Late
@@ -2356,12 +2362,12 @@ class RayBatchTestRunner(IBatchTestRunner):
             return None
     def _process_completed_refs(
         self,
-        pending_refs: List[Any],
-        ref_to_combo: Dict[Any, VariantCombination],
+        pending_refs: list[Any],
+        ref_to_combo: dict[Any, VariantCombination],
         batch_test: BatchTest,
         running_test: _RayRunningTest,
         timeout: float,
-        ref_to_execution_id: Optional[Dict[Any, str]] = None,
+        ref_to_execution_id: dict[Any, str] | None = None,
     ):
         """
         Process completed ObjectRefs and abort the actor pool if the configured
@@ -2650,7 +2656,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 return BatchRunnerStatus.CANCELLING
             return BatchRunnerStatus.RUNNING
     
-    def get_progress(self, batch_test_id: str) -> Optional[BatchRunnerProgress]:
+    def get_progress(self, batch_test_id: str) -> BatchRunnerProgress | None:
         """Get progress for a running batch test."""
         with self._running_tests_lock:
             running = self._running_tests.get(batch_test_id)
@@ -2678,7 +2684,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         )
     
     @staticmethod
-    def _remaining_budget(deadline: Optional[float]) -> Optional[float]:
+    def _remaining_budget(deadline: float | None) -> float | None:
         """Return remaining seconds for an absolute monotonic deadline."""
         if deadline is None:
             return None
@@ -2687,7 +2693,7 @@ class RayBatchTestRunner(IBatchTestRunner):
     @staticmethod
     def _run_with_deadline(
         operation: Callable[[], Any],
-        deadline: Optional[float],
+        deadline: float | None,
         description: str,
     ) -> Any:
         """Run an external blocking operation within the remaining budget."""
@@ -2699,7 +2705,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             raise TimeoutError(f"{description} exceeded shutdown deadline")
 
         completed = threading.Event()
-        outcome: Dict[str, Any] = {}
+        outcome: dict[str, Any] = {}
 
         def invoke() -> None:
             try:
@@ -2724,7 +2730,7 @@ class RayBatchTestRunner(IBatchTestRunner):
     def _cleanup_environment_with_deadline(
         self,
         env_id: str,
-        deadline: Optional[float],
+        deadline: float | None,
     ) -> None:
         """Cleanup one environment without exceeding an optional deadline."""
         if self._environment_provider is None:
@@ -2765,7 +2771,7 @@ class RayBatchTestRunner(IBatchTestRunner):
     def cancel(
         self,
         batch_test_id: str,
-        _lock_timeout: Optional[float] = None,
+        _lock_timeout: float | None = None,
     ) -> bool:
         """
         Cancel a running batch test.
@@ -2833,7 +2839,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 )
         
         success = False
-        error_message: Optional[str] = None
+        error_message: str | None = None
         remaining = self._remaining_budget(cancel_deadline)
         acquired = (
             self._actor_pool_lock.acquire()
@@ -2946,7 +2952,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         """Get the event bridge for this runner."""
         return self._event_bridge
     
-    def get_batch_audit_trail(self, batch_test_id: str) -> Optional[Any]:
+    def get_batch_audit_trail(self, batch_test_id: str) -> Any | None:
         """
         Get the audit trail for a completed or running batch test.
         
@@ -2967,7 +2973,7 @@ class RayBatchTestRunner(IBatchTestRunner):
 
     def _close_owned_environment_provider(
         self,
-        deadline: Optional[float],
+        deadline: float | None,
     ) -> None:
         """Close an owned provider once, reusing an in-flight close on retry."""
         if not self._environment_provider or not self._owns_environment_provider:
@@ -2996,7 +3002,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         if should_start:
 
             def invoke_close() -> None:
-                close_error: Optional[BaseException] = None
+                close_error: BaseException | None = None
                 try:
                     close()
                 except BaseException as error:
@@ -3218,7 +3224,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             self._shutting_down = True
         logger.info("RayBatchTestRunner shutdown complete")
     
-    def get_actor_stats(self) -> List[Dict[str, Any]]:
+    def get_actor_stats(self) -> list[dict[str, Any]]:
         """
         Get statistics from all actors.
         
@@ -3317,9 +3323,9 @@ class RayBatchTestRunner(IBatchTestRunner):
         """
         try:
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter,
-                LangGraphConfig,
                 LANGGRAPH_AVAILABLE,
+                LangGraphConfig,
+                LangGraphStateAdapter,
             )
             
             if LANGGRAPH_AVAILABLE:
@@ -3353,6 +3359,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         
         try:
             from pathlib import Path
+
             from wtb.config import FileTrackingConfig
             
             config = FileTrackingConfig.from_dict(self._filetracker_config)

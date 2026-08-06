@@ -31,7 +31,7 @@ ARCHITECTURE NOTE (2026-01-17):
 from __future__ import annotations
 
 import logging
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces import IUnitOfWork
@@ -84,7 +84,7 @@ class ProjectService:
         
         logger.debug(f"Registered workflow: {workflow.name}")
     
-    def get_workflow_by_name(self, name: str) -> Optional["TestWorkflow"]:
+    def get_workflow_by_name(self, name: str) -> "TestWorkflow" | None:
         """
         Get a workflow by name.
         
@@ -96,7 +96,7 @@ class ProjectService:
         """
         return self._uow.workflows.find_by_name(name)
     
-    def get_workflow_by_id(self, workflow_id: str) -> Optional["TestWorkflow"]:
+    def get_workflow_by_id(self, workflow_id: str) -> "TestWorkflow" | None:
         """
         Get a workflow by ID.
         
@@ -150,7 +150,7 @@ class ProjectService:
         logger.debug(f"Unregistered workflow: {name}")
         return True
     
-    def list_workflows(self) -> List["TestWorkflow"]:
+    def list_workflows(self) -> list["TestWorkflow"]:
         """
         List all registered workflows.
         
@@ -277,7 +277,7 @@ class WorkflowConversionService:
         Returns:
             TestWorkflow domain entity
         """
-        from wtb.domain.models import TestWorkflow, WorkflowNode, WorkflowEdge
+        from wtb.domain.models import TestWorkflow, WorkflowEdge, WorkflowNode
         
         workflow = TestWorkflow(
             id=getattr(project, 'id', str(id(project))),
@@ -330,9 +330,9 @@ class WorkflowConversionService:
         
         return workflow
     
-    def _extract_graph_nodes(self, graph: Any) -> Dict[str, Dict[str, Any]]:
+    def _extract_graph_nodes(self, graph: Any) -> dict[str, dict[str, Any]]:
         """Extract node information from LangGraph graph."""
-        nodes: Dict[str, Dict[str, Any]] = {}
+        nodes: dict[str, dict[str, Any]] = {}
         node_graph = graph
         
         if hasattr(graph, 'get_graph'):
@@ -353,9 +353,9 @@ class WorkflowConversionService:
         
         return nodes or {"start": {"name": "Start", "type": "start"}}
     
-    def _extract_graph_edges(self, graph: Any) -> List[Dict[str, Any]]:
+    def _extract_graph_edges(self, graph: Any) -> list[dict[str, Any]]:
         """Extract edge information from LangGraph graph."""
-        edges: List[Dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
         edge_graph = graph
         
         if hasattr(graph, 'get_graph') and (not hasattr(graph, 'edges') or graph.edges is None):
@@ -380,10 +380,10 @@ class WorkflowConversionService:
     
     def _determine_entry_point(
         self,
-        nodes_info: Dict[str, Dict[str, Any]],
-        edges_info: List[Dict[str, Any]],
+        nodes_info: dict[str, dict[str, Any]],
+        edges_info: list[dict[str, Any]],
         graph: Any,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Determine the entry point node from graph."""
         # Check edges for __start__ -> first node
         for edge in edges_info:

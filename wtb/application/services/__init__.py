@@ -34,10 +34,9 @@ Usage with LangGraph:
         history = controller.get_checkpoint_history(execution_id)
 """
 
-from .execution_controller import ExecutionController, DefaultNodeExecutor
-from .node_replacer import NodeReplacer
 from .batch_test_runner import ThreadPoolBatchTestRunner
-from .project_service import ProjectService, VariantService, WorkflowConversionService
+from .execution_controller import DefaultNodeExecutor, ExecutionController
+from .node_replacer import NodeReplacer
 from .parity_checker import (
     ParityChecker,
     ParityCheckerConfig,
@@ -45,6 +44,7 @@ from .parity_checker import (
     ParityDiscrepancy,
     ParityDiscrepancyType,
 )
+from .project_service import ProjectService, VariantService, WorkflowConversionService
 
 # Ray imports are conditional
 try:
@@ -77,11 +77,11 @@ except ImportError:
 # LangGraph node replacer (optional utility for native LangGraph development)
 try:
     from .langgraph_node_replacer import (
+        GraphEdgeInfo,
+        GraphNodeInfo,
+        GraphStructure,
         LangGraphNodeReplacer,
         LangGraphNodeVariant,
-        GraphStructure,
-        GraphNodeInfo,
-        GraphEdgeInfo,
         VariantSet,
         capture_graph_structure,
     )
@@ -115,11 +115,11 @@ except ImportError:
 # API Services (v2.0 - 2026-01-28)
 try:
     from .api_services import (
-        ExecutionAPIService,
+        APIServiceFactory,
         AuditAPIService,
         BatchTestAPIService,
+        ExecutionAPIService,
         WorkflowAPIService,
-        APIServiceFactory,
     )
     API_SERVICES_AVAILABLE = True
 except ImportError:

@@ -26,17 +26,14 @@ Related Documents:
 import logging
 import os
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
     from wtb.infrastructure.workspace.manager import WorkspaceManager
-    from wtb.domain.models.workspace import Workspace, WorkspaceConfig
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +88,7 @@ class ActorResources:
     num_cpus: float = 1.0
     num_gpus: float = 0.0
     memory_gb: float = 2.0
-    custom: Dict[str, float] = field(default_factory=dict)
+    custom: dict[str, float] = field(default_factory=dict)
     
     @property
     def gpu_memory_gb(self) -> float:
@@ -107,9 +104,9 @@ class ActorConfig:
     execution_id: str
     workspace_id: str
     resources: ActorResources = field(default_factory=ActorResources)
-    thread_id: Optional[str] = None
-    from_checkpoint: Optional[int] = None
-    runtime_env: Optional[Dict[str, Any]] = None
+    thread_id: str | None = None
+    from_checkpoint: int | None = None
+    runtime_env: dict[str, Any] | None = None
     max_restarts: int = 3
     
 
@@ -131,12 +128,12 @@ class PausedActorState:
     actor_config: ActorConfig
     
     # State for resume
-    last_node: Optional[str] = None
+    last_node: str | None = None
     nodes_completed: int = 0
     
     # Resource tracking
     gpu_memory_held_gb: float = 0.0
-    connections_held: List[str] = field(default_factory=list)
+    connections_held: list[str] = field(default_factory=list)
     
     @property
     def pause_duration(self) -> timedelta:
@@ -159,7 +156,7 @@ class ActorHandle:
     
     # Tracking
     executions_completed: int = 0
-    last_reset_at: Optional[datetime] = None
+    last_reset_at: datetime | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -199,9 +196,9 @@ class PauseStrategySelector:
     def select(
         self,
         session_type: SessionType,
-        expected_duration: Optional[timedelta] = None,
-        actor_resources: Optional[ActorResources] = None,
-        explicit_strategy: Optional[PauseStrategy] = None,
+        expected_duration: timedelta | None = None,
+        actor_resources: ActorResources | None = None,
+        explicit_strategy: PauseStrategy | None = None,
     ) -> PauseStrategy:
         """
         Select appropriate pause strategy.
@@ -289,7 +286,7 @@ class ActorLifecycleManager:
         self,
         event_bus: Optional["WTBEventBus"] = None,
         workspace_manager: Optional["WorkspaceManager"] = None,
-        strategy_selector: Optional[PauseStrategySelector] = None,
+        strategy_selector: PauseStrategySelector | None = None,
     ):
         """
         Initialize ActorLifecycleManager.
@@ -305,10 +302,10 @@ class ActorLifecycleManager:
         self._lock = threading.RLock()
         
         # Active actors: actor_id -> ActorHandle
-        self._actors: Dict[str, ActorHandle] = {}
+        self._actors: dict[str, ActorHandle] = {}
         
         # Paused actors: actor_id -> PausedActorState
-        self._paused_actors: Dict[str, PausedActorState] = {}
+        self._paused_actors: dict[str, PausedActorState] = {}
         
         # Actor counter for unique IDs
         self._actor_counter = 0
@@ -407,7 +404,6 @@ class ActorLifecycleManager:
         Returns:
             Ray ActorHandle
         """
-        import ray
         
         # Build runtime environment
         runtime_env = config.runtime_env or {}
@@ -492,8 +488,8 @@ class ActorLifecycleManager:
     def pause_actor(
         self,
         handle: ActorHandle,
-        strategy: Optional[PauseStrategy] = None,
-        expected_duration: Optional[timedelta] = None,
+        strategy: PauseStrategy | None = None,
+        expected_duration: timedelta | None = None,
         session_type: SessionType = SessionType.INTERACTIVE,
         checkpoint_id: str = "",
     ) -> PausedActorState:
@@ -698,7 +694,7 @@ class ActorLifecycleManager:
         self,
         handle: ActorHandle,
         checkpoint_id: str,
-        strategy: Optional[RollbackStrategy] = None,
+        strategy: RollbackStrategy | None = None,
     ) -> ActorHandle:
         """
         Handle rollback with proper resource cleanup.
@@ -793,7 +789,7 @@ class ActorLifecycleManager:
         source_checkpoint_id: str,
         new_workspace_id: str,
         new_execution_id: str,
-        source_config: Optional[ActorConfig] = None,
+        source_config: ActorConfig | None = None,
     ) -> ActorHandle:
         """
         Create new actor for fork operation.
@@ -885,22 +881,22 @@ class ActorLifecycleManager:
     # Query
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_actor(self, actor_id: str) -> Optional[ActorHandle]:
+    def get_actor(self, actor_id: str) -> ActorHandle | None:
         """Get actor by ID."""
         with self._lock:
             return self._actors.get(actor_id)
     
-    def get_active_actors(self) -> List[ActorHandle]:
+    def get_active_actors(self) -> list[ActorHandle]:
         """Get all active actors."""
         with self._lock:
             return [h for h in self._actors.values() if h.state == "active"]
     
-    def get_paused_actors(self) -> List[PausedActorState]:
+    def get_paused_actors(self) -> list[PausedActorState]:
         """Get all paused actors."""
         with self._lock:
             return list(self._paused_actors.values())
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get lifecycle manager statistics."""
         with self._lock:
             return {
@@ -949,7 +945,7 @@ class ActorLifecycleManager:
         self,
         actor_id: str,
         reason: str,
-        resources_cleared: List[str],
+        resources_cleared: list[str],
     ) -> None:
         """Publish ActorResetEvent."""
         from wtb.domain.events.workspace_events import ActorResetEvent
@@ -964,7 +960,7 @@ class ActorLifecycleManager:
         self,
         actor_id: str,
         reason: str,
-        resources_released: List[str],
+        resources_released: list[str],
     ) -> None:
         """Publish ActorKilledEvent."""
         from wtb.domain.events.workspace_events import ActorKilledEvent

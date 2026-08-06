@@ -24,16 +24,17 @@ Architecture:
 """
 
 import logging
-from typing import Optional, Dict, Any, List, Callable, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Optional
 
 from wtb.domain.interfaces.execution_controller import IExecutionController
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
     ExecutionStatus,
     TestWorkflow,
 )
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces.repositories import IOutboxRepository
@@ -60,13 +61,13 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         self,
         inner: IExecutionController,
         outbox_repo: Optional["IOutboxRepository"] = None,
-        commit_fn: Optional[Callable[[], None]] = None,
-        rollback_fn: Optional[Callable[[], None]] = None,
+        commit_fn: Callable[[], None] | None = None,
+        rollback_fn: Callable[[], None] | None = None,
     ):
         self._inner = inner
         self._outbox = outbox_repo
-        self._commit_fn: Optional[Callable[[], None]] = None
-        self._rollback_fn: Optional[Callable[[], None]] = None
+        self._commit_fn: Callable[[], None] | None = None
+        self._rollback_fn: Callable[[], None] | None = None
 
         if outbox_repo is None:
             return
@@ -90,7 +91,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         self,
         event_type: OutboxEventType,
         aggregate_id: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
     ) -> None:
         if self._outbox is None:
             return
@@ -150,13 +151,13 @@ class OutboxExecutionControllerDecorator(IExecutionController):
     def create_execution(
         self,
         workflow: TestWorkflow,
-        initial_state: Optional[Dict[str, Any]] = None,
-        breakpoints: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        initial_state: dict[str, Any] | None = None,
+        breakpoints: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        execution_id: str | None = None,
     ) -> Execution:
         create_args = (workflow, initial_state, breakpoints)
-        create_kwargs: Dict[str, Any] = {}
+        create_kwargs: dict[str, Any] = {}
         if metadata is not None:
             create_kwargs["metadata"] = metadata
         if execution_id is not None:
@@ -221,7 +222,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
     def resume(
         self,
         execution_id: str,
-        modified_state: Optional[Dict[str, Any]] = None,
+        modified_state: dict[str, Any] | None = None,
     ) -> Execution:
         result = self._invoke_inner_mutation(
             self._inner.resume,
@@ -270,7 +271,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         self,
         execution_id: str,
         checkpoint_id: str,
-        new_initial_state: Optional[Dict[str, Any]] = None,
+        new_initial_state: dict[str, Any] | None = None,
     ) -> Execution:
         result = self._invoke_inner_mutation(
             self._inner.fork,
@@ -310,7 +311,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
     def update_execution_state(
         self,
         execution_id: str,
-        values: Dict[str, Any],
+        values: dict[str, Any],
     ) -> bool:
         result = self._invoke_inner_mutation(
             self._inner.update_execution_state,

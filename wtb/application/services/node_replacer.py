@@ -10,12 +10,11 @@ ARCHITECTURE NOTE (2026-01-17):
     This ensures ACID compliance for all write operations.
 """
 
-from typing import Optional, List, Dict, TYPE_CHECKING
-from copy import deepcopy
+from typing import TYPE_CHECKING, Optional
 
 from wtb.domain.interfaces.node_replacer import INodeReplacer
 from wtb.domain.interfaces.repositories import INodeVariantRepository
-from wtb.domain.models import NodeVariant, WorkflowNode, TestWorkflow
+from wtb.domain.models import NodeVariant, TestWorkflow, WorkflowNode
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces.unit_of_work import IUnitOfWork
@@ -53,7 +52,7 @@ class NodeReplacer(INodeReplacer):
         
         # Cache original nodes for restoration
         # workflow_id -> {node_id -> original WorkflowNode}
-        self._original_cache: Dict[str, Dict[str, WorkflowNode]] = {}
+        self._original_cache: dict[str, dict[str, WorkflowNode]] = {}
     
     def _commit(self) -> None:
         """Commit UoW transaction if available (ACID compliance)."""
@@ -84,15 +83,15 @@ class NodeReplacer(INodeReplacer):
         self._commit()  # ACID: Commit at transaction boundary
         return result
     
-    def get(self, variant_id: str) -> Optional[NodeVariant]:
+    def get(self, variant_id: str) -> NodeVariant | None:
         """Get a variant by ID."""
         return self._variant_repo.get(variant_id)
     
-    def get_by_node(self, workflow_id: str, node_id: str) -> List[NodeVariant]:
+    def get_by_node(self, workflow_id: str, node_id: str) -> list[NodeVariant]:
         """Get all variants for a specific node."""
         return self._variant_repo.find_by_node(workflow_id, node_id)
     
-    def list_for_workflow(self, workflow_id: str) -> List[NodeVariant]:
+    def list_for_workflow(self, workflow_id: str) -> list[NodeVariant]:
         """List all variants for a workflow."""
         return self._variant_repo.find_by_workflow(workflow_id)
     
@@ -169,7 +168,7 @@ class NodeReplacer(INodeReplacer):
     def apply_variant_set(
         self,
         workflow: TestWorkflow,
-        variant_set: Dict[str, str]  # node_id -> variant_id
+        variant_set: dict[str, str]  # node_id -> variant_id
     ) -> TestWorkflow:
         """Apply a set of variants to a workflow."""
         modified = self._clone_workflow(workflow)
@@ -196,7 +195,7 @@ class NodeReplacer(INodeReplacer):
         workflow: TestWorkflow,
         node_id: str,
         variant_name: str,
-        modifications: Dict[str, any],
+        modifications: dict[str, any],
         description: str = ""
     ) -> NodeVariant:
         """
@@ -251,7 +250,7 @@ class NodeReplacer(INodeReplacer):
         
         return self.register(variant)
     
-    def clear_cache(self, workflow_id: Optional[str] = None):
+    def clear_cache(self, workflow_id: str | None = None):
         """
         Clear the original node cache.
         
@@ -264,7 +263,7 @@ class NodeReplacer(INodeReplacer):
         else:
             self._original_cache.clear()
     
-    def get_cached_originals(self, workflow_id: str) -> Dict[str, WorkflowNode]:
+    def get_cached_originals(self, workflow_id: str) -> dict[str, WorkflowNode]:
         """Get cached original nodes for a workflow."""
         return dict(self._original_cache.get(workflow_id, {}))
     
