@@ -17,15 +17,13 @@ Reference: CONSOLIDATED_ISSUES.md - Integration Test Requirements
 """
 
 import argparse
-import sys
 import os
 import shutil
-import tempfile
-import time
 import subprocess
-from pathlib import Path
-from typing import Optional
+import sys
+import tempfile
 from contextlib import contextmanager
+from pathlib import Path
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -39,7 +37,7 @@ class IntegrationTestEnvironment:
     
     def __init__(
         self,
-        data_dir: Optional[Path] = None,
+        data_dir: Path | None = None,
         keep_db: bool = False,
         verbose: bool = False,
     ):
@@ -144,7 +142,7 @@ class IntegrationTestEnvironment:
             "WTB_TEST_MODE": "integration",
         }
         
-    def run_tests(self, test_paths: Optional[list] = None, pytest_args: Optional[list] = None) -> int:
+    def run_tests(self, test_paths: list | None = None, pytest_args: list | None = None) -> int:
         """
         Run pytest with the configured environment.
         
