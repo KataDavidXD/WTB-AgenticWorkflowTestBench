@@ -8,22 +8,19 @@ Tests verify:
 - Execution model field renaming (session_id, checkpoint_id)
 """
 
-import pytest
 import uuid
 from datetime import datetime
 
+import pytest
+
 from wtb.domain.interfaces.state_adapter import (
-    IStateAdapter,
-    CheckpointTrigger,
     CheckpointInfo,
+    CheckpointTrigger,
     NodeBoundaryInfo,
 )
 from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
-    ExecutionStatus,
-    TestWorkflow,
-    WorkflowNode,
 )
 from wtb.infrastructure.adapters import InMemoryStateAdapter
 

@@ -3,14 +3,14 @@ Tests for LangGraphStateAdapter - String ID compliance (v1.6).
 
 Uses wtb.testing fixtures for consistent testing patterns.
 """
-import pytest
-import tempfile
 import os
+import tempfile
 
+import pytest
+
+from wtb.domain.interfaces.state_adapter import CheckpointInfo, CheckpointTrigger
 from wtb.domain.models.workflow import ExecutionState
-from wtb.domain.interfaces.state_adapter import CheckpointTrigger, CheckpointInfo
-from wtb.testing import create_minimal_graph, create_conditional_graph, StateAdapterTestMixin
-
+from wtb.testing import create_conditional_graph, create_minimal_graph
 
 # Skip all tests if langgraph not available
 pytest.importorskip("langgraph")
@@ -36,8 +36,8 @@ def temp_db_path():
 def adapter_memory():
     """Create LangGraphStateAdapter with in-memory checkpointer."""
     from wtb.infrastructure.adapters.langgraph_state_adapter import (
-        LangGraphStateAdapter,
         LangGraphConfig,
+        LangGraphStateAdapter,
     )
     config = LangGraphConfig.for_testing()
     adapter = LangGraphStateAdapter(config)
@@ -49,9 +49,9 @@ def adapter_memory():
 def adapter_sqlite(temp_db_path):
     """Create LangGraphStateAdapter with SQLite checkpointer."""
     from wtb.infrastructure.adapters.langgraph_state_adapter import (
-        LangGraphStateAdapter,
-        LangGraphConfig,
         CheckpointerType,
+        LangGraphConfig,
+        LangGraphStateAdapter,
     )
     config = LangGraphConfig(
         checkpointer_type=CheckpointerType.SQLITE,
@@ -276,9 +276,9 @@ class TestLangGraphACIDCompliance:
     def test_durability_persists_across_instances(self, temp_db_path):
         """Data should persist across adapter instances (SQLite only)."""
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
             CheckpointerType,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         config = LangGraphConfig(
@@ -321,8 +321,8 @@ class TestLangGraphConditionalEdges:
     def adapter_conditional(self):
         """Create adapter with conditional graph."""
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
             LangGraphConfig,
+            LangGraphStateAdapter,
         )
         config = LangGraphConfig.for_testing()
         adapter = LangGraphStateAdapter(config)

@@ -7,8 +7,6 @@ Validates:
 3. DRY factory delegation
 """
 
-import pytest
-from typing import List
 
 
 class TestBranchResultRemoval:
@@ -30,13 +28,13 @@ class TestBranchResultRemoval:
     def test_sdk_still_has_valid_exports(self):
         """Verify SDK still has expected valid exports."""
         from wtb.sdk import (
-            WTBTestBench,
-            WTBTestBenchBuilder,
-            WorkflowProject,
-            RollbackResult,
-            ForkResult,
             Execution,
             ExecutionStatus,
+            ForkResult,
+            RollbackResult,
+            WorkflowProject,
+            WTBTestBench,
+            WTBTestBenchBuilder,
         )
         
         # All these should be importable
@@ -54,8 +52,9 @@ class TestListAllMethod:
     
     def test_interface_has_list_all(self):
         """Verify IWorkflowRepository interface has list_all method."""
-        from wtb.domain.interfaces.repositories import IWorkflowRepository
         import inspect
+
+        from wtb.domain.interfaces.repositories import IWorkflowRepository
         
         # Get all abstract methods
         abstract_methods = [
@@ -67,7 +66,9 @@ class TestListAllMethod:
     
     def test_inmemory_workflow_repository_has_list_all(self):
         """Verify InMemoryWorkflowRepository implements list_all."""
-        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryWorkflowRepository
+        from wtb.infrastructure.database.inmemory_unit_of_work import (
+            InMemoryWorkflowRepository,
+        )
         
         repo = InMemoryWorkflowRepository()
         
@@ -82,8 +83,10 @@ class TestListAllMethod:
     
     def test_inmemory_list_all_returns_all_workflows(self):
         """Verify list_all returns all workflows without pagination."""
-        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryWorkflowRepository
         from wtb.domain.models import TestWorkflow
+        from wtb.infrastructure.database.inmemory_unit_of_work import (
+            InMemoryWorkflowRepository,
+        )
         
         repo = InMemoryWorkflowRepository()
         
@@ -107,8 +110,10 @@ class TestListAllMethod:
     
     def test_inmemory_list_vs_list_all(self):
         """Verify list() respects pagination while list_all() doesn't."""
-        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryWorkflowRepository
         from wtb.domain.models import TestWorkflow
+        from wtb.infrastructure.database.inmemory_unit_of_work import (
+            InMemoryWorkflowRepository,
+        )
         
         repo = InMemoryWorkflowRepository()
         
@@ -136,9 +141,9 @@ class TestListAllMethod:
     
     def test_project_service_list_workflows_uses_list_all(self):
         """Verify ProjectService.list_workflows works with list_all."""
-        from wtb.infrastructure.database import InMemoryUnitOfWork
         from wtb.application.services import ProjectService
         from wtb.domain.models import TestWorkflow
+        from wtb.infrastructure.database import InMemoryUnitOfWork
         
         uow = InMemoryUnitOfWork()
         uow.__enter__()
@@ -165,7 +170,10 @@ class TestFactoryDRYDelegation:
     
     def test_wtb_factory_uses_execution_controller_factory(self):
         """Verify WTBTestBenchFactory._create_state_adapter delegates."""
-        from wtb.application.factories import WTBTestBenchFactory, ExecutionControllerFactory
+        from wtb.application.factories import (
+            ExecutionControllerFactory,
+            WTBTestBenchFactory,
+        )
         from wtb.config import WTBConfig
         
         # Create test config
@@ -182,10 +190,8 @@ class TestFactoryDRYDelegation:
     def test_factory_methods_exist(self):
         """Verify factory methods exist."""
         from wtb.application.factories import (
-            WTBTestBenchFactory,
             ExecutionControllerFactory,
-            BatchTestRunnerFactory,
-            NodeReplacerFactory,
+            WTBTestBenchFactory,
         )
         
         # WTBTestBenchFactory methods
@@ -218,8 +224,9 @@ class TestInterfaceConsistency:
     
     def test_workflow_repository_interface_complete(self):
         """Verify IWorkflowRepository has all required methods."""
-        from wtb.domain.interfaces.repositories import IWorkflowRepository
         import inspect
+
+        from wtb.domain.interfaces.repositories import IWorkflowRepository
         
         # Get all methods including inherited
         methods = [name for name, _ in inspect.getmembers(IWorkflowRepository, predicate=inspect.isfunction)]
@@ -236,8 +243,10 @@ class TestInterfaceConsistency:
     
     def test_inmemory_uow_workflow_repository_is_compliant(self):
         """Verify InMemoryWorkflowRepository implements full interface."""
-        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryWorkflowRepository
         from wtb.domain.interfaces.repositories import IWorkflowRepository
+        from wtb.infrastructure.database.inmemory_unit_of_work import (
+            InMemoryWorkflowRepository,
+        )
         
         # Should be a subclass
         assert issubclass(InMemoryWorkflowRepository, IWorkflowRepository), \
@@ -269,8 +278,9 @@ class TestEndToEndIntegration:
         
         # Create and register projects
         def dummy_graph():
-            from langgraph.graph import StateGraph
             from typing import TypedDict
+
+            from langgraph.graph import StateGraph
             
             class State(TypedDict):
                 value: str
@@ -296,19 +306,8 @@ class TestEndToEndIntegration:
         """Test that all SDK exports work correctly."""
         # Import should not raise
         from wtb.sdk import (
-            WTBTestBench,
-            WTBTestBenchBuilder,
-            WorkflowProject,
-            RollbackResult,
             ForkResult,
-            Execution,
-            ExecutionState,
-            ExecutionStatus,
-            Checkpoint,
-            CheckpointId,
-            BatchTest,
-            BatchTestResult,
-            BatchTestStatus,
+            RollbackResult,
         )
         
         # Create instances to verify they work

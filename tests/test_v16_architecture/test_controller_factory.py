@@ -10,16 +10,17 @@ Test Coverage:
 - UoW proper cleanup on exit
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 from wtb.application.factories import (
     ExecutionControllerFactory,
     ManagedController,
 )
-from wtb.infrastructure.database import InMemoryUnitOfWork
-from wtb.infrastructure.adapters import InMemoryStateAdapter
 from wtb.domain.models import TestWorkflow, WorkflowNode
+from wtb.infrastructure.adapters import InMemoryStateAdapter
+from wtb.infrastructure.database import InMemoryUnitOfWork
 
 
 class TestManagedController:

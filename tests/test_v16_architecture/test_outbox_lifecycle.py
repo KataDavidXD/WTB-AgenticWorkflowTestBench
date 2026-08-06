@@ -14,14 +14,13 @@ Test Coverage:
 - Callback invocations
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 from wtb.infrastructure.outbox.lifecycle import (
-    OutboxLifecycleManager,
-    LifecycleStatus,
     HealthStatus,
+    LifecycleStatus,
+    OutboxLifecycleManager,
     create_managed_processor,
 )
 

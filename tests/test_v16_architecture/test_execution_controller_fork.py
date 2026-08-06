@@ -9,19 +9,16 @@ Tests verify:
 """
 
 import pytest
-import uuid
 
+from wtb.application.services.execution_controller import ExecutionController
 from wtb.domain.models.workflow import (
-    Execution,
-    ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
 from wtb.infrastructure.adapters import InMemoryStateAdapter
 from wtb.infrastructure.database import InMemoryUnitOfWork
-from wtb.application.services.execution_controller import ExecutionController
 
 
 class TestExecutionControllerFork:
