@@ -448,7 +448,7 @@ class TestWorkspaceManager:
             execution_id="exec-001",
             source_paths=[source_files / "data.csv"],
         )
-        
+
         assert workspace.workspace_id is not None
         assert workspace.batch_test_id == "batch-001"
         assert workspace.variant_name == "bm25"
@@ -456,6 +456,185 @@ class TestWorkspaceManager:
         assert workspace.input_dir.exists()
         assert workspace.output_dir.exists()
         assert workspace.lock_file.exists()
+
+    def test_workspace_identifiers_cannot_escape_base_directory(
+        self,
+        workspace_manager,
+    ):
+        """Untrusted identifiers must be encoded as safe path components."""
+        base_dir = workspace_manager._base_dir.resolve()
+        variant_name = (
+            f"..{os.sep}..{os.sep}escaped_{workspace_manager._base_dir.name}"
+        )
+
+        workspace = workspace_manager.create_workspace(
+            batch_id="batch-safe",
+            variant_name=variant_name,
+            execution_id="exec-001",
+        )
+
+        try:
+            workspace.root_path.resolve().relative_to(base_dir)
+        except ValueError:
+            pytest.fail(
+                f"workspace escaped configured base directory: {workspace.root_path}"
+            )
+        finally:
+            workspace_manager.cleanup_workspace(workspace.workspace_id)
+
+    def test_cleanup_rejects_tracked_workspace_outside_base(
+        self,
+        workspace_manager,
+        temp_dir,
+    ):
+        """A corrupted workspace record must never delete an external path."""
+        workspace = workspace_manager.create_workspace(
+            batch_id="batch-safe",
+            variant_name="variant-safe",
+            execution_id="exec-safe",
+        )
+        original_root = workspace.root_path
+        external_root = temp_dir.parent / f"protected_{temp_dir.name}"
+        external_root.mkdir()
+        marker = external_root / "keep.txt"
+        marker.write_text("keep", encoding="utf-8")
+        workspace.root_path = external_root
+
+        try:
+            with (
+                patch(
+                    "wtb.infrastructure.workspace.manager.shutil.rmtree"
+                ) as remove_tree,
+                pytest.raises(WorkspaceCleanupError, match="outside"),
+            ):
+                workspace_manager.cleanup_workspace(workspace.workspace_id)
+
+            remove_tree.assert_not_called()
+            assert marker.read_text(encoding="utf-8") == "keep"
+            assert workspace_manager.get_workspace(workspace.workspace_id) is workspace
+        finally:
+            workspace.root_path = original_root
+            workspace_manager.cleanup_workspace(workspace.workspace_id)
+            shutil.rmtree(external_root, ignore_errors=True)
+
+    def test_managed_path_rejects_redirect_to_sibling(self, workspace_manager):
+        """Canonical resolution must not redirect one managed path to another."""
+        base_dir = workspace_manager._base_dir.resolve()
+        requested = base_dir / "batch_expected" / "workspace"
+        redirected = base_dir / "batch_sibling" / "workspace"
+        original_resolve = Path.resolve
+
+        def resolve_with_redirect(path, *args, **kwargs):
+            if path == requested:
+                return redirected
+            return original_resolve(path, *args, **kwargs)
+
+        with (
+            patch.object(
+                Path,
+                "resolve",
+                autospec=True,
+                side_effect=resolve_with_redirect,
+            ),
+            pytest.raises(WorkspaceCleanupError, match="redirect"),
+        ):
+            workspace_manager._managed_path(requested)
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows path alias")
+    def test_managed_path_accepts_windows_extended_prefix_alias(
+        self,
+        workspace_manager,
+    ):
+        """The extended-length prefix alone is not a filesystem redirect."""
+        requested = workspace_manager._base_dir / "batch_expected" / "workspace"
+        extended = Path("\\\\?\\" + os.fspath(requested))
+        original_resolve = Path.resolve
+
+        def resolve_with_extended_prefix(path, *args, **kwargs):
+            absolute = Path(os.path.abspath(os.fspath(path)))
+            if absolute == requested:
+                return extended
+            return original_resolve(path, *args, **kwargs)
+
+        with patch.object(
+            Path,
+            "resolve",
+            autospec=True,
+            side_effect=resolve_with_extended_prefix,
+        ):
+            assert workspace_manager._managed_path(requested) == requested
+
+    def test_cleanup_rejects_tracked_workspace_root_rebound_to_sibling(
+        self,
+        workspace_manager,
+    ):
+        """A corrupted record must not delete another managed workspace."""
+        first = workspace_manager.create_workspace(
+            batch_id="batch-safe",
+            variant_name="first",
+            execution_id="exec-first",
+        )
+        sibling = workspace_manager.create_workspace(
+            batch_id="batch-safe",
+            variant_name="sibling",
+            execution_id="exec-sibling",
+        )
+        original_first_root = first.root_path
+        sibling_marker = sibling.output_dir / "keep.txt"
+        sibling_marker.write_text("keep", encoding="utf-8")
+        first.root_path = sibling.root_path
+
+        try:
+            with (
+                patch(
+                    "wtb.infrastructure.workspace.manager.shutil.rmtree"
+                ) as remove_tree,
+                pytest.raises(WorkspaceCleanupError, match="root"),
+            ):
+                workspace_manager.cleanup_workspace(first.workspace_id)
+
+            remove_tree.assert_not_called()
+            assert sibling_marker.read_text(encoding="utf-8") == "keep"
+            assert workspace_manager.get_workspace(first.workspace_id) is first
+            assert workspace_manager.get_workspace(sibling.workspace_id) is sibling
+        finally:
+            first.root_path = original_first_root
+            workspace_manager.cleanup_workspace(first.workspace_id)
+            workspace_manager.cleanup_workspace(sibling.workspace_id)
+
+    def test_duplicate_identifiers_get_independent_workspace_roots(
+        self,
+        workspace_manager,
+    ):
+        """Every workspace identity must own a distinct physical root."""
+        first = workspace_manager.create_workspace(
+            batch_id="batch-duplicate",
+            variant_name="same-variant",
+            execution_id="same-execution",
+        )
+        second = workspace_manager.create_workspace(
+            batch_id="batch-duplicate",
+            variant_name="same-variant",
+            execution_id="same-execution",
+        )
+
+        try:
+            assert first.workspace_id != second.workspace_id
+            assert first.root_path != second.root_path
+
+            first_marker = first.output_dir / "first.txt"
+            second_marker = second.output_dir / "second.txt"
+            first_marker.write_text("first", encoding="utf-8")
+            second_marker.write_text("second", encoding="utf-8")
+
+            assert workspace_manager.cleanup_workspace(first.workspace_id) is True
+            assert not first.root_path.exists()
+            assert second_marker.read_text(encoding="utf-8") == "second"
+            assert workspace_manager.get_workspace(second.workspace_id) is second
+        finally:
+            for workspace_id in (first.workspace_id, second.workspace_id):
+                if workspace_manager.get_workspace(workspace_id) is not None:
+                    workspace_manager.cleanup_workspace(workspace_id)
     
     def test_create_workspace_with_directory(self, workspace_manager, source_files):
         """Test workspace creation with directory source."""
@@ -484,6 +663,86 @@ class TestWorkspaceManager:
         
         assert workspace.strategy == WorkspaceStrategy.NONE
         assert workspace.root_path == Path.cwd()
+
+    def test_cleanup_disabled_workspace_never_touches_physical_root(
+        self,
+        temp_dir,
+        mock_event_bus,
+    ):
+        """NONE workspaces only release tracking; cwd is never a delete target."""
+        manager = WorkspaceManager(
+            WorkspaceConfig(enabled=False, base_dir=temp_dir),
+            mock_event_bus,
+        )
+        workspace = manager.create_workspace(
+            batch_id="batch-none",
+            variant_name="none",
+            execution_id="exec-none",
+        )
+
+        with (
+            patch.object(manager, "_managed_path", return_value=temp_dir) as managed,
+            patch(
+                "wtb.infrastructure.workspace.manager.shutil.rmtree"
+            ) as remove_tree,
+        ):
+            result = manager.cleanup_workspace(workspace.workspace_id)
+
+        assert result is True
+        managed.assert_not_called()
+        remove_tree.assert_not_called()
+        assert manager.get_workspace(workspace.workspace_id) is None
+        assert Path.cwd().exists()
+
+    def test_cleanup_batch_disabled_workspaces_only_releases_tracking(
+        self,
+        temp_dir,
+        mock_event_bus,
+    ):
+        """Disabled batch cleanup never touches a physical path."""
+        manager = WorkspaceManager(
+            WorkspaceConfig(enabled=False, base_dir=temp_dir),
+            mock_event_bus,
+        )
+        first = manager.create_workspace(
+            batch_id="batch-none",
+            variant_name="first",
+            execution_id="exec-first",
+        )
+        second = manager.create_workspace(
+            batch_id="batch-none",
+            variant_name="second",
+            execution_id="exec-second",
+        )
+        other = manager.create_workspace(
+            batch_id="batch-other",
+            variant_name="other",
+            execution_id="exec-other",
+        )
+
+        with (
+            patch.object(
+                manager,
+                "_managed_path",
+                return_value=temp_dir / "not-created",
+            ) as managed,
+            patch.object(Path, "rmdir") as remove_empty_dir,
+            patch(
+                "wtb.infrastructure.workspace.manager.shutil.rmtree"
+            ) as remove_tree,
+        ):
+            count = manager.cleanup_batch("batch-none")
+
+        assert count == 2
+        assert manager.get_workspace(first.workspace_id) is None
+        assert manager.get_workspace(second.workspace_id) is None
+        assert manager.get_workspace(other.workspace_id) is other
+        managed.assert_not_called()
+        remove_empty_dir.assert_not_called()
+        remove_tree.assert_not_called()
+        assert Path.cwd().exists()
+
+        assert manager.cleanup_workspace(other.workspace_id) is True
     
     def test_get_workspace(self, workspace_manager, source_files):
         """Test getting workspace by ID."""
@@ -750,6 +1009,52 @@ class TestWorkspaceManager:
 
 class TestOrphanCleanup:
     """Tests for orphan workspace cleanup."""
+
+    def test_orphan_scan_skips_redirected_batch(
+        self,
+        temp_dir,
+        mock_event_bus,
+    ):
+        """Never traverse a batch path redirected elsewhere under the base."""
+        redirected_batch = temp_dir / "batch_redirected"
+        redirected_workspace = redirected_batch / "workspace"
+        redirected_workspace.mkdir(parents=True)
+        (redirected_workspace / ".workspace_lock").write_text(
+            json.dumps(
+                {
+                    "pid": 99999999,
+                    "created_at": (
+                        datetime.now() - timedelta(hours=2)
+                    ).isoformat(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        sibling_batch = temp_dir / "batch_sibling"
+        sibling_batch.mkdir()
+        original_resolve = Path.resolve
+
+        def redirect_resolve(path, *args, **kwargs):
+            absolute = Path(os.path.abspath(os.fspath(path)))
+            try:
+                relative = absolute.relative_to(redirected_batch)
+            except ValueError:
+                return original_resolve(path, *args, **kwargs)
+            return sibling_batch / relative
+
+        config = WorkspaceConfig(enabled=False, base_dir=temp_dir)
+        manager = WorkspaceManager(config, mock_event_bus)
+
+        with patch.object(Path, "resolve", redirect_resolve):
+            report = manager._cleanup_orphans()
+
+        assert report.orphans_found == 0
+        assert report.errors == []
+        assert redirected_workspace.exists()
+        assert not any(
+            isinstance(event, OrphanWorkspaceDetectedEvent)
+            for event in mock_event_bus.published_events
+        )
     
     def test_orphan_detection(self, temp_dir, mock_event_bus):
         """Test orphan workspace detection."""

@@ -23,8 +23,10 @@ Related Documents:
 - docs/issues/WORKSPACE_ISOLATION_DESIGN.md (Sections 4, 12)
 """
 
+import hashlib
 import logging
 import os
+import re
 import shutil
 import sys
 import threading
@@ -198,6 +200,30 @@ def _is_process_alive(pid: int) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _safe_path_component(value: str) -> str:
+    """Encode an external identifier as one deterministic path component."""
+    text = str(value)
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    slug = slug.strip("._-")[:40] or "id"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    return f"{slug}-{digest}"
+
+
+def _path_identity_key(path: Path) -> str:
+    """Normalize aliases that name the same Windows path spelling."""
+    normalized = os.path.normcase(os.path.normpath(os.fspath(path)))
+    if os.name != "nt":
+        return normalized
+
+    extended_prefix = "\\\\?\\"
+    extended_unc_prefix = extended_prefix + "unc\\"
+    if normalized.startswith(extended_unc_prefix):
+        return "\\\\" + normalized[len(extended_unc_prefix):]
+    if normalized.startswith(extended_prefix):
+        return normalized[len(extended_prefix):]
+    return normalized
+
+
 class WorkspaceManager:
     """
     Central service for isolated workspace lifecycle management.
@@ -263,13 +289,18 @@ class WorkspaceManager:
         
         # Active workspaces: workspace_id -> Workspace
         self._workspaces: Dict[str, Workspace] = {}
+
+        # Immutable physical identity recorded when an isolated workspace is
+        # created. Cleanup must match this map before touching the filesystem.
+        self._workspace_roots: Dict[str, Path] = {}
         
         # Batch tracking: batch_id -> set of workspace_ids
         self._batch_workspaces: Dict[str, set] = {}
         
-        # Ensure base directory exists
-        self._base_dir = config.get_base_dir()
-        self._base_dir.mkdir(parents=True, exist_ok=True)
+        # Anchor every later containment check to one canonical directory.
+        configured_base_dir = Path(config.get_base_dir()).absolute()
+        configured_base_dir.mkdir(parents=True, exist_ok=True)
+        self._base_dir = configured_base_dir.resolve()
         
         # Run orphan cleanup on startup
         if config.enabled:
@@ -282,6 +313,28 @@ class WorkspaceManager:
     # Workspace Creation
     # ═══════════════════════════════════════════════════════════════════════════
     
+    def _managed_path(self, path: Path) -> Path:
+        """Prove a path is canonical, unredirected, and below the base."""
+        base_dir = self._base_dir
+        candidate = Path(os.path.abspath(os.fspath(path)))
+        try:
+            candidate.relative_to(base_dir)
+        except ValueError as exc:
+            raise WorkspaceCleanupError(
+                f"Refusing workspace path outside configured base: {candidate}"
+            ) from exc
+        if candidate == base_dir:
+            raise WorkspaceCleanupError(
+                "Refusing to treat the workspace base directory as a workspace"
+            )
+        resolved = candidate.resolve()
+        if _path_identity_key(resolved) != _path_identity_key(candidate):
+            raise WorkspaceCleanupError(
+                "Refusing redirected workspace path: "
+                f"{candidate} resolves to {resolved}"
+            )
+        return candidate
+
     def create_workspace(
         self,
         batch_id: str,
@@ -317,12 +370,23 @@ class WorkspaceManager:
         
         import uuid
         workspace_id = f"ws-{uuid.uuid4().hex[:12]}"
+        workspace_dir: Optional[Path] = None
+        workspace_dir_created = False
         
         with self._lock:
             try:
                 # Create workspace directory structure
-                workspace_dir = self._base_dir / f"batch_{batch_id}" / f"{variant_name}_{execution_id}"
-                workspace_dir.mkdir(parents=True, exist_ok=True)
+                batch_component = _safe_path_component(batch_id)
+                variant_component = _safe_path_component(variant_name)
+                execution_component = _safe_path_component(execution_id)
+                workspace_dir = self._managed_path(
+                    self._base_dir
+                    / f"batch_{batch_component}"
+                    / f"{variant_component}_{execution_component}_{workspace_id}"
+                )
+                workspace_dir.mkdir(parents=True, exist_ok=False)
+                workspace_dir_created = True
+                workspace_dir = self._managed_path(workspace_dir)
                 
                 input_dir = workspace_dir / "input"
                 output_dir = workspace_dir / "output"
@@ -386,6 +450,7 @@ class WorkspaceManager:
                 
                 # Track workspace
                 self._workspaces[workspace_id] = workspace
+                self._workspace_roots[workspace_id] = workspace_dir
                 if batch_id not in self._batch_workspaces:
                     self._batch_workspaces[batch_id] = set()
                 self._batch_workspaces[batch_id].add(workspace_id)
@@ -410,10 +475,17 @@ class WorkspaceManager:
                 return workspace
                 
             except Exception as e:
-                # Cleanup on failure
-                if workspace_dir.exists():
+                # Only remove a directory this call created, and revalidate it
+                # immediately before deletion to avoid following redirects.
+                cleanup_dir: Optional[Path] = None
+                if workspace_dir_created and workspace_dir is not None:
                     try:
-                        shutil.rmtree(workspace_dir)
+                        cleanup_dir = self._managed_path(workspace_dir)
+                    except WorkspaceCleanupError:
+                        pass
+                if cleanup_dir is not None and cleanup_dir.exists():
+                    try:
+                        shutil.rmtree(cleanup_dir)
                     except Exception:
                         pass
                 logger.error(f"Workspace creation failed: {e}")
@@ -439,6 +511,9 @@ class WorkspaceManager:
         
         with self._lock:
             self._workspaces[workspace.workspace_id] = workspace
+            if batch_id not in self._batch_workspaces:
+                self._batch_workspaces[batch_id] = set()
+            self._batch_workspaces[batch_id].add(workspace.workspace_id)
         
         return workspace
     
@@ -581,10 +656,27 @@ class WorkspaceManager:
             
             files_removed = 0
             space_freed = 0
+            workspace_root: Optional[Path] = None
+            if workspace.strategy is not WorkspaceStrategy.NONE:
+                expected_root = self._workspace_roots.get(workspace_id)
+                if expected_root is None:
+                    raise WorkspaceCleanupError(
+                        f"Missing registered root identity for {workspace_id}"
+                    )
+                workspace_root = self._managed_path(workspace.root_path)
+                if workspace_root != expected_root:
+                    raise WorkspaceCleanupError(
+                        f"Workspace root identity mismatch for {workspace_id}: "
+                        f"expected {expected_root}, got {workspace_root}"
+                    )
             
-            if not preserve and workspace.root_path.exists():
+            if (
+                not preserve
+                and workspace_root is not None
+                and workspace_root.exists()
+            ):
                 # Calculate stats before removal
-                for f in workspace.root_path.rglob("*"):
+                for f in workspace_root.rglob("*"):
                     if f.is_file():
                         try:
                             files_removed += 1
@@ -593,15 +685,16 @@ class WorkspaceManager:
                             pass
                 
                 try:
-                    shutil.rmtree(workspace.root_path)
+                    shutil.rmtree(workspace_root)
                 except Exception:
                     logger.exception(
                         "Failed to remove workspace directory %s",
-                        workspace.root_path,
+                        workspace_root,
                     )
                     raise
 
             self._workspaces.pop(workspace_id, None)
+            self._workspace_roots.pop(workspace_id, None)
             if workspace.batch_test_id in self._batch_workspaces:
                 batch_workspaces = self._batch_workspaces[workspace.batch_test_id]
                 batch_workspaces.discard(workspace_id)
@@ -637,14 +730,28 @@ class WorkspaceManager:
         """
         with self._lock:
             workspace_ids = list(self._batch_workspaces.get(batch_id, set()))
+            cleanup_physical_batch_dir = (
+                self._config.enabled
+                if not workspace_ids
+                else any(
+                    workspace_id in self._workspace_roots
+                    for workspace_id in workspace_ids
+                )
+            )
         
         count = 0
         for workspace_id in workspace_ids:
             if self.cleanup_workspace(workspace_id, reason=reason):
                 count += 1
+
+        if not cleanup_physical_batch_dir:
+            return count
         
         # Remove batch directory if empty
-        batch_dir = self._base_dir / f"batch_{batch_id}"
+        batch_dir = self._managed_path(
+            self._base_dir
+            / f"batch_{_safe_path_component(batch_id)}"
+        )
         if batch_dir.exists() and not any(batch_dir.iterdir()):
             batch_dir.rmdir()
         
@@ -668,11 +775,31 @@ class WorkspaceManager:
         grace_hours = self._config.orphan_cleanup_grace_hours
         
         # Scan for orphan workspaces
-        for batch_dir in self._base_dir.iterdir():
-            if not batch_dir.is_dir() or not batch_dir.name.startswith("batch_"):
+        for discovered_batch_dir in self._base_dir.iterdir():
+            if not discovered_batch_dir.name.startswith("batch_"):
                 continue
-            
-            for ws_dir in batch_dir.iterdir():
+            try:
+                batch_dir = self._managed_path(discovered_batch_dir)
+            except WorkspaceCleanupError as exc:
+                logger.warning(
+                    "Skipping redirected orphan batch path %s: %s",
+                    discovered_batch_dir,
+                    exc,
+                )
+                continue
+            if not batch_dir.is_dir():
+                continue
+
+            for discovered_ws_dir in batch_dir.iterdir():
+                try:
+                    ws_dir = self._managed_path(discovered_ws_dir)
+                except WorkspaceCleanupError as exc:
+                    logger.warning(
+                        "Skipping redirected orphan workspace path %s: %s",
+                        discovered_ws_dir,
+                        exc,
+                    )
+                    continue
                 if not ws_dir.is_dir():
                     continue
                 
@@ -716,18 +843,19 @@ class WorkspaceManager:
             
             if orphan.age > grace_hours:
                 try:
+                    orphan_path = self._managed_path(orphan.path)
                     # Calculate space before removal
-                    for f in orphan.path.rglob("*"):
+                    for f in orphan_path.rglob("*"):
                         if f.is_file():
                             try:
                                 space_freed += f.stat().st_size
                             except OSError:
                                 pass
                     
-                    shutil.rmtree(orphan.path)
+                    shutil.rmtree(orphan_path)
                     cleaned += 1
                     action = "cleaned"
-                    logger.info(f"Cleaned orphan workspace: {orphan.path} (age={orphan.age:.1f}h)")
+                    logger.info(f"Cleaned orphan workspace: {orphan_path} (age={orphan.age:.1f}h)")
                     
                 except Exception as e:
                     errors.append(f"Failed to clean {orphan.path}: {e}")

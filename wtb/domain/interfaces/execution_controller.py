@@ -32,7 +32,9 @@ class IExecutionController(ABC):
         self, 
         workflow: TestWorkflow,
         initial_state: Optional[Dict[str, Any]] = None,
-        breakpoints: Optional[List[str]] = None
+        breakpoints: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        execution_id: Optional[str] = None,
     ) -> Execution:
         """
         Create a new execution for a workflow.
@@ -41,6 +43,8 @@ class IExecutionController(ABC):
             workflow: The workflow to execute
             initial_state: Optional initial workflow variables
             breakpoints: Optional list of node IDs to pause at
+            metadata: Optional execution metadata kept outside workflow state
+            execution_id: Optional caller-provided stable execution ID
             
         Returns:
             Created Execution in PENDING state

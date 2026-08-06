@@ -48,12 +48,15 @@ import threading
 import time
 import uuid
 import copy
+import inspect
+import math
 
 from wtb.domain.models.batch_test import (
     BatchTest,
     BatchTestStatus,
     BatchTestResult,
     VariantCombination,
+    normalize_finite_metrics,
 )
 from wtb.domain.models.workflow import (
     TestWorkflow,
@@ -213,6 +216,7 @@ def _create_variant_execution_actor_class():
             # Lazy-initialized dependencies
             self._uow = None
             self._state_adapter = None
+            self._langgraph_state_adapter_factory = None
             self._execution_controller = None
             self._file_tracking_service = None
             self._workspace_manager: Optional[WorkspaceManager] = None
@@ -230,12 +234,11 @@ def _create_variant_execution_actor_class():
             Lazy initialization of heavy dependencies.
             
             Called on first execution to avoid startup overhead.
-            Initializes: StateAdapter, UoW factory, FileTracking service
+            Initializes: adapter factories, UoW factory, FileTracking service
             
-            STATE ADAPTER PRIORITY (per Section 20.9 of ARCHITECTURE.md):
-            1. LangGraphStateAdapter (PRIMARY) - production-proven, robust
-            2. InMemoryStateAdapter - testing fallback
-            3. AgentGitStateAdapter - DEFERRED (not used)
+            STATE ADAPTER CONTRACT:
+            Explicit graph execution requires LangGraphStateAdapter and fails
+            closed; graphless domain execution uses an isolated node adapter.
             """
             if self._initialized:
                 return
@@ -243,10 +246,9 @@ def _create_variant_execution_actor_class():
             try:
                 # Import dependencies inside actor to avoid serialization issues
                 from wtb.infrastructure.database import UnitOfWorkFactory
-                from wtb.infrastructure.adapters import InMemoryStateAdapter
                 
-                # PRIMARY: Try LangGraph adapter (per architecture decision 2026-01-15)
-                try:
+                # Construct LangGraph only for executions with an explicit graph.
+                def create_langgraph_state_adapter():
                     from wtb.infrastructure.adapters.langgraph_state_adapter import (
                         LangGraphStateAdapter,
                         LangGraphConfig,
@@ -256,15 +258,14 @@ def _create_variant_execution_actor_class():
                         checkpointer_type=CheckpointerType.SQLITE,
                         connection_string=str(self._storage_paths.checkpoint_db_path),
                     )
-                    self._state_adapter = LangGraphStateAdapter(config)
-                    logger.info(f"Actor {self._actor_id}: Using LangGraphStateAdapter (PRIMARY)")
-                except Exception as e:
-                    # FALLBACK: InMemory for testing or when LangGraph unavailable
-                    logger.warning(
-                        f"Actor {self._actor_id}: LangGraph not available, "
-                        f"using InMemory fallback: {e}"
-                    )
-                    self._state_adapter = InMemoryStateAdapter()
+                    return LangGraphStateAdapter(config)
+
+                self._langgraph_state_adapter_factory = (
+                    create_langgraph_state_adapter
+                )
+                logger.info(
+                    f"Actor {self._actor_id}: LangGraphStateAdapter configured"
+                )
                 
                 # Create UoW factory for each execution
                 self._uow_factory = lambda: UnitOfWorkFactory.create(
@@ -276,15 +277,16 @@ def _create_variant_execution_actor_class():
                 if self._filetracker_config and self._filetracker_config.get("enabled"):
                     try:
                         from wtb.infrastructure.file_tracking import RayFileTrackerService
-                        self._file_tracking_service = RayFileTrackerService(
+                        file_tracking_service = RayFileTrackerService(
                             self._filetracker_config
                         )
+                        file_tracking_service._ensure_initialized()
+                        self._file_tracking_service = file_tracking_service
                         logger.info(f"Actor {self._actor_id}: FileTracking enabled")
                     except Exception as e:
-                        logger.warning(
-                            f"Actor {self._actor_id}: FileTracking init failed: {e}"
-                        )
-                        self._file_tracking_service = None
+                        raise RuntimeError(
+                            f"Failed to initialize configured file tracking: {e}"
+                        ) from e
                 
                 # Initialize WorkspaceManager if configured (2026-01-16)
                 if self._workspace_config and self._workspace_config.get("enabled"):
@@ -307,10 +309,9 @@ def _create_variant_execution_actor_class():
                         )
                         logger.info(f"Actor {self._actor_id}: WorkspaceManager enabled")
                     except Exception as e:
-                        logger.warning(
-                            f"Actor {self._actor_id}: WorkspaceManager init failed: {e}"
-                        )
-                        self._workspace_manager = None
+                        raise RuntimeError(
+                            f"Failed to initialize configured workspace manager: {e}"
+                        ) from e
                 
                 self._initialized = True
                 logger.info(f"Actor {self._actor_id}: Initialized successfully")
@@ -327,6 +328,7 @@ def _create_variant_execution_actor_class():
             batch_test_id: str,
             workspace_data: Optional[Dict[str, Any]] = None,
             graph_factory_pickled: Optional[Any] = None,
+            execution_id: Optional[str] = None,
         ) -> Dict[str, Any]:
             """
             Execute a single variant combination with optional workspace isolation.
@@ -347,7 +349,8 @@ def _create_variant_execution_actor_class():
             - Workspace deactivated after execution (success or failure)
             """
             start_time = time.time()
-            execution_id = str(uuid.uuid4())
+            if execution_id is None:
+                execution_id = str(uuid.uuid4())
             combination_name = combination.get("name", "unknown")
             variants = combination.get("variants", {})
             # v1.8: Extract graph factory reference for LangGraph execution with checkpoints
@@ -378,10 +381,9 @@ def _create_variant_execution_actor_class():
                             f"activated at {workspace.root_path}"
                         )
                     except Exception as ws_error:
-                        logger.warning(
-                            f"Actor {self._actor_id}: Failed to activate workspace: {ws_error}"
-                        )
-                        workspace = None
+                        raise RuntimeError(
+                            f"Failed to activate configured workspace: {ws_error}"
+                        ) from ws_error
                 
                 # Execute workflow with variant applied
                 # v1.8: Pass graph factory ref for LangGraph execution with checkpoints
@@ -402,6 +404,9 @@ def _create_variant_execution_actor_class():
                 self._executions_run += 1
                 
                 actual_exec_id = result.get("execution_id", execution_id)
+                execution_success = result.get("success", False)
+                if not execution_success:
+                    self._executions_failed += 1
                 
                 return {
                     "execution_id": actual_exec_id,
@@ -411,10 +416,10 @@ def _create_variant_execution_actor_class():
                     "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
                     "llm_cache_path": str(self._storage_paths.llm_cache_path),
                     "cache_storage_scope": self._storage_paths.cache_storage_scope,
-                    "success": True,
+                    "success": execution_success,
                     "duration_ms": duration_ms,
                     "metrics": result.get("metrics", {}),
-                    "error": None,
+                    "error": result.get("error"),
                     "checkpoint_count": result.get("checkpoint_count", 0),
                     "last_checkpoint_id": result.get("last_checkpoint_id"),
                     "node_count": result.get("node_count", 0),
@@ -461,7 +466,112 @@ def _create_variant_execution_actor_class():
                         logger.warning(
                             f"Actor {self._actor_id}: Failed to deactivate workspace: {ws_error}"
                         )
-        
+
+        def _preflight_langgraph_graph(
+            self,
+            graph_factory_module: Optional[str] = None,
+            graph_factory_name: Optional[str] = None,
+            graph_factory_pickled: Optional[Any] = None,
+            graph_pickled: Optional[Any] = None,
+        ) -> Optional[Any]:
+            """Load and validate graph inputs before opening a persistence UoW."""
+            if graph_pickled is not None:
+                try:
+                    try:
+                        import cloudpickle
+                    except ImportError:
+                        from ray import cloudpickle
+                    graph = cloudpickle.loads(
+                        _decode_pickled_payload(graph_pickled)
+                    )
+                    if graph is None:
+                        raise ValueError("serialized graph payload returned no graph")
+                    logger.info(
+                        "Actor %s: Loaded serialized registered-variant graph",
+                        self._actor_id,
+                    )
+                    return graph
+                except Exception as graph_error:
+                    raise RuntimeError(
+                        "Failed to load serialized registered-variant graph: "
+                        f"{graph_error}"
+                    ) from graph_error
+
+            if not (graph_factory_module or graph_factory_name):
+                return None
+            if not graph_factory_module or not graph_factory_name:
+                raise RuntimeError(
+                    "Configured graph factory requires module and name"
+                )
+
+            try:
+                from wtb.application.services.graph_loader import load_graph_factory
+                factory = load_graph_factory(
+                    graph_factory_module,
+                    graph_factory_name,
+                )
+                graph = factory()
+                if graph is None:
+                    raise ValueError("graph factory returned no graph")
+                logger.info(
+                    f"Actor {self._actor_id}: Created LangGraph graph from "
+                    f"{graph_factory_module}.{graph_factory_name}"
+                )
+                return graph
+            except Exception as graph_error:
+                if not graph_factory_pickled:
+                    raise RuntimeError(
+                        "Failed to load configured graph factory "
+                        f"{graph_factory_module}.{graph_factory_name}: {graph_error}"
+                    ) from graph_error
+
+                try:
+                    try:
+                        import cloudpickle
+                    except ImportError:
+                        from ray import cloudpickle
+                    factory = cloudpickle.loads(
+                        _decode_pickled_payload(graph_factory_pickled)
+                    )
+                    graph = factory()
+                    if graph is None:
+                        raise ValueError(
+                            "serialized graph factory returned no graph"
+                        )
+                    logger.info(
+                        f"Actor {self._actor_id}: Created LangGraph graph "
+                        "from cloudpickle fallback"
+                    )
+                    return graph
+                except Exception as pickled_error:
+                    raise RuntimeError(
+                        "Configured graph factory and serialized fallback "
+                        f"failed: {graph_error}; {pickled_error}"
+                    ) from pickled_error
+
+        def _create_execution_state_adapter(
+            self,
+            langgraph_graph: Optional[Any],
+        ) -> IStateAdapter:
+            """Return an execution-local adapter for graph or domain-node mode."""
+            if langgraph_graph is None:
+                from wtb.infrastructure.adapters.sqlite_state_adapter import (
+                    SqliteStateAdapter,
+                )
+
+                return SqliteStateAdapter(
+                    storage_path=self._storage_paths.checkpoint_db_path
+                )
+
+            if self._langgraph_state_adapter_factory is None:
+                raise RuntimeError("LangGraph state adapter factory is not initialized")
+            try:
+                return self._langgraph_state_adapter_factory()
+            except Exception as error:
+                raise RuntimeError(
+                    f"Failed to initialize required LangGraph state adapter: {error}"
+                ) from error
+
         def _run_workflow_execution(
             self,
             workflow_dict: Dict[str, Any],
@@ -509,9 +619,47 @@ def _create_variant_execution_actor_class():
               creates LangGraph graph and passes to controller.run(graph=graph)
             - This enables LangGraph native execution with automatic checkpointing
             """
+            langgraph_graph = self._preflight_langgraph_graph(
+                graph_factory_module=graph_factory_module,
+                graph_factory_name=graph_factory_name,
+                graph_factory_pickled=graph_factory_pickled,
+                graph_pickled=graph_pickled,
+            )
+            state_adapter = self._create_execution_state_adapter(
+                langgraph_graph
+            )
+            try:
+                return self._run_workflow_execution_with_adapter(
+                    workflow_dict=workflow_dict,
+                    variants=variants,
+                    initial_state=initial_state,
+                    execution_id=execution_id,
+                    batch_test_id=batch_test_id,
+                    workspace=workspace,
+                    langgraph_graph=langgraph_graph,
+                    state_adapter=state_adapter,
+                )
+            finally:
+                close_adapter = getattr(state_adapter, "close", None)
+                if callable(close_adapter):
+                    close_adapter()
+
+        def _run_workflow_execution_with_adapter(
+            self,
+            *,
+            workflow_dict: Dict[str, Any],
+            variants: Dict[str, str],
+            initial_state: Dict[str, Any],
+            execution_id: str,
+            batch_test_id: str,
+            workspace: Optional[Workspace],
+            langgraph_graph: Optional[Any],
+            state_adapter: IStateAdapter,
+        ) -> Dict[str, Any]:
             from wtb.application.services.execution_controller import (
                 ExecutionController,
                 DefaultNodeExecutor,
+                NodeBoundaryClaimConflict,
             )
             from pathlib import Path
             
@@ -537,7 +685,7 @@ def _create_variant_execution_actor_class():
                 controller = ExecutionController(
                     execution_repository=uow.executions,
                     workflow_repository=uow.workflows,
-                    state_adapter=self._state_adapter,
+                    state_adapter=state_adapter,
                     node_executor=DefaultNodeExecutor(),
                     unit_of_work=uow,  # v1.7: Pass UoW for transaction management
                     file_tracking_service=self._file_tracking_service,
@@ -549,88 +697,38 @@ def _create_variant_execution_actor_class():
                 variant_state["_variant_config"] = variants
                 variant_state["_batch_test_id"] = batch_test_id
                 variant_state["_actor_id"] = self._actor_id
+
+                durable_metadata = {
+                    "batch_test_id": batch_test_id,
+                    "variants": variants,
+                    "actor_id": self._actor_id,
+                    "requested_execution_id": execution_id,
+                    "state_adapter_backend": (
+                        "langgraph_sqlite"
+                        if langgraph_graph is not None else "node_sqlite"
+                    ),
+                    "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
+                    "llm_cache_path": str(self._storage_paths.llm_cache_path),
+                    "cache_storage_scope": self._storage_paths.cache_storage_scope,
+                }
                 
                 # Create execution via controller (ACID: Atomicity)
                 execution = controller.create_execution(
                     workflow=workflow,
                     initial_state=variant_state,
+                    metadata=durable_metadata,
+                    execution_id=execution_id,
                 )
-                
-                # Use the DB-assigned ID; store the pre-generated one as alias
-                execution.metadata = {
-                    **(execution.metadata or {}),
-                    "batch_test_id": batch_test_id,
-                    "variants": variants,
-                    "actor_id": self._actor_id,
-                    "requested_execution_id": execution_id,
-                    "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
-                    "llm_cache_path": str(self._storage_paths.llm_cache_path),
-                    "cache_storage_scope": self._storage_paths.cache_storage_scope,
-                }
-                # Update the execution_id variable to match the real persisted ID
                 execution_id = execution.id
-                uow.executions.update(execution)
-                uow.commit()
-                
-                # v1.8: Create LangGraph graph from factory if available
-                # This enables automatic checkpointing at each super-step
-                langgraph_graph = None
-                if graph_pickled:
-                    try:
-                        try:
-                            import cloudpickle
-                        except ImportError:
-                            from ray import cloudpickle
-                        langgraph_graph = cloudpickle.loads(
-                            _decode_pickled_payload(graph_pickled)
-                        )
-                        logger.info(
-                            "Actor %s: Loaded serialized registered-variant graph",
-                            self._actor_id,
-                        )
-                    except Exception as graph_error:
-                        raise RuntimeError(
-                            "Failed to load serialized registered-variant graph: "
-                            f"{graph_error}"
-                        ) from graph_error
-                elif graph_factory_module and graph_factory_name:
-                    try:
-                        from wtb.application.services.graph_loader import load_graph_factory
-                        factory = load_graph_factory(graph_factory_module, graph_factory_name)
-                        langgraph_graph = factory()
-                        logger.info(
-                            f"Actor {self._actor_id}: Created LangGraph graph from "
-                            f"{graph_factory_module}.{graph_factory_name}"
-                        )
-                    except Exception as graph_err:
-                        if graph_factory_pickled:
-                            try:
-                                import cloudpickle
-                                factory = cloudpickle.loads(
-                                    _decode_pickled_payload(graph_factory_pickled)
-                                )
-                                langgraph_graph = factory()
-                                logger.info(
-                                    f"Actor {self._actor_id}: Created LangGraph graph "
-                                    f"from cloudpickle fallback"
-                                )
-                            except Exception as pkl_err:
-                                logger.warning(
-                                    f"Actor {self._actor_id}: cloudpickle fallback also "
-                                    f"failed: {pkl_err}. No checkpoints will be created."
-                                )
-                        else:
-                            logger.warning(
-                                f"Actor {self._actor_id}: Failed to create graph from "
-                                f"factory {graph_factory_module}.{graph_factory_name}: "
-                                f"{graph_err}. "
-                                f"Falling back to legacy execution (no checkpoints)."
-                            )
                 
                 # Run execution (ACID: via controller with UoW)
                 # v1.8: Pass graph for LangGraph execution with checkpoints
                 try:
                     execution = controller.run(execution.id, graph=langgraph_graph)
+                    execution_id = execution.id
+                except NodeBoundaryClaimConflict:
+                    uow.rollback()
+                    raise
                 except Exception as e:
                     logger.warning(f"Execution {execution_id} encountered error: {e}")
                     # Re-fetch to get latest state
@@ -685,10 +783,15 @@ def _create_variant_execution_actor_class():
                 files_tracked = 0
                 file_commit_id = None
                 if self._file_tracking_service and controller_output_dir:
-                    file_commit_id = self._file_tracking_service.get_commit_for_checkpoint(
-                        execution.checkpoint_id or ""
-                    )
-                    files_tracked = 1 if file_commit_id else 0
+                    try:
+                        file_commit_id = self._file_tracking_service.get_commit_for_checkpoint(
+                            execution.checkpoint_id or ""
+                        )
+                        files_tracked = 1 if file_commit_id else 0
+                    except Exception as error:
+                        logger.error(f"File tracking failed: {error}")
+                        self._persist_post_run_failure(uow, execution_id, error)
+                        raise
                 elif self._file_tracking_service:
                     try:
                         output_files = self._collect_output_files(
@@ -716,20 +819,26 @@ def _create_variant_execution_actor_class():
                                 f"Actor {self._actor_id}: Tracked {files_tracked} files "
                                 f"for execution {execution_id}"
                             )
-                    except Exception as e:
-                        logger.error(f"File tracking failed: {e}")
+                    except Exception as error:
+                        logger.error(f"File tracking failed: {error}")
+                        self._persist_post_run_failure(uow, execution_id, error)
                         raise
                 
                 # Calculate metrics from execution results
-                metrics = self._calculate_metrics(execution)
+                try:
+                    metrics = self._calculate_metrics(execution)
+                except Exception as error:
+                    logger.error(f"Post-run metric processing failed: {error}")
+                    self._persist_post_run_failure(uow, execution_id, error)
+                    raise
                 
                 # v1.6: checkpoint_id is now str, count checkpoints from history
                 # v1.8: Also extract last_checkpoint_id for rollback support
                 checkpoint_count = 0
                 last_checkpoint_id = execution.checkpoint_id  # Fallback to execution's checkpoint
-                if hasattr(self._state_adapter, 'get_checkpoint_history'):
+                if hasattr(state_adapter, 'get_checkpoint_history'):
                     try:
-                        history = self._state_adapter.get_checkpoint_history()
+                        history = state_adapter.get_checkpoint_history()
                         if history:
                             checkpoint_count = len(history)
                             # Get the most recent checkpoint (first in history, sorted desc)
@@ -737,9 +846,16 @@ def _create_variant_execution_actor_class():
                     except Exception as e:
                         logger.debug(f"Failed to get checkpoint history: {e}")
                         checkpoint_count = 1 if execution.checkpoint_id else 0
+
+                execution_success = execution.status == ExecutionStatus.COMPLETED
+                execution_error = (
+                    execution.error_message if not execution_success else None
+                )
                 
                 return {
                     "execution_id": execution_id,
+                    "success": execution_success,
+                    "error": execution_error,
                     "metrics": metrics,
                     "checkpoint_count": checkpoint_count,
                     "last_checkpoint_id": last_checkpoint_id,
@@ -768,6 +884,32 @@ def _create_variant_execution_actor_class():
             # Create workflow from dict
             return TestWorkflow.from_dict(modified)
         
+        def _persist_post_run_failure(
+            self,
+            uow: IUnitOfWork,
+            execution_id: str,
+            error: Exception,
+        ) -> Execution:
+            """Persist a post-run failure against the authoritative execution row."""
+            persisted = uow.executions.get(execution_id)
+            if persisted is None:
+                raise RuntimeError(
+                    "Post-run processing failed but the persisted execution row "
+                    f"{execution_id!r} could not be loaded"
+                ) from error
+
+            if persisted.status is not ExecutionStatus.FAILED:
+                # File processing is part of the Ray variant transaction even if
+                # the workflow controller has already reached COMPLETED.
+                persisted.status = ExecutionStatus.FAILED
+                persisted.error_message = str(error)
+                persisted.error_node_id = None
+                persisted.completed_at = datetime.now()
+                uow.executions.update(persisted)
+                uow.commit()
+
+            return persisted
+
         def _collect_output_files(
             self, 
             execution: Execution,
@@ -875,32 +1017,32 @@ def _create_variant_execution_actor_class():
         
         def _calculate_metrics(self, execution: Execution) -> Dict[str, float]:
             """
-            Calculate evaluation metrics from execution results.
+            Extract metrics with the same semantics as the ThreadPool runner.
             """
-            metrics = {
-                "overall_score": 0.0,
-                "latency_ms": 0.0,
-                "node_count": float(len(execution.state.execution_path)),
-            }
-            
-            # Calculate success rate based on node results
-            node_results = execution.state.node_results or {}
-            if node_results:
-                successful_nodes = sum(
-                    1 for r in node_results.values()
-                    if isinstance(r, dict) and r.get("success", True)
+            metrics: Dict[str, float] = {}
+
+            if execution.state and execution.state.workflow_variables:
+                variables = execution.state.workflow_variables
+
+                if "overall_score" in variables:
+                    metrics["overall_score"] = variables["overall_score"]
+                if "accuracy" in variables:
+                    metrics["accuracy"] = variables["accuracy"]
+                if "latency_ms" in variables:
+                    metrics["latency_ms"] = variables["latency_ms"]
+                if "_metrics" in variables and isinstance(
+                    variables["_metrics"], dict
+                ):
+                    metrics.update(variables["_metrics"])
+
+            if "overall_score" not in metrics:
+                metrics["overall_score"] = (
+                    1.0
+                    if execution.status == ExecutionStatus.COMPLETED
+                    else 0.0
                 )
-                metrics["success_rate"] = successful_nodes / len(node_results)
             
-            # Overall score based on completion status
-            if execution.status == ExecutionStatus.COMPLETED:
-                metrics["overall_score"] = 0.8 + (metrics.get("success_rate", 0.5) * 0.2)
-            elif execution.status == ExecutionStatus.FAILED:
-                metrics["overall_score"] = 0.2
-            else:
-                metrics["overall_score"] = 0.5
-            
-            return metrics
+            return normalize_finite_metrics(metrics)
         
         def health_check(self) -> Dict[str, Any]:
             """
@@ -1076,6 +1218,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         
         # Ray state
         self._ray_initialized = False
+        self._owns_ray_runtime = False
         
         # Workspace manager (2026-01-16)
         self._workspace_manager: Optional[WorkspaceManager] = None
@@ -1141,9 +1284,9 @@ class RayBatchTestRunner(IBatchTestRunner):
                 )
                 logger.info("RayBatchTestRunner: WorkspaceManager initialized")
             except Exception as e:
-                logger.warning(f"RayBatchTestRunner: WorkspaceManager init failed: {e}")
-                self._workspace_manager = None
-                self._workspace_enabled = False
+                raise BatchRunnerError(
+                    f"Failed to initialize configured workspace manager: {e}"
+                ) from e
         
         # UV Venv environment provider (gRPC Docker service)
         self._environment_provider = environment_provider
@@ -1180,6 +1323,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             
             try:
                 ray.init(**init_kwargs)
+                self._owns_ray_runtime = True
                 logger.info(f"Ray initialized with config: {init_kwargs}")
             except Exception as init_error:
                 configured_target = init_kwargs.get("address", "local")
@@ -1691,6 +1835,32 @@ class RayBatchTestRunner(IBatchTestRunner):
 
         if not batch_test.variant_combinations:
             raise BatchRunnerError("No variant combinations to execute")
+
+        if (
+            isinstance(batch_test.parallel_count, bool)
+            or not isinstance(batch_test.parallel_count, int)
+            or batch_test.parallel_count <= 0
+        ):
+            raise BatchRunnerError("parallel_count must be a positive integer")
+        if (
+            isinstance(self._config.max_pending_tasks, bool)
+            or not isinstance(self._config.max_pending_tasks, int)
+            or self._config.max_pending_tasks <= 0
+        ):
+            raise BatchRunnerError("max_pending_tasks must be a positive integer")
+        timeout = self._config.task_timeout_seconds
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(float(timeout))
+            or timeout < 0
+        ):
+            raise BatchRunnerError(
+                "task_timeout_seconds must be a finite non-negative number"
+            )
+        names = [combo.name for combo in batch_test.variant_combinations]
+        if len(names) != len(set(names)):
+            raise BatchRunnerError("Duplicate combination name in batch test")
         
         # This runner has one shared actor pool. Register its owner atomically
         # so concurrent batches cannot select or terminate each other's actors.
@@ -1781,6 +1951,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             
             # Submit all variants with backpressure
             ref_to_combo: Dict[Any, VariantCombination] = {}
+            ref_to_execution_id: Dict[Any, str] = {}
             ref_to_workspace: Dict[Any, Optional[Workspace]] = {}  # Track workspaces (2026-01-16)
             
             for combo in batch_test.variant_combinations:
@@ -1816,9 +1987,10 @@ class RayBatchTestRunner(IBatchTestRunner):
                             f"Created workspace {workspace.workspace_id} for variant {combo.name}"
                         )
                     except Exception as ws_error:
-                        logger.warning(f"Failed to create workspace for {combo.name}: {ws_error}")
-                        workspace = None
-                        workspace_data = None
+                        raise BatchRunnerError(
+                            f"Failed to create configured workspace for {combo.name}: "
+                            f"{ws_error}"
+                        ) from ws_error
                 
                 # Emit variant execution started event (FLAW 8 fix)
                 if self._event_bridge:
@@ -1846,10 +2018,12 @@ class RayBatchTestRunner(IBatchTestRunner):
                         batch_test_id=ray.get(batch_test_id_ref),
                         workspace_data=workspace_data,  # Pass workspace (2026-01-16)
                         graph_factory_pickled=graph_factory_pickled,
+                        execution_id=execution_id,
                     )
 
                     pending_refs.append(ref)
                     ref_to_combo[ref] = combo
+                    ref_to_execution_id[ref] = execution_id
                     ref_to_workspace[ref] = workspace  # Track workspace for cleanup
                     running_test.pending_refs.append(ref)
                 
@@ -1861,6 +2035,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                         batch_test,
                         running_test,
                         timeout=self._config.task_timeout_seconds,
+                        ref_to_execution_id=ref_to_execution_id,
                     )
             
             # Wait for remaining results
@@ -1871,6 +2046,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                     batch_test,
                     running_test,
                     timeout=self._config.task_timeout_seconds,
+                    ref_to_execution_id=ref_to_execution_id,
                 )
             
             # Build the comparison before committing a terminal state. This
@@ -1938,14 +2114,17 @@ class RayBatchTestRunner(IBatchTestRunner):
                     r.get("files_tracked", 0) for r in running_test.completed_results
                 )
                 
-                # Get best combination
-                best_combo = None
-                best_score = 0.0
-                for r in running_test.completed_results:
-                    score = r.get("metrics", {}).get("overall_score", 0.0)
-                    if score > best_score:
-                        best_score = score
-                        best_combo = r.get("combination_name")
+                # Reuse the domain decision so failed variants and negative
+                # scores cannot make the event disagree with the returned batch.
+                best_combo = batch_test.best_combination_name
+                best_result = next(
+                    (
+                        result for result in batch_test.results
+                        if result.success and result.combination_name == best_combo
+                    ),
+                    None,
+                )
+                best_score = best_result.overall_score if best_result else 0.0
                 
                 # Emit completed event
                 if self._event_bridge:
@@ -2182,6 +2361,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         batch_test: BatchTest,
         running_test: _RayRunningTest,
         timeout: float,
+        ref_to_execution_id: Optional[Dict[Any, str]] = None,
     ):
         """
         Process completed ObjectRefs and abort the actor pool if the configured
@@ -2193,6 +2373,7 @@ class RayBatchTestRunner(IBatchTestRunner):
             batch_test: BatchTest to add results to
             running_test: Running test state
             timeout: Timeout for ray.wait()
+            ref_to_execution_id: Stable execution identity for each submitted ref
         """
         if not pending_refs:
             return
@@ -2258,6 +2439,8 @@ class RayBatchTestRunner(IBatchTestRunner):
                 pending_refs.clear()
                 running_test.pending_refs.clear()
                 ref_to_combo.clear()
+                if ref_to_execution_id is not None:
+                    ref_to_execution_id.clear()
 
                 if self._environment_provider and self._provisioned_env_ids:
                     remaining_env_ids = []
@@ -2297,20 +2480,44 @@ class RayBatchTestRunner(IBatchTestRunner):
         # Process completed results
         for ref in ready_refs:
             combo = ref_to_combo.get(ref)
+            if combo is None:
+                raise BatchRunnerError(
+                    "Ray result has no submitted combination identity"
+                )
+            submitted_execution_id = (
+                ref_to_execution_id.get(ref, "")
+                if ref_to_execution_id is not None
+                else ""
+            )
             
             try:
                 result_dict = ray.get(ref)
+                try:
+                    result_metrics = normalize_finite_metrics(
+                        result_dict.get("metrics", {})
+                    )
+                    result_success = result_dict.get("success", False)
+                    if not isinstance(result_success, bool):
+                        raise ValueError("result success must be a boolean")
+                    result_error = result_dict.get("error")
+                except ValueError as validation_error:
+                    result_metrics = {}
+                    result_success = False
+                    result_error = f"Invalid Ray result: {validation_error}"
+                result_execution_id = (
+                    submitted_execution_id or result_dict.get("execution_id", "")
+                )
                 
                 # Convert to BatchTestResult
                 # v1.8: Include rollback support fields (file_commit_id, checkpoint_count, last_checkpoint_id)
                 result = BatchTestResult(
-                    combination_name=result_dict.get("combination_name", "unknown"),
-                    execution_id=result_dict.get("execution_id", ""),
-                    success=result_dict.get("success", False),
+                    combination_name=combo.name,
+                    execution_id=result_execution_id,
+                    success=result_success,
                     duration_ms=result_dict.get("duration_ms", 0),
-                    metrics=result_dict.get("metrics", {}),
-                    overall_score=result_dict.get("metrics", {}).get("overall_score", 0.0),
-                    error_message=result_dict.get("error"),
+                    metrics=result_metrics,
+                    overall_score=result_metrics.get("overall_score", 0.0),
+                    error_message=result_error,
                     # v1.8: Rollback support fields - preserve from actor result
                     file_commit_id=result_dict.get("file_commit_id"),
                     checkpoint_count=result_dict.get("checkpoint_count", 0),
@@ -2318,7 +2525,16 @@ class RayBatchTestRunner(IBatchTestRunner):
                 )
                 
                 batch_test.add_result(result)
-                running_test.completed_results.append(result_dict)
+                normalized_result = dict(result_dict)
+                normalized_result.update({
+                    "execution_id": result_execution_id,
+                    "combination_name": combo.name,
+                    "combination_variants": combo.variants,
+                    "success": result.success,
+                    "metrics": result.metrics,
+                    "error": result.error_message,
+                })
+                running_test.completed_results.append(normalized_result)
                 
                 if result.success:
                     running_test.completed += 1
@@ -2326,16 +2542,16 @@ class RayBatchTestRunner(IBatchTestRunner):
                     # Emit variant completed event
                     if self._event_bridge:
                         self._event_bridge.on_variant_execution_completed(
-                            execution_id=result_dict.get("execution_id", ""),
+                            execution_id=result_execution_id,
                             batch_test_id=batch_test.id,
                             actor_id=result_dict.get("actor_id", ""),
-                            combination_name=result_dict.get("combination_name", ""),
-                            variants=result_dict.get("combination_variants", {}),
+                            combination_name=combo.name,
+                            variants=combo.variants,
                             duration_ms=result_dict.get("duration_ms", 0),
                             checkpoint_count=result_dict.get("checkpoint_count", 0),
                             node_count=result_dict.get("node_count", 0),
-                            metrics=result_dict.get("metrics", {}),
-                            overall_score=result_dict.get("metrics", {}).get("overall_score", 0.0),
+                            metrics=result.metrics,
+                            overall_score=result.overall_score,
                             files_tracked=result_dict.get("files_tracked", 0),
                             file_commit_id=result_dict.get("file_commit_id"),
                         )
@@ -2345,13 +2561,13 @@ class RayBatchTestRunner(IBatchTestRunner):
                     # Emit variant failed event
                     if self._event_bridge:
                         self._event_bridge.on_variant_execution_failed(
-                            execution_id=result_dict.get("execution_id", ""),
+                            execution_id=result_execution_id,
                             batch_test_id=batch_test.id,
                             actor_id=result_dict.get("actor_id", ""),
-                            combination_name=result_dict.get("combination_name", ""),
-                            variants=result_dict.get("combination_variants", {}),
+                            combination_name=combo.name,
+                            variants=combo.variants,
                             error_type="ExecutionError",
-                            error_message=result_dict.get("error", "Unknown error"),
+                            error_message=result.error_message or "Unknown error",
                             duration_ms=result_dict.get("duration_ms", 0),
                             nodes_completed=result_dict.get("node_count", 0),
                             checkpoints_created=result_dict.get("checkpoint_count", 0),
@@ -2374,7 +2590,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 
                 error_result = BatchTestResult(
                     combination_name=combo.name if combo else "unknown",
-                    execution_id="",
+                    execution_id=submitted_execution_id,
                     success=False,
                     error_message=f"Ray task error: {e}",
                 )
@@ -2384,7 +2600,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 # Emit variant failed event
                 if self._event_bridge:
                     self._event_bridge.on_variant_execution_failed(
-                        execution_id="",
+                        execution_id=submitted_execution_id,
                         batch_test_id=batch_test.id,
                         actor_id="",
                         combination_name=combo.name if combo else "unknown",
@@ -2399,7 +2615,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 
                 error_result = BatchTestResult(
                     combination_name=combo.name if combo else "unknown",
-                    execution_id="",
+                    execution_id=submitted_execution_id,
                     success=False,
                     error_message="Task timed out",
                 )
@@ -2409,7 +2625,7 @@ class RayBatchTestRunner(IBatchTestRunner):
                 # Emit variant failed event
                 if self._event_bridge:
                     self._event_bridge.on_variant_execution_failed(
-                        execution_id="",
+                        execution_id=submitted_execution_id,
                         batch_test_id=batch_test.id,
                         actor_id="",
                         combination_name=combo.name if combo else "unknown",
@@ -2417,10 +2633,12 @@ class RayBatchTestRunner(IBatchTestRunner):
                         error_type="TimeoutError",
                         error_message="Task timed out",
                     )
-            
-            # Remove from pending_refs tracking
-            if ref in running_test.pending_refs:
-                running_test.pending_refs.remove(ref)
+            finally:
+                if ref in running_test.pending_refs:
+                    running_test.pending_refs.remove(ref)
+                ref_to_combo.pop(ref, None)
+                if ref_to_execution_id is not None:
+                    ref_to_execution_id.pop(ref, None)
     
     def get_status(self, batch_test_id: str) -> BatchRunnerStatus:
         """Get status of a batch test."""
@@ -2522,11 +2740,24 @@ class RayBatchTestRunner(IBatchTestRunner):
                 f"Environment cleanup for {env_id} exceeded shutdown deadline"
             )
 
+        cleanup = self._environment_provider.cleanup_environment
+        try:
+            parameters = inspect.signature(cleanup).parameters.values()
+            accepts_timeout = any(
+                parameter.name == "timeout"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+        except (TypeError, ValueError):
+            accepts_timeout = True
+
+        operation = (
+            (lambda: cleanup(env_id, timeout=remaining))
+            if accepts_timeout
+            else (lambda: cleanup(env_id))
+        )
         self._run_with_deadline(
-            lambda: self._environment_provider.cleanup_environment(
-                env_id,
-                timeout=remaining,
-            ),
+            operation,
             deadline,
             f"Environment cleanup for {env_id}",
         )
@@ -2965,6 +3196,21 @@ class RayBatchTestRunner(IBatchTestRunner):
                     f"environment provider close: {e}"
                 ) from e
 
+        if self._owns_ray_runtime:
+            try:
+                self._run_with_deadline(
+                    ray.shutdown,
+                    shutdown_deadline,
+                    "Owned Ray runtime shutdown",
+                )
+            except Exception as e:
+                self._poisoned = True
+                raise BatchRunnerError(
+                    f"RayBatchTestRunner owned runtime shutdown failed: {e}"
+                ) from e
+            self._owns_ray_runtime = False
+            self._ray_initialized = False
+
         self._poisoned = False
         with self._running_tests_lock:
             self._closed = True
@@ -3050,6 +3296,8 @@ class RayBatchTestRunner(IBatchTestRunner):
             state_adapter=self._create_shared_state_adapter(),
             file_tracking=self._create_file_tracking_service(),
             config=config,
+            owns_state_adapter=True,
+            owns_file_tracking=True,
         )
     
     def _create_shared_state_adapter(self) -> Optional["IStateAdapter"]:

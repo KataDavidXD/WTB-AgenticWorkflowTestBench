@@ -4,6 +4,7 @@ from typing import Optional, ClassVar, Dict
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from wtb.domain.interfaces.async_unit_of_work import IAsyncUnitOfWork
+from wtb.infrastructure.database.engine_cache import configure_sqlite_foreign_keys
 from wtb.infrastructure.database.async_repositories import (
     AsyncWorkflowRepository,
     AsyncExecutionRepository,
@@ -55,13 +56,15 @@ class AsyncSQLAlchemyUnitOfWork(IAsyncUnitOfWork):
     def get_engine(cls, db_url: str) -> AsyncEngine:
         """Get or create async engine with connection pooling."""
         if db_url not in cls._engine_pool:
-            cls._engine_pool[db_url] = create_async_engine(
+            engine = create_async_engine(
                 db_url,
                 pool_size=5,
                 max_overflow=10,
                 pool_recycle=3600,
                 echo=False,
             )
+            configure_sqlite_foreign_keys(engine.sync_engine)
+            cls._engine_pool[db_url] = engine
         return cls._engine_pool[db_url]
 
     async def __aenter__(self) -> "AsyncSQLAlchemyUnitOfWork":

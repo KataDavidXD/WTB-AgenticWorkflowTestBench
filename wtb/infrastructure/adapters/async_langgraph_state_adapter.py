@@ -32,6 +32,8 @@ from typing import Any, Optional, List, Dict, AsyncIterator
 from datetime import datetime
 import logging
 import uuid
+import asyncio
+import sys
 
 from wtb.domain.interfaces.async_state_adapter import IAsyncStateAdapter
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
@@ -67,6 +69,38 @@ from wtb.infrastructure.adapters.langgraph_state_adapter import (
     LangGraphConfig,
     CheckpointerType,
 )
+
+
+class _AsyncCheckpointerResource:
+    """Reference-counted lifetime for a saver shared by adapter forks."""
+
+    def __init__(self, checkpointer: Any, context: Optional[Any]):
+        self.checkpointer = checkpointer
+        self.context = context
+        self._references = 1
+        self._closed = False
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("Checkpointer resource is closed")
+            self._references += 1
+
+    async def release(self) -> None:
+        context = None
+        async with self._lock:
+            if self._references <= 0:
+                return
+            self._references -= 1
+            if self._references == 0 and not self._closed:
+                self._closed = True
+                context = self.context
+                self.context = None
+                self.checkpointer = None
+
+        if context is not None:
+            await context.__aexit__(None, None, None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -116,6 +150,13 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         self._compiled_graph: Optional["CompiledStateGraph"] = None
         self._workflow_graph: Optional["StateGraph"] = None
         
+        # Durable savers are async context managers owned by this adapter.
+        self._checkpointer_context: Optional[Any] = None
+        self._checkpointer_resource: Optional[_AsyncCheckpointerResource] = None
+        self._initialization_lock = asyncio.Lock()
+        self._owns_checkpointer = True
+        self._closed = False
+
         # Session state
         self._current_thread_id: Optional[str] = None
         self._current_execution_id: Optional[str] = None
@@ -123,22 +164,95 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         
         # Initialize checkpointer
         self._initialize_checkpointer()
+        if self._checkpointer is not None:
+            self._checkpointer_resource = _AsyncCheckpointerResource(
+                self._checkpointer,
+                self._checkpointer_context,
+            )
     
     def _initialize_checkpointer(self):
-        """Initialize checkpointer based on configuration."""
-        if self._config.checkpointer_type == CheckpointerType.MEMORY:
+        """Initialize memory eagerly and validate durable saver configuration."""
+        checkpointer_type = self._config.checkpointer_type
+        if checkpointer_type == CheckpointerType.MEMORY:
             self._checkpointer = MemorySaver()
-        elif self._config.checkpointer_type == CheckpointerType.SQLITE:
-            from langgraph.checkpoint.sqlite import SqliteSaver
-            self._checkpointer = SqliteSaver.from_conn_string(
-                self._config.connection_string or ":memory:"
-            )
-        elif self._config.checkpointer_type == CheckpointerType.POSTGRES:
-            # PostgreSQL requires async setup (deferred)
-            # Will be set up on first use
+        elif checkpointer_type in (
+            CheckpointerType.SQLITE,
+            CheckpointerType.POSTGRES,
+        ):
+            if not str(self._config.connection_string or "").strip():
+                raise ValueError(
+                    f"{checkpointer_type.value} checkpointer requires a connection_string"
+                )
             self._checkpointer = None
         else:
-            raise ValueError(f"Unknown checkpointer type: {self._config.checkpointer_type}")
+            raise ValueError(f"Unknown checkpointer type: {checkpointer_type}")
+
+    async def _ensure_checkpointer_initialized(self) -> None:
+        """Enter and set up an async durable saver before graph compilation."""
+        if self._closed:
+            raise RuntimeError("AsyncLangGraphStateAdapter is closed")
+
+        if self._checkpointer is not None:
+            if self._workflow_graph is not None and self._compiled_graph is None:
+                self._compiled_graph = self._workflow_graph.compile(
+                    checkpointer=self._checkpointer
+                )
+            return
+
+        async with self._initialization_lock:
+            if self._checkpointer is not None:
+                if self._workflow_graph is not None and self._compiled_graph is None:
+                    self._compiled_graph = self._workflow_graph.compile(
+                        checkpointer=self._checkpointer
+                    )
+                return
+
+            context = None
+            saver = None
+            entered = False
+            try:
+                if self._config.checkpointer_type == CheckpointerType.SQLITE:
+                    try:
+                        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                    except ImportError as error:
+                        raise ImportError(
+                            "langgraph-checkpoint-sqlite is required for async SQLite state"
+                        ) from error
+                    saver_class = AsyncSqliteSaver
+                elif self._config.checkpointer_type == CheckpointerType.POSTGRES:
+                    try:
+                        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+                    except ImportError as error:
+                        raise ImportError(
+                            "langgraph-checkpoint-postgres is required for async PostgreSQL state"
+                        ) from error
+                    saver_class = AsyncPostgresSaver
+                else:
+                    raise RuntimeError("Durable checkpointer initialization is not available")
+
+                context = saver_class.from_conn_string(
+                    self._config.connection_string
+                )
+                saver = await context.__aenter__()
+                entered = True
+                await saver.setup()
+                compiled_graph = (
+                    self._workflow_graph.compile(checkpointer=saver)
+                    if self._workflow_graph is not None
+                    else None
+                )
+            except BaseException:
+                if context is not None and entered:
+                    try:
+                        await context.__aexit__(*sys.exc_info())
+                    except Exception:
+                        logger.exception("Failed to close async checkpointer after setup error")
+                raise
+
+            self._checkpointer_context = context
+            self._checkpointer = saver
+            self._checkpointer_resource = _AsyncCheckpointerResource(saver, context)
+            self._compiled_graph = compiled_graph
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Graph Management
@@ -158,10 +272,20 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
             graph: LangGraph StateGraph to execute
             force_recompile: Force recompilation even if same graph
         """
-        if self._workflow_graph is graph and not force_recompile:
-            return  # Same graph, skip recompilation
+        if self._closed:
+            raise RuntimeError("AsyncLangGraphStateAdapter is closed")
+        if (
+            self._workflow_graph is graph
+            and self._compiled_graph is not None
+            and not force_recompile
+        ):
+            return
         
         self._workflow_graph = graph
+        if self._checkpointer is None:
+            self._compiled_graph = None
+            logger.debug("Deferred graph compilation until durable saver setup")
+            return
         self._compiled_graph = graph.compile(checkpointer=self._checkpointer)
         logger.debug("Compiled workflow graph with checkpointer")
     
@@ -177,6 +301,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         so wrapping in executor is not necessary for most use cases.
         """
         self.set_workflow_graph(graph, force_recompile)
+        await self._ensure_checkpointer_initialized()
     
     def get_config(self) -> Dict[str, Any]:
         """Get LangGraph config dict for current session."""
@@ -206,6 +331,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             Session ID (thread_id) or None if initialization fails
         """
+        await self._ensure_checkpointer_initialized()
         # Generate unique thread_id for this execution
         self._current_thread_id = f"wtb-{execution_id}"
         self._current_execution_id = execution_id
@@ -267,6 +393,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             Checkpoint ID (UUID string)
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         
@@ -309,6 +436,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             ExecutionState from checkpoint
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         
@@ -364,6 +492,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             Final state after execution
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         
@@ -394,6 +523,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Yields:
             State updates as they occur
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         
@@ -435,6 +565,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             True if update was successful
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         
@@ -455,6 +586,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             Current state values
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             return {}
         
@@ -484,6 +616,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             List of checkpoint info dicts
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             return []
         
@@ -520,37 +653,85 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         Returns:
             New AsyncLangGraphStateAdapter for the fork
         """
+        await self._ensure_checkpointer_initialized()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
-        
-        # Get source state
-        config = self.get_config()
-        if from_checkpoint_id:
-            config["configurable"]["checkpoint_id"] = from_checkpoint_id
-        
-        source_state = await self._compiled_graph.aget_state(config)
-        
-        if not source_state or not source_state.values:
-            raise ValueError(
-                f"Cannot fork: checkpoint state is empty for thread {self._current_thread_id}"
+
+        resource = self._checkpointer_resource
+        if resource is None:
+            raise RuntimeError("Checkpointer resource is not initialized")
+        await resource.acquire()
+
+        try:
+            config = self.get_config()
+            if from_checkpoint_id:
+                config["configurable"]["checkpoint_id"] = from_checkpoint_id
+
+            source_state = await self._compiled_graph.aget_state(config)
+            if not source_state or not source_state.values:
+                raise ValueError(
+                    "Cannot fork: checkpoint state is empty for thread "
+                    f"{self._current_thread_id}"
+                )
+
+            fork_adapter = object.__new__(AsyncLangGraphStateAdapter)
+            fork_adapter._config = self._config
+            fork_adapter._checkpointer = self._checkpointer
+            fork_adapter._compiled_graph = self._compiled_graph
+            fork_adapter._workflow_graph = self._workflow_graph
+            fork_adapter._checkpointer_context = self._checkpointer_context
+            fork_adapter._checkpointer_resource = resource
+            fork_adapter._initialization_lock = asyncio.Lock()
+            fork_adapter._owns_checkpointer = True
+            fork_adapter._closed = False
+            fork_adapter._current_thread_id = fork_thread_id
+            fork_adapter._current_execution_id = None
+            fork_adapter._current_checkpoint_ns = ""
+
+            fork_config = {"configurable": {"thread_id": fork_thread_id}}
+            await self._compiled_graph.aupdate_state(
+                fork_config,
+                source_state.values,
             )
-        
-        # Create fork adapter
-        fork_adapter = AsyncLangGraphStateAdapter(self._config)
-        fork_adapter._checkpointer = self._checkpointer  # Share checkpointer
-        fork_adapter._workflow_graph = self._workflow_graph
-        fork_adapter._compiled_graph = self._compiled_graph  # Share compiled graph
-        fork_adapter._current_thread_id = fork_thread_id
-        
-        # Initialize fork with source state
-        fork_config = {"configurable": {"thread_id": fork_thread_id}}
-        await self._compiled_graph.aupdate_state(fork_config, source_state.values)
-        
+        except BaseException:
+            await resource.release()
+            raise
+
         logger.info(
             f"Created async fork: {self._current_thread_id} -> {fork_thread_id}"
         )
-        
         return fork_adapter
+
+    async def aclose(self) -> None:
+        """Release the owned async saver context exactly once."""
+        async with self._initialization_lock:
+            if self._closed:
+                return
+
+            self._closed = True
+            resource = self._checkpointer_resource
+            fallback_context = (
+                self._checkpointer_context
+                if resource is None and self._owns_checkpointer
+                else None
+            )
+            self._checkpointer_resource = None
+            self._checkpointer_context = None
+            self._checkpointer = None
+            self._compiled_graph = None
+
+            if resource is not None:
+                await resource.release()
+            elif fallback_context is not None:
+                await fallback_context.__aexit__(None, None, None)
+
+    async def __aenter__(self) -> "AsyncLangGraphStateAdapter":
+        if self._closed:
+            raise RuntimeError("AsyncLangGraphStateAdapter is closed")
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

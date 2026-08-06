@@ -199,7 +199,7 @@ class CheckpointFileLinkORM(Base):
     """
     __tablename__ = "checkpoint_file_links"
     
-    checkpoint_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    checkpoint_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     commit_id: Mapped[str] = mapped_column(
         String(64),
         ForeignKey("file_commits.commit_id", ondelete="CASCADE"),

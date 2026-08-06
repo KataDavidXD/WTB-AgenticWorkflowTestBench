@@ -181,20 +181,28 @@ class InMemoryStateAdapter(IStateAdapter):
         
         self._checkpoints[checkpoint_id] = checkpoint
         return checkpoint_id
+
+    def _require_owned_checkpoint(self, checkpoint_id: str) -> InMemoryCheckpoint:
+        """Return a checkpoint only when it belongs to the active session."""
+        checkpoint = self._checkpoints.get(checkpoint_id)
+        if checkpoint is None:
+            raise ValueError(f"Checkpoint {checkpoint_id} not found")
+        if self._current_session_id is None:
+            raise RuntimeError("No active session")
+        if checkpoint.session_id != self._current_session_id:
+            raise ValueError(
+                f"Checkpoint {checkpoint_id} does not belong to active session"
+            )
+        return checkpoint
     
     def load_checkpoint(self, checkpoint_id: str) -> ExecutionState:
         """Load a checkpoint's state."""
-        if checkpoint_id not in self._checkpoints:
-            raise ValueError(f"Checkpoint {checkpoint_id} not found")
-        
-        return deepcopy(self._checkpoints[checkpoint_id].state)
+        checkpoint = self._require_owned_checkpoint(checkpoint_id)
+        return deepcopy(checkpoint.state)
     
     def rollback(self, to_checkpoint_id: str) -> ExecutionState:
         """Rollback to a specific checkpoint."""
-        if to_checkpoint_id not in self._checkpoints:
-            raise ValueError(f"Checkpoint {to_checkpoint_id} not found")
-        
-        checkpoint = self._checkpoints[to_checkpoint_id]
+        checkpoint = self._require_owned_checkpoint(to_checkpoint_id)
         
         # Reset step counter to checkpoint's step
         self._step_counter = checkpoint.step

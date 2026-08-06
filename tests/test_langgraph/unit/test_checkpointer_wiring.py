@@ -116,6 +116,74 @@ class TestSetWorkflowGraph:
         # Assert - builder.compile was called with adapter's checkpointer
         mock_builder.compile.assert_called_once_with(checkpointer=adapter_checkpointer)
         assert adapter._compiled_graph == recompiled_graph
+
+    def test_rejects_compiled_graph_without_builder_or_checkpointer(self, mock_langgraph):
+        """A durable adapter must not accept a graph that cannot persist state."""
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig, LangGraphStateAdapter,
+        )
+
+        adapter = LangGraphStateAdapter.__new__(LangGraphStateAdapter)
+        adapter._config = LangGraphConfig.for_testing()
+        adapter._checkpointer = Mock()
+        adapter._compiled_graph = None
+        adapter._graph_builder = None
+
+        compiled_graph = Mock(spec=['invoke', 'get_state'])
+
+        with pytest.raises(ValueError, match="checkpointer"):
+            adapter.set_workflow_graph(compiled_graph, force_recompile=True)
+
+        assert adapter._compiled_graph is None
+        assert adapter._graph_builder is None
+
+    @pytest.mark.parametrize("foreign_checkpointer", [False, True, object()])
+    def test_rejects_compiled_graph_not_owned_by_adapter(
+        self,
+        mock_langgraph,
+        foreign_checkpointer,
+    ):
+        """Durable reuse must never accept a false or foreign saver."""
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig, LangGraphStateAdapter,
+        )
+
+        adapter_checkpointer = object()
+        adapter = LangGraphStateAdapter.__new__(LangGraphStateAdapter)
+        adapter._config = LangGraphConfig.for_testing()
+        adapter._checkpointer = adapter_checkpointer
+        adapter._compiled_graph = None
+        adapter._graph_builder = None
+
+        compiled_graph = Mock(spec=['invoke', 'get_state', 'checkpointer'])
+        compiled_graph.checkpointer = foreign_checkpointer
+
+        with pytest.raises(ValueError, match="checkpointer"):
+            adapter.set_workflow_graph(compiled_graph, force_recompile=False)
+
+        assert adapter._compiled_graph is None
+        assert adapter._graph_builder is None
+
+    def test_accepts_compiled_graph_owned_by_adapter(self, mock_langgraph):
+        """A compiled graph may be reused only with this adapter's saver."""
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig, LangGraphStateAdapter,
+        )
+
+        adapter_checkpointer = object()
+        adapter = LangGraphStateAdapter.__new__(LangGraphStateAdapter)
+        adapter._config = LangGraphConfig.for_testing()
+        adapter._checkpointer = adapter_checkpointer
+        adapter._compiled_graph = None
+        adapter._graph_builder = None
+
+        compiled_graph = Mock(spec=['invoke', 'get_state', 'checkpointer'])
+        compiled_graph.checkpointer = adapter_checkpointer
+
+        adapter.set_workflow_graph(compiled_graph, force_recompile=False)
+
+        assert adapter._compiled_graph is compiled_graph
+        assert adapter._graph_builder is None
     
     def test_compiles_uncompiled_graph_with_checkpointer(self, mock_langgraph):
         """
@@ -225,6 +293,7 @@ class TestExecutionControllerDelegation:
         mock_state_adapter = Mock()
         mock_state_adapter.execute = Mock(return_value={"result": "success"})
         mock_state_adapter.initialize_session = Mock(return_value=123)
+        mock_state_adapter.set_current_session = Mock(return_value=True)
         
         controller = ExecutionController(
             execution_repository=mock_exec_repo,
@@ -237,6 +306,7 @@ class TestExecutionControllerDelegation:
             id="test-exec-1",
             workflow_id="wf-1",
             status=ExecutionStatus.PENDING,
+            session_id="wtb-test-exec-1",
             state=ExecutionState(
                 current_node_id="start",
                 workflow_variables={"input": "test"},

@@ -634,21 +634,13 @@ class TestRayBatchTestWorkspace:
         for path in workspace_paths:
             assert path.exists()
         
-        # Cleanup batch from main process
-        config = WorkspaceConfig(
-            enabled=workspace_config_dict["enabled"],
-            strategy=WorkspaceStrategy(workspace_config_dict["strategy"]),
-            base_dir=Path(workspace_config_dict["base_dir"]),
-            cleanup_on_complete=workspace_config_dict["cleanup_on_complete"],
-            preserve_on_failure=workspace_config_dict["preserve_on_failure"],
-            use_hard_links=workspace_config_dict["use_hard_links"],
-        )
-        
         # Note: In real implementation, we'd reload workspaces from metadata files
-        # For this test, we'll directly remove the directories
-        batch_dir = Path(workspace_config_dict["base_dir"]) / f"batch_{batch_id}"
-        if batch_dir.exists():
-            shutil.rmtree(batch_dir)
+        # For this test, remove the shared physical batch directory discovered
+        # from worker results instead of duplicating its encoded naming scheme.
+        batch_dirs = {path.parent for path in workspace_paths}
+        assert len(batch_dirs) == 1
+        batch_dir = batch_dirs.pop()
+        shutil.rmtree(batch_dir)
         
         # Verify cleanup
         for path in workspace_paths:

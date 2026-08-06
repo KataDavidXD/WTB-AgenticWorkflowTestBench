@@ -276,7 +276,12 @@ class TestOutboxDecoratorIntegration:
         controller, adapter, uow = langgraph_setup
 
         outbox_repo = uow.outbox
-        decorated = OutboxExecutionControllerDecorator(controller, outbox_repo)
+        decorated = OutboxExecutionControllerDecorator(
+            controller,
+            outbox_repo,
+            commit_fn=uow.commit,
+            rollback_fn=uow.rollback,
+        )
 
         workflow = _make_workflow()
         uow.workflows.add(workflow)

@@ -288,6 +288,7 @@ class TestRealVenvManagerIntegration:
             pytest.skip("UV Venv Manager not running on localhost:50051")
         
         from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
+        import grpc
         
         provider = GrpcEnvironmentProvider("localhost:50051", timeout_seconds=60)
         
@@ -300,7 +301,17 @@ class TestRealVenvManagerIntegration:
         }
         
         try:
-            env_info = provider.create_environment(variant_id, config)
+            try:
+                env_info = provider.create_environment(variant_id, config)
+            except grpc.RpcError as exc:
+                if exc.code() in {
+                    grpc.StatusCode.UNAVAILABLE,
+                    grpc.StatusCode.DEADLINE_EXCEEDED,
+                }:
+                    pytest.skip(
+                        f"UV Venv Manager gRPC service unavailable: {exc.code().name}"
+                    )
+                raise
             
             assert "python_path" in env_info
             assert env_info.get("type") == "grpc_uv"

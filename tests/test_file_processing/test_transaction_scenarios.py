@@ -173,6 +173,7 @@ async def test_scenario_e_node_env_isolation():
         "python_version": "3.12"
     }
     
+    environment_created = False
     try:
         try:
             env_info = provider.create_environment(variant_id, config)
@@ -182,6 +183,8 @@ async def test_scenario_e_node_env_isolation():
 
         if env_info.get("type") == "grpc_uv_stub":
             pytest.skip("gRPC stub returned (service likely not found during init)")
+
+        environment_created = True
         
         assert env_info.get("env_path")
         assert env_info.get("python_path")
@@ -192,5 +195,6 @@ async def test_scenario_e_node_env_isolation():
         assert status["has_pyproject"] is True
         
     finally:
-        provider.cleanup_environment(variant_id)
+        if environment_created:
+            provider.cleanup_environment(variant_id)
         provider.close()

@@ -51,6 +51,7 @@ Usage:
 
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from collections.abc import Mapping
 from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
@@ -74,6 +75,10 @@ if TYPE_CHECKING:
     from wtb.config import WTBConfig
 
 logger = logging.getLogger(__name__)
+
+
+class StateAdapterResolutionError(RuntimeError):
+    """Execution metadata named checkpoint storage that could not be reopened."""
 
 
 class DefaultExecutionControllerFactory(IExecutionControllerFactory):
@@ -157,6 +162,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         file_tracking: Optional["IFileTrackingService"] = None,
         config: Optional["WTBConfig"] = None,
         environment_provider: Optional[Any] = None,
+        owns_state_adapter: bool = False,
+        owns_file_tracking: bool = False,
     ):
         """
         Initialize coordinator with dependencies.
@@ -172,6 +179,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             config: Optional WTBConfig for rollback cleanup options (v1.9).
             environment_provider: Optional IEnvironmentProvider for venv
                 compatibility checks on rollback.
+            owns_state_adapter: Close the state adapter with this coordinator
+            owns_file_tracking: Close the file tracker with this coordinator
 
         Design Decision:
             StateAdapter is REUSED across operations because:
@@ -191,6 +200,10 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self._file_tracking = file_tracking
         self._config = config
         self._environment_provider = environment_provider
+        self._owns_state_adapter = bool(owns_state_adapter)
+        self._owns_file_tracking = bool(owns_file_tracking)
+        self._lifecycle_lock = threading.RLock()
+        self._closed = False
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Checkpoint Retrieval (execution-aware storage)
@@ -212,12 +225,11 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             uow.__enter__()
             with self._controller_for_execution(uow, execution_id, graph=graph) as controller:
                 return controller.get_checkpoint_history(execution_id)
-        except Exception as e:
-            logger.warning(
-                f"get_checkpoints via coordinator failed for {execution_id}: {e}",
-                exc_info=True,
+        except StateAdapterResolutionError as e:
+            logger.error(
+                f"Could not resolve checkpoint adapter for {execution_id}: {e}"
             )
-            return []
+            raise
         finally:
             try:
                 uow.__exit__(None, None, None)
@@ -720,12 +732,31 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
     # ═══════════════════════════════════════════════════════════════════════════
 
     def close(self) -> None:
-        """Release resources held by the coordinator (e.g., state adapter connections)."""
-        if self._state_adapter:
-            try:
-                self._state_adapter.close()
-            except Exception:
-                pass
+        """Release resources explicitly owned by this coordinator."""
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+
+            seen_resources = set()
+            for resource, is_owned in (
+                (self._state_adapter, self._owns_state_adapter),
+                (self._file_tracking, self._owns_file_tracking),
+            ):
+                if (
+                    not is_owned
+                    or resource is None
+                    or id(resource) in seen_resources
+                ):
+                    continue
+                seen_resources.add(id(resource))
+                close_resource = getattr(resource, "close", None)
+                if callable(close_resource):
+                    try:
+                        close_resource()
+                    except Exception:
+                        pass
+
+            self._closed = True
 
     def __enter__(self) -> "BatchExecutionCoordinator":
         return self
@@ -799,64 +830,98 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self,
         execution: Optional["Execution"],
     ) -> "IStateAdapter":
-        """Create an execution-specific LangGraph adapter when metadata exists."""
+        """Reopen the exact execution-specific state adapter declared in metadata."""
         if execution is None:
             return self._state_adapter
 
         metadata = getattr(execution, "metadata", {}) or {}
         if not isinstance(metadata, Mapping):
-            return self._state_adapter
-        if not any(
-            metadata.get(key)
-            for key in (
-                "checkpoint_db_path",
-                "llm_cache_path",
-                "actor_id",
-                "cache_storage_scope",
+            raise StateAdapterResolutionError(
+                f"Execution '{execution.id}' has invalid storage metadata"
             )
-        ) and not any(
-            os.getenv(env_name)
-            for env_name in (
-                "WTB_CHECKPOINT_DB_PATH",
-                "WTB_LLM_CACHE_PATH",
-                "WTB_CACHE_ACTOR_ID",
-                "WTB_CACHE_STORAGE_SCOPE",
-            )
-        ):
+
+        checkpoint_path = metadata.get("checkpoint_db_path")
+        backend = metadata.get("state_adapter_backend")
+        if checkpoint_path is None and backend is None:
             return self._state_adapter
-        paths = resolve_execution_storage_paths(
-            metadata,
-            fallback_actor_id=metadata.get("actor_id"),
-        )
-        checkpoint_db_path = str(paths.checkpoint_db_path)
+        if not checkpoint_path:
+            raise StateAdapterResolutionError(
+                f"Execution '{execution.id}' declares a state adapter backend "
+                "without checkpoint_db_path"
+            )
+        if backend not in {"langgraph_sqlite", "node_sqlite"}:
+            detail = "missing" if not backend else f"unsupported '{backend}'"
+            raise StateAdapterResolutionError(
+                f"Execution '{execution.id}' has {detail} state_adapter_backend"
+            )
 
         try:
+            paths = resolve_execution_storage_paths(
+                metadata,
+                fallback_actor_id=metadata.get("actor_id"),
+            )
+            checkpoint_db_path = str(paths.checkpoint_db_path)
+        except Exception as error:
+            raise StateAdapterResolutionError(
+                f"Could not resolve execution-specific checkpoint storage for "
+                f"'{execution.id}': {error}"
+            ) from error
+
+        def normalized_path(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            try:
+                path_value = os.fspath(value)
+            except TypeError:
+                path_value = str(value)
+            if not path_value:
+                return None
+            return os.path.normcase(
+                os.path.abspath(os.path.expanduser(path_value))
+            )
+
+        existing_backend = getattr(
+            self._state_adapter,
+            "state_adapter_backend",
+            None,
+        )
+        existing_connection = getattr(self._state_adapter, "storage_path", None)
+        if existing_connection is None:
+            existing_connection = getattr(
+                getattr(self._state_adapter, "_config", None),
+                "connection_string",
+                None,
+            )
+        if (
+            existing_backend == backend
+            and normalized_path(existing_connection)
+            == normalized_path(checkpoint_db_path)
+        ):
+            return self._state_adapter
+
+        try:
+            if backend == "node_sqlite":
+                from wtb.infrastructure.adapters.sqlite_state_adapter import (
+                    SqliteStateAdapter,
+                )
+
+                return SqliteStateAdapter(checkpoint_db_path)
+
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
                 LANGGRAPH_AVAILABLE,
                 LangGraphConfig,
                 LangGraphStateAdapter,
             )
-        except Exception:
-            return self._state_adapter
-
-        if not LANGGRAPH_AVAILABLE:
-            return self._state_adapter
-
-        existing_connection = getattr(
-            getattr(self._state_adapter, "_config", None),
-            "connection_string",
-            None,
-        )
-        if existing_connection and str(existing_connection) == checkpoint_db_path:
-            return self._state_adapter
-
-        try:
-            return LangGraphStateAdapter(LangGraphConfig.for_development(checkpoint_db_path))
-        except Exception as e:
-            logger.debug(
-                f"Could not create execution-specific state adapter for {execution.id}: {e}"
+            if not LANGGRAPH_AVAILABLE:
+                raise RuntimeError("LangGraph SQLite support is unavailable")
+            return LangGraphStateAdapter(
+                LangGraphConfig.for_development(checkpoint_db_path)
             )
-            return self._state_adapter
+        except Exception as error:
+            raise StateAdapterResolutionError(
+                f"Could not open {backend} checkpoint storage for execution "
+                f"'{execution.id}': {error}"
+            ) from error
 
     @contextmanager
     def _controller_for_execution(

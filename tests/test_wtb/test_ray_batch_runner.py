@@ -248,6 +248,882 @@ class TestVariantExecutionResult:
 # ═══════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skipif(not RAY_AVAILABLE, reason="Ray not installed")
+class TestVariantExecutionActorResultContract:
+    """Ray actor results must match the ThreadPool runner contract."""
+
+    @staticmethod
+    def _make_actor(tmp_path, monkeypatch):
+        from wtb.application.services.ray_batch_runner import VariantExecutionActor
+
+        monkeypatch.setenv("WTB_RAY_STORAGE_ROOT", str(tmp_path / "ray-storage"))
+        actor_class = VariantExecutionActor.__ray_metadata__.modified_class
+        actor = actor_class(
+            agentgit_db_url=str(tmp_path / "agentgit.db"),
+            wtb_db_url="inmemory",
+            actor_id="actor-result-contract",
+        )
+        actor._ensure_initialized = lambda: None
+        actor._state_adapter = object()
+        return actor
+
+    @staticmethod
+    def _make_uninitialized_actor(
+        tmp_path,
+        monkeypatch,
+        *,
+        filetracker_config=None,
+    ):
+        from wtb.application.services.ray_batch_runner import VariantExecutionActor
+
+        monkeypatch.setenv("WTB_RAY_STORAGE_ROOT", str(tmp_path / "ray-storage"))
+        actor_class = VariantExecutionActor.__ray_metadata__.modified_class
+        return actor_class(
+            agentgit_db_url=str(tmp_path / "agentgit.db"),
+            wtb_db_url="inmemory",
+            actor_id="actor-initialization-contract",
+            filetracker_config=filetracker_config,
+        )
+
+    def test_execute_variant_uses_driver_execution_id(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        actor = self._make_actor(tmp_path, monkeypatch)
+        actor._run_workflow_execution = MagicMock(
+            return_value={
+                "execution_id": "driver-execution-id",
+                "success": True,
+                "metrics": {},
+            }
+        )
+
+        result = actor.execute_variant(
+            workflow_dict={},
+            combination={"name": "A", "variants": {}, "metadata": {}},
+            initial_state={},
+            batch_test_id="batch-stable-id",
+            execution_id="driver-execution-id",
+        )
+
+        assert result["execution_id"] == "driver-execution-id"
+        assert (
+            actor._run_workflow_execution.call_args.kwargs["execution_id"]
+            == "driver-execution-id"
+        )
+
+    def test_failed_controller_execution_is_not_reported_as_success(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        """A persisted FAILED execution must remain failed in the Ray payload."""
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        failed_execution = Execution(
+            workflow_id=sample_workflow.id,
+            status=ExecutionStatus.FAILED,
+            state=ExecutionState(workflow_variables={}),
+            error_message="node execution failed",
+        )
+
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = None
+        controller = MagicMock()
+        controller.create_execution.return_value = failed_execution
+        controller.run.return_value = failed_execution
+        actor._uow_factory = lambda: uow
+
+        with patch(
+            "wtb.application.services.execution_controller.ExecutionController",
+            return_value=controller,
+        ):
+            result = actor.execute_variant(
+                workflow_dict=sample_workflow.to_dict(),
+                combination={
+                    "name": "failing-combination",
+                    "variants": {},
+                    "metadata": {},
+                },
+                initial_state={},
+                batch_test_id="batch-failure-contract",
+            )
+
+        assert result["execution_id"] == failed_execution.id
+        assert result["success"] is False
+        assert result["error"] == "node execution failed"
+        assert result["metrics"]["overall_score"] == 0.0
+
+    @pytest.mark.parametrize(
+        ("status_name", "workflow_variables", "expected"),
+        [
+            pytest.param(
+                "completed",
+                {
+                    "overall_score": 0.73,
+                    "accuracy": 0.82,
+                    "latency_ms": 14,
+                    "_metrics": {"custom_score": 0.41},
+                },
+                {
+                    "overall_score": 0.73,
+                    "accuracy": 0.82,
+                    "latency_ms": 14.0,
+                    "custom_score": 0.41,
+                },
+                id="explicit-workflow-metrics",
+            ),
+            pytest.param(
+                "completed",
+                {},
+                {"overall_score": 1.0},
+                id="completed-default",
+            ),
+            pytest.param(
+                "failed",
+                {},
+                {"overall_score": 0.0},
+                id="failed-default",
+            ),
+        ],
+    )
+    def test_metrics_match_threadpool_semantics(
+        self,
+        tmp_path,
+        monkeypatch,
+        status_name,
+        workflow_variables,
+        expected,
+    ):
+        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        execution = Execution(
+            status=ExecutionStatus(status_name),
+            state=ExecutionState(workflow_variables=workflow_variables),
+        )
+
+        assert actor._calculate_metrics(execution) == expected
+
+    def test_workspace_activation_failure_returns_failed_actor_result(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        actor = self._make_actor(tmp_path, monkeypatch)
+        actor._run_workflow_execution = MagicMock(return_value={"success": True})
+
+        with patch(
+            "wtb.application.services.ray_batch_runner.Workspace.from_dict",
+            side_effect=RuntimeError("workspace activation failed"),
+        ):
+            result = actor.execute_variant(
+                workflow_dict={},
+                combination={"name": "A", "variants": {}, "metadata": {}},
+                initial_state={},
+                batch_test_id="batch-workspace-failure",
+                workspace_data={"workspace_id": "broken"},
+            )
+
+        assert result["success"] is False
+        assert "workspace activation failed" in result["error"]
+        actor._run_workflow_execution.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "failure_mode",
+        [
+            "incomplete-factory-reference",
+            "corrupt-serialized-graph",
+            "empty-serialized-graph",
+            "factory-returned-none",
+        ],
+    )
+    def test_graph_preflight_failure_has_zero_persistence_side_effects(
+        self,
+        tmp_path,
+        monkeypatch,
+        failure_mode,
+    ):
+        from types import SimpleNamespace
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        workflow = SimpleNamespace(id="wf-required-graph")
+        actor._reconstruct_workflow = MagicMock(return_value=workflow)
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = workflow
+        uow_factory = MagicMock(return_value=uow)
+        actor._uow_factory = uow_factory
+        controller = MagicMock()
+        controller.create_execution.return_value = SimpleNamespace(
+            id="exec-required-graph",
+            metadata={},
+        )
+
+        graph_kwargs = {}
+        graph_loader = MagicMock()
+        if failure_mode == "incomplete-factory-reference":
+            graph_kwargs = {"graph_factory_module": "workflow.graphs"}
+        elif failure_mode == "corrupt-serialized-graph":
+            graph_kwargs = {"graph_pickled": b"not-a-valid-pickle"}
+        elif failure_mode == "empty-serialized-graph":
+            graph_kwargs = {"graph_pickled": b""}
+        else:
+            graph_kwargs = {
+                "graph_factory_module": "workflow.graphs",
+                "graph_factory_name": "build_graph",
+            }
+            graph_loader.return_value = MagicMock(return_value=None)
+
+        with (
+            patch(
+                "wtb.application.services.execution_controller.ExecutionController",
+                return_value=controller,
+            ) as controller_class,
+            patch(
+                "wtb.application.services.graph_loader.load_graph_factory",
+                graph_loader,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="graph"):
+                actor._run_workflow_execution(
+                    workflow_dict={},
+                    variants={},
+                    initial_state={},
+                    execution_id="requested-id",
+                    batch_test_id="batch-required-graph",
+                    **graph_kwargs,
+                )
+
+        uow_factory.assert_not_called()
+        uow.__enter__.assert_not_called()
+        actor._reconstruct_workflow.assert_not_called()
+        controller_class.assert_not_called()
+        controller.create_execution.assert_not_called()
+        uow.workflows.add.assert_not_called()
+        uow.executions.update.assert_not_called()
+        uow.commit.assert_not_called()
+        controller.run.assert_not_called()
+
+    def test_create_uses_stable_execution_id_and_complete_durable_metadata(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        created_execution = Execution(
+            id="requested-id",
+            workflow_id=sample_workflow.id,
+        )
+        completed_execution = Execution(
+            id="requested-id",
+            workflow_id=sample_workflow.id,
+            status=ExecutionStatus.COMPLETED,
+            state=ExecutionState(execution_path=["start", "end"]),
+        )
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = sample_workflow
+        actor._uow_factory = MagicMock(return_value=uow)
+        controller = MagicMock()
+        controller.create_execution.return_value = created_execution
+        controller.run.return_value = completed_execution
+
+        with patch(
+            "wtb.application.services.execution_controller.ExecutionController",
+            return_value=controller,
+        ):
+            result = actor._run_workflow_execution(
+                workflow_dict=sample_workflow.to_dict(),
+                variants={},
+                initial_state={"request": "stable"},
+                execution_id="requested-id",
+                batch_test_id="batch-authoritative-id",
+            )
+
+        expected_metadata = {
+            "batch_test_id": "batch-authoritative-id",
+            "variants": {},
+            "actor_id": actor._actor_id,
+            "requested_execution_id": "requested-id",
+            "state_adapter_backend": "node_sqlite",
+            "checkpoint_db_path": str(actor._storage_paths.checkpoint_db_path),
+            "llm_cache_path": str(actor._storage_paths.llm_cache_path),
+            "cache_storage_scope": actor._storage_paths.cache_storage_scope,
+        }
+        controller.create_execution.assert_called_once_with(
+            workflow=sample_workflow,
+            initial_state={
+                "request": "stable",
+                "_variant_config": {},
+                "_batch_test_id": "batch-authoritative-id",
+                "_actor_id": actor._actor_id,
+            },
+            metadata=expected_metadata,
+            execution_id="requested-id",
+        )
+        controller.run.assert_called_once_with("requested-id", graph=None)
+        uow.executions.update.assert_not_called()
+        uow.commit.assert_not_called()
+        assert result["execution_id"] == "requested-id"
+
+    @pytest.mark.parametrize(
+        ("failure_site", "error_message"),
+        [
+            pytest.param(
+                "file_tracking", "file tracking unavailable", id="file-tracking"
+            ),
+            pytest.param(
+                "metrics", "metric processing unavailable", id="metric-processing"
+            ),
+        ],
+    )
+    def test_post_run_processing_failure_marks_stable_persisted_row_failed(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+        failure_site,
+        error_message,
+    ):
+        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        persisted_execution = Execution(
+            id="stable-execution-id",
+            workflow_id=sample_workflow.id,
+            status=ExecutionStatus.COMPLETED,
+            state=ExecutionState(
+                workflow_variables={},
+                execution_path=["start", "end"],
+            ),
+            checkpoint_id="checkpoint-1",
+        )
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = sample_workflow
+        uow.executions.get.return_value = persisted_execution
+        actor._uow_factory = MagicMock(return_value=uow)
+        if failure_site == "file_tracking":
+            actor._collect_output_files = MagicMock(return_value=["artifact.txt"])
+            actor._file_tracking_service = MagicMock()
+            actor._file_tracking_service.track_and_link.side_effect = RuntimeError(
+                error_message
+            )
+        else:
+            actor._file_tracking_service = None
+            actor._calculate_metrics = MagicMock(side_effect=RuntimeError(error_message))
+        controller = MagicMock()
+        controller.create_execution.return_value = persisted_execution
+        controller.run.return_value = persisted_execution
+
+        with (
+            patch(
+                "wtb.application.services.execution_controller.ExecutionController",
+                return_value=controller,
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.uuid.uuid4",
+                return_value="stable-execution-id",
+            ),
+        ):
+            result = actor.execute_variant(
+                workflow_dict=sample_workflow.to_dict(),
+                combination={"name": "tracked", "variants": {}, "metadata": {}},
+                initial_state={},
+                batch_test_id="batch-post-run-failure",
+            )
+
+        assert result["execution_id"] == "stable-execution-id"
+        assert result["success"] is False
+        assert result["error"] == error_message
+        assert persisted_execution.status is ExecutionStatus.FAILED
+        assert persisted_execution.error_message == error_message
+        uow.executions.get.assert_called_with("stable-execution-id")
+        uow.executions.update.assert_called_once_with(persisted_execution)
+        uow.commit.assert_called_once_with()
+
+    def test_output_files_without_checkpoint_fail_stable_row_before_link(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        persisted_execution = Execution(
+            id="stable-execution-id",
+            workflow_id=sample_workflow.id,
+            status=ExecutionStatus.COMPLETED,
+            state=ExecutionState(
+                workflow_variables={},
+                execution_path=["start", "end"],
+            ),
+            checkpoint_id=None,
+        )
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = sample_workflow
+        uow.executions.get.return_value = persisted_execution
+        actor._uow_factory = MagicMock(return_value=uow)
+        actor._collect_output_files = MagicMock(return_value=["artifact.txt"])
+        actor._file_tracking_service = MagicMock()
+        controller = MagicMock()
+        controller.create_execution.return_value = persisted_execution
+        controller.run.return_value = persisted_execution
+
+        with patch(
+            "wtb.application.services.execution_controller.ExecutionController",
+            return_value=controller,
+        ):
+            result = actor.execute_variant(
+                workflow_dict=sample_workflow.to_dict(),
+                combination={"name": "tracked", "variants": {}, "metadata": {}},
+                initial_state={},
+                batch_test_id="batch-missing-checkpoint",
+                execution_id="stable-execution-id",
+            )
+
+        expected_error = (
+            "Execution produced output files but has no checkpoint_id "
+            "for CAS file linking"
+        )
+        assert result["execution_id"] == "stable-execution-id"
+        assert result["success"] is False
+        assert result["error"] == expected_error
+        assert persisted_execution.status is ExecutionStatus.FAILED
+        assert persisted_execution.error_message == expected_error
+        actor._file_tracking_service.track_and_link.assert_not_called()
+        actor._file_tracking_service.get_commit_for_checkpoint.assert_not_called()
+        uow.executions.get.assert_called_once_with("stable-execution-id")
+        uow.executions.update.assert_called_once_with(persisted_execution)
+        uow.commit.assert_called_once_with()
+
+    def test_node_boundary_claim_conflict_never_uses_generic_failed_overwrite(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        from wtb.application.services.execution_controller import (
+            NodeBoundaryClaimConflict,
+        )
+        from wtb.domain.models.workflow import Execution, ExecutionStatus
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        persisted_execution = Execution(
+            id="claim-loser-id",
+            workflow_id=sample_workflow.id,
+        )
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = sample_workflow
+        actor._uow_factory = MagicMock(return_value=uow)
+        controller = MagicMock()
+        controller.create_execution.return_value = persisted_execution
+        conflict = NodeBoundaryClaimConflict("another runner owns the boundary")
+        controller.run.side_effect = conflict
+
+        with patch(
+            "wtb.application.services.execution_controller.ExecutionController",
+            return_value=controller,
+        ):
+            with pytest.raises(NodeBoundaryClaimConflict) as exc_info:
+                actor._run_workflow_execution(
+                    workflow_dict=sample_workflow.to_dict(),
+                    variants={},
+                    initial_state={},
+                    execution_id="claim-loser-id",
+                    batch_test_id="batch-claim-conflict",
+                )
+
+        assert exc_info.value is conflict
+        assert persisted_execution.status is ExecutionStatus.PENDING
+        uow.rollback.assert_called_once_with()
+        uow.executions.get.assert_not_called()
+        uow.executions.update.assert_not_called()
+        uow.commit.assert_not_called()
+
+    def test_same_actor_graph_then_graphless_uses_isolated_node_adapter(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.infrastructure.adapters import InMemoryStateAdapter
+
+        actor = self._make_actor(tmp_path, monkeypatch)
+        graph_adapter = MagicMock(name="graph-adapter")
+        graph_adapter.get_checkpoint_history.return_value = []
+        actor._state_adapter = None
+        actor._langgraph_state_adapter_factory = MagicMock(
+            return_value=graph_adapter
+        )
+        actor._preflight_langgraph_graph = MagicMock(side_effect=[object(), None])
+
+        uows = []
+        controllers = []
+        for index in range(2):
+            uow = MagicMock()
+            uow.__enter__.return_value = uow
+            uow.workflows.get.return_value = sample_workflow
+            uows.append(uow)
+
+            execution = Execution(
+                id=f"execution-{index}",
+                workflow_id=sample_workflow.id,
+                status=ExecutionStatus.COMPLETED,
+                state=ExecutionState(execution_path=["start", "end"]),
+            )
+            controller = MagicMock()
+            controller.create_execution.return_value = execution
+            controller.run.return_value = execution
+            controllers.append(controller)
+
+        actor._uow_factory = MagicMock(side_effect=uows)
+        with patch(
+            "wtb.application.services.execution_controller.ExecutionController",
+            side_effect=controllers,
+        ) as controller_class:
+            actor._run_workflow_execution(
+                workflow_dict=sample_workflow.to_dict(),
+                variants={},
+                initial_state={},
+                execution_id="requested-graph-id",
+                batch_test_id="batch-adapter-isolation",
+            )
+            actor._run_workflow_execution(
+                workflow_dict=sample_workflow.to_dict(),
+                variants={},
+                initial_state={},
+                execution_id="requested-node-id",
+                batch_test_id="batch-adapter-isolation",
+            )
+
+        graph_call, graphless_call = controller_class.call_args_list
+        assert graph_call.kwargs["state_adapter"] is graph_adapter
+        graphless_adapter = graphless_call.kwargs["state_adapter"]
+        assert isinstance(graphless_adapter, InMemoryStateAdapter)
+        assert graphless_adapter is not graph_adapter
+        assert graphless_adapter.supports_graph_execution() is False
+        actor._langgraph_state_adapter_factory.assert_called_once_with()
+        graph_adapter.close.assert_called_once_with()
+
+    def test_explicit_graph_adapter_initialization_failure_is_fail_closed_before_uow(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        actor = self._make_uninitialized_actor(tmp_path, monkeypatch)
+        actor._preflight_langgraph_graph = MagicMock(return_value=object())
+        uow_factory = MagicMock()
+
+        with patch(
+            "wtb.infrastructure.adapters.langgraph_state_adapter."
+            "LangGraphStateAdapter",
+            side_effect=RuntimeError("checkpoint backend unavailable"),
+        ) as adapter_class:
+            actor._ensure_initialized()
+            actor._uow_factory = uow_factory
+            with pytest.raises(RuntimeError, match="checkpoint backend unavailable"):
+                actor._run_workflow_execution(
+                    workflow_dict={},
+                    variants={},
+                    initial_state={},
+                    execution_id="requested-graph-id",
+                    batch_test_id="batch-adapter-failure",
+                )
+
+        assert actor._initialized is True
+        assert actor._state_adapter is None
+        adapter_class.assert_called_once()
+        uow_factory.assert_not_called()
+
+    def test_graphless_execution_does_not_construct_langgraph_adapter(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.infrastructure.adapters import InMemoryStateAdapter
+
+        actor = self._make_uninitialized_actor(tmp_path, monkeypatch)
+        uow = MagicMock()
+        uow.__enter__.return_value = uow
+        uow.workflows.get.return_value = sample_workflow
+        execution = Execution(
+            id="graphless-execution-id",
+            workflow_id=sample_workflow.id,
+            status=ExecutionStatus.COMPLETED,
+            state=ExecutionState(execution_path=["start", "end"]),
+        )
+        controller = MagicMock()
+        controller.create_execution.return_value = execution
+        controller.run.return_value = execution
+
+        with (
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LangGraphStateAdapter",
+                side_effect=RuntimeError("checkpoint backend unavailable"),
+            ) as adapter_class,
+            patch(
+                "wtb.application.services.execution_controller.ExecutionController",
+                return_value=controller,
+            ) as controller_class,
+        ):
+            actor._ensure_initialized()
+            actor._uow_factory = MagicMock(return_value=uow)
+            result = actor._run_workflow_execution(
+                workflow_dict=sample_workflow.to_dict(),
+                variants={},
+                initial_state={},
+                execution_id="requested-node-id",
+                batch_test_id="batch-node-mode",
+            )
+
+        assert result["success"] is True
+        adapter_class.assert_not_called()
+        node_adapter = controller_class.call_args.kwargs["state_adapter"]
+        assert isinstance(node_adapter, InMemoryStateAdapter)
+
+    def test_graphless_adapter_initialization_failure_is_fail_closed_before_uow(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        actor = self._make_uninitialized_actor(tmp_path, monkeypatch)
+        actor._ensure_initialized()
+        uow_factory = MagicMock()
+        actor._uow_factory = uow_factory
+
+        with patch(
+            "wtb.infrastructure.adapters.sqlite_state_adapter.SqliteStateAdapter",
+            side_effect=RuntimeError("node checkpoint backend unavailable"),
+        ) as adapter_class:
+            with pytest.raises(
+                RuntimeError,
+                match="node checkpoint backend unavailable",
+            ):
+                actor._run_workflow_execution(
+                    workflow_dict={},
+                    variants={},
+                    initial_state={},
+                    execution_id="requested-node-id",
+                    batch_test_id="batch-node-adapter-failure",
+                )
+
+        adapter_class.assert_called_once_with(
+            storage_path=actor._storage_paths.checkpoint_db_path
+        )
+        uow_factory.assert_not_called()
+
+    def test_graphless_actor_checkpoints_reopen_in_new_coordinator(
+        self,
+        tmp_path,
+        monkeypatch,
+        sample_workflow,
+    ):
+        """Actor-local node checkpoints survive adapter close and support rollback."""
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
+        from wtb.application.services.ray_batch_runner import VariantExecutionActor
+        from wtb.domain.models.workflow import ExecutionStatus
+        from wtb.infrastructure.database import UnitOfWorkFactory
+
+        monkeypatch.setenv("WTB_RAY_STORAGE_ROOT", str(tmp_path / "ray-storage"))
+        wtb_db_path = tmp_path / "wtb.db"
+        wtb_db_url = f"sqlite:///{wtb_db_path.as_posix()}"
+        actor_class = VariantExecutionActor.__ray_metadata__.modified_class
+        actor = actor_class(
+            agentgit_db_url=str(tmp_path / "agentgit.db"),
+            wtb_db_url=wtb_db_url,
+            actor_id="actor-durable-node-checkpoints",
+        )
+        actor._ensure_initialized()
+
+        result = actor._run_workflow_execution(
+            workflow_dict=sample_workflow.to_dict(),
+            variants={},
+            initial_state={"request": "durable"},
+            execution_id="requested-durable-id",
+            batch_test_id="batch-durable-node-checkpoints",
+        )
+
+        assert result["success"] is True
+        assert result["execution_id"] == "requested-durable-id"
+        assert result["checkpoint_count"] == 6
+        assert result["last_checkpoint_id"]
+
+        def uow_factory():
+            return UnitOfWorkFactory.create(
+                mode="sqlalchemy",
+                db_url=wtb_db_url,
+            )
+
+        with uow_factory() as inspection_uow:
+            persisted = inspection_uow.executions.get(result["execution_id"])
+            assert persisted is not None
+            source_session_id = persisted.session_id
+            assert persisted.metadata["state_adapter_backend"] == "node_sqlite"
+            assert persisted.metadata["checkpoint_db_path"] == str(
+                actor._storage_paths.checkpoint_db_path
+            )
+
+        shared_adapter = MagicMock(name="shared-adapter-must-not-be-used")
+        history_coordinator = BatchExecutionCoordinator(
+            uow_factory=uow_factory,
+            state_adapter=shared_adapter,
+            file_tracking=None,
+        )
+        history = history_coordinator.get_checkpoints(result["execution_id"])
+        history_coordinator.close()
+
+        assert len(history) == result["checkpoint_count"]
+        assert history[0]["checkpoint_id"] == result["last_checkpoint_id"]
+        assert [item["step"] for item in history] == sorted(
+            (item["step"] for item in history),
+            reverse=True,
+        )
+
+        target = history[-1]
+        fork_coordinator = BatchExecutionCoordinator(
+            uow_factory=uow_factory,
+            state_adapter=shared_adapter,
+            file_tracking=None,
+        )
+        forked = fork_coordinator.fork(
+            result["execution_id"],
+            target["checkpoint_id"],
+            new_state={"fork_marker": "independent"},
+        )
+        fork_coordinator.close()
+
+        expected_fork_variables = dict(target["values"]["workflow_variables"])
+        expected_fork_variables["fork_marker"] = "independent"
+        assert forked.status is ExecutionStatus.PAUSED
+        assert forked.session_id
+        assert forked.session_id != source_session_id
+        assert forked.state.current_node_id == target["values"]["current_node_id"]
+        assert forked.state.workflow_variables == expected_fork_variables
+        assert forked.metadata["forked_from"] == result["execution_id"]
+        assert forked.metadata["source_checkpoint_id"] == target["checkpoint_id"]
+        assert forked.metadata["state_adapter_backend"] == "node_sqlite"
+        with uow_factory() as fork_verification_uow:
+            reloaded_fork = fork_verification_uow.executions.get(forked.id)
+            assert reloaded_fork is not None
+            assert reloaded_fork.status is ExecutionStatus.PAUSED
+            assert reloaded_fork.session_id == forked.session_id
+            assert reloaded_fork.session_id != source_session_id
+            assert reloaded_fork.metadata["source_checkpoint_id"] == target[
+                "checkpoint_id"
+            ]
+            assert reloaded_fork.state.workflow_variables == expected_fork_variables
+
+        rollback_coordinator = BatchExecutionCoordinator(
+            uow_factory=uow_factory,
+            state_adapter=shared_adapter,
+            file_tracking=None,
+        )
+        rolled_back = rollback_coordinator.rollback(
+            result["execution_id"],
+            target["checkpoint_id"],
+        )
+        rollback_coordinator.close()
+
+        assert rolled_back.status is ExecutionStatus.PAUSED
+        assert rolled_back.checkpoint_id == target["checkpoint_id"]
+        assert rolled_back.state.to_dict() == target["values"]
+        with uow_factory() as verification_uow:
+            reloaded = verification_uow.executions.get(result["execution_id"])
+            assert reloaded is not None
+            assert reloaded.status is ExecutionStatus.PAUSED
+            assert reloaded.checkpoint_id == target["checkpoint_id"]
+        assert shared_adapter.method_calls == []
+
+    def test_enabled_filetracker_backend_initialization_failure_is_fail_closed(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        actor = self._make_uninitialized_actor(
+            tmp_path,
+            monkeypatch,
+            filetracker_config={
+                "enabled": True,
+                "storage_path": str(tmp_path / "tracked-files"),
+            },
+        )
+        filetracker = MagicMock()
+        filetracker._ensure_initialized.side_effect = RuntimeError(
+            "file tracking backend unavailable"
+        )
+
+        with (
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LangGraphStateAdapter",
+                return_value=object(),
+            ),
+            patch(
+                "wtb.infrastructure.file_tracking.RayFileTrackerService",
+                return_value=filetracker,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="file tracking backend unavailable"):
+                actor._ensure_initialized()
+
+        assert actor._initialized is False
+        assert actor._file_tracking_service is None
+        filetracker._ensure_initialized.assert_called_once_with()
+
+    def test_disabled_filetracker_does_not_initialize_backend(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        actor = self._make_uninitialized_actor(
+            tmp_path,
+            monkeypatch,
+            filetracker_config={"enabled": False},
+        )
+
+        with (
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LangGraphStateAdapter",
+                return_value=object(),
+            ),
+            patch(
+                "wtb.infrastructure.file_tracking.RayFileTrackerService"
+            ) as filetracker_class,
+        ):
+            actor._ensure_initialized()
+
+        assert actor._initialized is True
+        assert actor._file_tracking_service is None
+        filetracker_class.assert_not_called()
+
+
 class TestRayBatchTestRunnerUnit:
     """Unit tests for RayBatchTestRunner (no actual Ray)."""
 
@@ -310,6 +1186,455 @@ class TestRayBatchTestRunnerUnit:
         assert "No variant combinations" in str(exc_info.value)
 
         runner.shutdown()
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("parallel_count", 0),
+            ("parallel_count", True),
+            ("max_pending_tasks", 0),
+            ("task_timeout_seconds", float("nan")),
+            ("task_timeout_seconds", float("inf")),
+            ("task_timeout_seconds", -1.0),
+        ],
+    )
+    def test_invalid_batch_preconditions_fail_before_start(
+        self,
+        sample_batch_test,
+        field,
+        value,
+    ):
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        config = RayConfig.for_testing()
+        if field == "parallel_count":
+            sample_batch_test.parallel_count = value
+        else:
+            setattr(config, field, value)
+        runner = RayBatchTestRunner(
+            config=config,
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=MagicMock(),
+        )
+
+        with pytest.raises(BatchRunnerError, match=field):
+            runner.run_batch_test(sample_batch_test)
+
+        assert sample_batch_test.status is BatchTestStatus.PENDING
+        runner.shutdown()
+
+    def test_duplicate_combination_names_fail_before_start(self, sample_batch_test):
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        sample_batch_test.variant_combinations[1].name = (
+            sample_batch_test.variant_combinations[0].name
+        )
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=MagicMock(),
+        )
+
+        with pytest.raises(BatchRunnerError, match="Duplicate combination name"):
+            runner.run_batch_test(sample_batch_test)
+
+        assert sample_batch_test.status is BatchTestStatus.PENDING
+        runner.shutdown()
+
+    def test_driver_execution_id_is_shared_by_workspace_actor_and_events(
+        self,
+        sample_batch_test,
+    ):
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        sample_batch_test.variant_combinations = (
+            sample_batch_test.variant_combinations[:1]
+        )
+        event_bridge = MagicMock()
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=event_bridge,
+        )
+        actor = MagicMock(name="stable-id-actor")
+        ref = MagicMock(name="stable-id-ref")
+        actor.execute_variant.remote.return_value = ref
+        runner._actors = [actor]
+        runner._actor_pool = MagicMock()
+        workspace = MagicMock(name="stable-id-workspace")
+        workspace.workspace_id = "workspace-stable-id"
+        workspace.to_dict.return_value = {"workspace_id": workspace.workspace_id}
+        workspace_manager = MagicMock()
+        workspace_manager.create_workspace.return_value = workspace
+        workspace_manager.cleanup_batch.return_value = 0
+        runner._workspace_manager = workspace_manager
+        actor_payload = {
+            "combination_name": "Config A",
+            "success": True,
+            "duration_ms": 1,
+            "metrics": {"overall_score": 1.0},
+        }
+
+        with (
+            patch.object(runner, "_create_actor_pool"),
+            patch.object(runner, "_load_workflow", return_value={}),
+            patch.object(runner, "_get_available_actor", return_value=actor),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.put",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.get",
+                side_effect=lambda value: actor_payload if value is ref else value,
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.wait",
+                return_value=([ref], []),
+            ),
+        ):
+            result = runner.run_batch_test(sample_batch_test)
+
+        started_id = (
+            event_bridge.on_variant_execution_started.call_args.kwargs[
+                "execution_id"
+            ]
+        )
+        assert (
+            workspace_manager.create_workspace.call_args.kwargs["execution_id"]
+            == started_id
+        )
+        assert (
+            actor.execute_variant.remote.call_args.kwargs["execution_id"]
+            == started_id
+        )
+        assert result.results[0].execution_id == started_id
+        assert (
+            event_bridge.on_variant_execution_completed.call_args.kwargs[
+                "execution_id"
+            ]
+            == started_id
+        )
+
+    def test_completed_ref_uses_submitted_combination_identity(self):
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+            _RayRunningTest,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        event_bridge = MagicMock()
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=event_bridge,
+        )
+        combo = VariantCombination(name="submitted-name", variants={"n": "v"})
+        ref = MagicMock(name="result-ref")
+        pending = [ref]
+        batch = BatchTest(variant_combinations=[combo])
+        running = _RayRunningTest(
+            batch_test_id=batch.id,
+            started_at=datetime.now(),
+            total_variants=1,
+        )
+        payload = {
+            "combination_name": "spoofed-name",
+            "combination_variants": {"spoofed": "value"},
+            "execution_id": "exec-1",
+            "success": True,
+            "duration_ms": 1,
+            "metrics": {"overall_score": 0.5},
+        }
+
+        combo_by_ref = {ref: combo}
+        execution_id_by_ref = {ref: "submitted-execution-id"}
+
+        with (
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.wait",
+                return_value=([ref], []),
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.get",
+                return_value=payload,
+            ),
+        ):
+            runner._process_completed_refs(
+                pending,
+                combo_by_ref,
+                batch,
+                running,
+                timeout=1.0,
+                ref_to_execution_id=execution_id_by_ref,
+            )
+
+        assert batch.results[0].combination_name == "submitted-name"
+        assert batch.results[0].execution_id == "submitted-execution-id"
+        completed = event_bridge.on_variant_execution_completed.call_args.kwargs
+        assert completed["combination_name"] == "submitted-name"
+        assert completed["variants"] == {"n": "v"}
+        assert completed["execution_id"] == "submitted-execution-id"
+        assert running.completed_results[0]["execution_id"] == "submitted-execution-id"
+        assert combo_by_ref == {}
+        assert execution_id_by_ref == {}
+
+    @pytest.mark.parametrize(
+        ("exception_kind", "error_type"),
+        [
+            pytest.param("task", "RayTaskError", id="ray-task-error"),
+            pytest.param("timeout", "TimeoutError", id="ray-get-timeout"),
+        ],
+    )
+    def test_ray_get_failure_uses_submitted_execution_id_and_cleans_maps(
+        self,
+        exception_kind,
+        error_type,
+    ):
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+            _RayRunningTest,
+            ray,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        event_bridge = MagicMock()
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=event_bridge,
+        )
+        combo = VariantCombination(name="submitted-name", variants={"n": "v"})
+        ref = MagicMock(name=f"{exception_kind}-ref")
+        pending = [ref]
+        combo_by_ref = {ref: combo}
+        execution_id_by_ref = {ref: "submitted-execution-id"}
+        batch = BatchTest(variant_combinations=[combo])
+        running = _RayRunningTest(
+            batch_test_id=batch.id,
+            started_at=datetime.now(),
+            total_variants=1,
+            pending_refs=[ref],
+        )
+        if exception_kind == "task":
+            raised_error = ray.exceptions.RayTaskError(
+                "execute_variant",
+                "actor traceback",
+                RuntimeError("actor failed"),
+            )
+        else:
+            raised_error = ray.exceptions.GetTimeoutError("result unavailable")
+
+        with (
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.wait",
+                return_value=([ref], []),
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.get",
+                side_effect=raised_error,
+            ),
+        ):
+            runner._process_completed_refs(
+                pending_refs=pending,
+                ref_to_combo=combo_by_ref,
+                batch_test=batch,
+                running_test=running,
+                timeout=1.0,
+                ref_to_execution_id=execution_id_by_ref,
+            )
+
+        assert batch.results[0].execution_id == "submitted-execution-id"
+        failed = event_bridge.on_variant_execution_failed.call_args.kwargs
+        assert failed["execution_id"] == "submitted-execution-id"
+        assert failed["error_type"] == error_type
+        assert running.pending_refs == []
+        assert combo_by_ref == {}
+        assert execution_id_by_ref == {}
+
+    @pytest.mark.parametrize(
+        "invalid_metric",
+        [True, "0.5", float("nan"), float("inf")],
+    )
+    def test_invalid_actor_metric_becomes_failed_result(self, invalid_metric):
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+            _RayRunningTest,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        event_bridge = MagicMock()
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=event_bridge,
+        )
+        combo = VariantCombination(name="A", variants={})
+        ref = MagicMock(name="invalid-metric-ref")
+        pending = [ref]
+        batch = BatchTest(variant_combinations=[combo])
+        running = _RayRunningTest(
+            batch_test_id=batch.id,
+            started_at=datetime.now(),
+            total_variants=1,
+        )
+        payload = {
+            "combination_name": "A",
+            "execution_id": "exec-invalid",
+            "success": True,
+            "metrics": {"score": invalid_metric},
+        }
+
+        with (
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.wait",
+                return_value=([ref], []),
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.get",
+                return_value=payload,
+            ),
+        ):
+            runner._process_completed_refs(
+                pending,
+                {ref: combo},
+                batch,
+                running,
+                timeout=1.0,
+            )
+
+        assert batch.results[0].success is False
+        assert batch.results[0].metrics == {}
+        assert "metric" in (batch.results[0].error_message or "").lower()
+        event_bridge.on_variant_execution_failed.assert_called_once()
+
+    def test_deadline_cleanup_supports_legacy_single_argument_provider(self):
+        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        cleaned = []
+
+        class LegacyProvider:
+            def cleanup_environment(self, environment_id):
+                cleaned.append(environment_id)
+
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=MagicMock(),
+            environment_provider=LegacyProvider(),
+        )
+        runner._cleanup_environment_with_deadline(
+            "legacy-env",
+            time.monotonic() + 1.0,
+        )
+
+        assert cleaned == ["legacy-env"]
+
+    @pytest.mark.parametrize("already_initialized", [False, True])
+    def test_shutdown_only_closes_ray_runtime_initialized_by_runner(
+        self,
+        already_initialized,
+    ):
+        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=MagicMock(),
+        )
+        with (
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.is_initialized",
+                return_value=already_initialized,
+            ),
+            patch("wtb.application.services.ray_batch_runner.ray.init") as init,
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.shutdown"
+            ) as shutdown,
+        ):
+            runner._ensure_ray_initialized()
+            runner.shutdown()
+
+        assert init.call_count == (0 if already_initialized else 1)
+        assert shutdown.call_count == (0 if already_initialized else 1)
+
+    def test_rollback_coordinator_owns_dependencies_created_by_runner(self):
+        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=MagicMock(),
+        )
+        state_adapter = object()
+        file_tracking = object()
+
+        with (
+            patch.object(
+                runner,
+                "_create_shared_state_adapter",
+                return_value=state_adapter,
+            ),
+            patch.object(
+                runner,
+                "_create_file_tracking_service",
+                return_value=file_tracking,
+            ),
+            patch(
+                "wtb.application.services.batch_execution_coordinator.BatchExecutionCoordinator"
+            ) as coordinator_factory,
+        ):
+            runner.create_rollback_coordinator()
+
+        kwargs = coordinator_factory.call_args.kwargs
+        assert kwargs["state_adapter"] is state_adapter
+        assert kwargs["file_tracking"] is file_tracking
+        assert kwargs["owns_state_adapter"] is True
+        assert kwargs["owns_file_tracking"] is True
 
     def test_get_status_idle(self, sample_batch_test):
         """Status is IDLE when not running."""
@@ -793,6 +2118,86 @@ class TestRayBatchTestRunnerUnit:
         assert observed_states[0].cancelled is False
         assert observed_states[0].termination_error is None
         event_bridge.on_batch_test_failed.assert_not_called()
+
+    def test_completed_event_best_matches_successful_negative_domain_result(
+        self,
+        sample_batch_test,
+    ):
+        """Failed results and a zero baseline cannot corrupt the completed event."""
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
+
+        if not RAY_AVAILABLE:
+            pytest.skip("Ray not installed")
+
+        sample_batch_test.variant_combinations = (
+            sample_batch_test.variant_combinations[:2]
+        )
+        event_bridge = MagicMock()
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url="data/agentgit.db",
+            wtb_db_url="inmemory",
+            event_bridge=event_bridge,
+        )
+        actor = MagicMock(name="event-best-actor")
+        failed_ref = MagicMock(name="failed-ref")
+        successful_ref = MagicMock(name="successful-ref")
+        actor.execute_variant.remote.side_effect = [failed_ref, successful_ref]
+        runner._actors = [actor]
+        runner._actor_pool = MagicMock()
+        result_by_ref = {
+            failed_ref: {
+                "combination_name": "Config A",
+                "execution_id": "exec-a",
+                "success": False,
+                "duration_ms": 1,
+                "metrics": {"overall_score": 99.0},
+                "error": "expected failure",
+            },
+            successful_ref: {
+                "combination_name": "Config B",
+                "execution_id": "exec-b",
+                "success": True,
+                "duration_ms": 1,
+                "metrics": {"overall_score": -0.5},
+            },
+        }
+
+        def wait_one(refs, **_kwargs):
+            return [refs[0]], list(refs[1:])
+
+        def get_value(value):
+            try:
+                return result_by_ref[value]
+            except (KeyError, TypeError):
+                return value
+
+        with (
+            patch.object(runner, "_create_actor_pool"),
+            patch.object(runner, "_load_workflow", return_value={}),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.put",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.get",
+                side_effect=get_value,
+            ),
+            patch(
+                "wtb.application.services.ray_batch_runner.ray.wait",
+                side_effect=wait_one,
+            ),
+        ):
+            result = runner.run_batch_test(sample_batch_test)
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert result.best_combination_name == "Config B"
+        completed_kwargs = event_bridge.on_batch_test_completed.call_args.kwargs
+        assert completed_kwargs["best_combination_name"] == "Config B"
+        assert completed_kwargs["best_overall_score"] == -0.5
 
     @pytest.mark.parametrize(
         ("failure_site", "message"),
@@ -2245,6 +3650,82 @@ class TestRayBatchTestRunnerIntegration:
             
         finally:
             runner.shutdown()
+
+    @pytest.mark.skipif(
+        not os.environ.get("RAY_INTEGRATION_TESTS"),
+        reason="Ray integration test - set RAY_INTEGRATION_TESTS=1 to enable",
+    )
+    def test_failed_langgraph_is_failed_batch_result(
+        self,
+        ray_initialized,
+        sample_workflow,
+        temp_data_dir,
+        monkeypatch,
+    ):
+        """A real Ray actor must preserve a LangGraph failure end to end."""
+        from langgraph.graph import END, START, MessagesState, StateGraph
+
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
+
+        try:
+            import cloudpickle
+        except ImportError:
+            from ray import cloudpickle
+
+        def fail_node(_state):
+            raise RuntimeError("intentional Ray graph failure")
+
+        graph = StateGraph(MessagesState)
+        graph.add_node("fail", fail_node)
+        graph.add_edge(START, "fail")
+        graph.add_edge("fail", END)
+        graph_payload = base64.b64encode(cloudpickle.dumps(graph)).decode("ascii")
+
+        batch_test = BatchTest(
+            id="batch-ray-failed-status",
+            name="Ray failed status contract",
+            workflow_id=sample_workflow.id,
+            variant_combinations=[
+                VariantCombination(
+                    name="failing-graph",
+                    variants={},
+                    metadata={"_graph_pickled": graph_payload},
+                ),
+            ],
+            initial_state={"messages": []},
+            parallel_count=1,
+        )
+
+        monkeypatch.setenv(
+            "WTB_RAY_STORAGE_ROOT",
+            str(temp_data_dir / "ray-storage"),
+        )
+
+        def workflow_loader(_workflow_id, _uow):
+            return sample_workflow
+
+        runner = RayBatchTestRunner(
+            config=RayConfig.for_testing(),
+            agentgit_db_url=str(temp_data_dir / "agentgit.db"),
+            wtb_db_url=f"sqlite:///{temp_data_dir / 'wtb.db'}",
+            workflow_loader=workflow_loader,
+        )
+
+        try:
+            result = runner.run_batch_test(batch_test)
+        finally:
+            runner.shutdown()
+
+        assert result.status is BatchTestStatus.FAILED
+        assert len(result.results) == 1
+        assert result.results[0].success is False
+        assert "intentional Ray graph failure" in (
+            result.results[0].error_message or ""
+        )
+        assert result.results[0].metrics == {"overall_score": 0.0}
     
     @pytest.mark.skipif(
         not os.environ.get("RAY_INTEGRATION_TESTS"),

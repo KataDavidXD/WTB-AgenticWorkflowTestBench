@@ -130,7 +130,7 @@ class TestLangGraphSessionFix:
             "set_current_session must be called before execute"
         )
 
-    def test_run_with_langgraph_no_session_skips_set(self):
+    def test_run_with_langgraph_no_session_fails_closed(self):
         adapter = MagicMock()
         adapter.supports_graph_execution.return_value = True
         adapter.has_graph.return_value = True
@@ -142,8 +142,12 @@ class TestLangGraphSessionFix:
 
         controller = _make_controller(state_adapter=adapter, exec_repo=exec_repo)
         mock_graph = MagicMock()
-        controller.run(execution.id, graph=mock_graph)
 
+        with pytest.raises(RuntimeError, match="activate execution session"):
+            controller.run(execution.id, graph=mock_graph)
+
+        adapter.execute.assert_not_called()
+        assert execution.status == ExecutionStatus.PENDING
         adapter.set_current_session.assert_not_called()
 
 
@@ -185,6 +189,14 @@ class TestForkSeeding:
         )
 
         checkpoint_id = "cp-abc-123"
+        adapter.get_checkpoint_history.return_value = [
+            {
+                "checkpoint_id": checkpoint_id,
+                "writes": {"start": {}},
+                "next": [],
+                "step": 1,
+            }
+        ]
         forked = controller.fork(source_exec.id, checkpoint_id)
 
         adapter.create_fork.assert_called_once()
@@ -192,6 +204,114 @@ class TestForkSeeding:
         assert fork_call_args.kwargs.get("from_checkpoint_id") == checkpoint_id
 
         assert forked.session_id == "wtb-fork-1"
+
+    def test_fork_recognizes_langgraph_initial_input_checkpoint(self):
+        adapter = MagicMock()
+        adapter.supports_graph_execution.return_value = True
+        adapter.create_fork = MagicMock()
+        adapter.update_state.return_value = True
+        adapter.load_checkpoint.return_value = ExecutionState(
+            current_node_id="__start__",
+            workflow_variables={"value": 0},
+            execution_path=[],
+            node_results={},
+        )
+        adapter.initialize_session.return_value = "wtb-fork-input"
+        adapter.set_current_session = MagicMock()
+
+        source_exec = _make_execution(
+            status=ExecutionStatus.COMPLETED, session_id="wtb-exec-src"
+        )
+        exec_repo = MagicMock()
+        exec_repo.get.return_value = source_exec
+        workflow_repo = MagicMock()
+        workflow_repo.get.return_value = _make_workflow()
+        controller = _make_controller(
+            state_adapter=adapter,
+            exec_repo=exec_repo,
+            workflow_repo=workflow_repo,
+        )
+
+        checkpoint_id = "cp-input"
+        adapter.get_checkpoint_history.return_value = [
+            {
+                "checkpoint_id": "cp-step-a",
+                "writes": {},
+                "next": ["step_a"],
+                "step": 0,
+                "values": {"value": 0},
+            },
+            {
+                "checkpoint_id": checkpoint_id,
+                "writes": {},
+                "next": ["__start__"],
+                "step": -1,
+            },
+        ]
+
+        forked = controller.fork(source_exec.id, checkpoint_id)
+
+        adapter.create_fork.assert_called_once()
+        adapter.update_state.assert_called_once_with(
+            {"value": 0}, as_node="__start__"
+        )
+        assert forked.metadata["source_checkpoint_as_node"] == "__start__"
+
+    @pytest.mark.parametrize(
+        ("step", "next_nodes"),
+        [
+            (0, ["__start__"]),
+            (-1, ["step_a"]),
+            (-1, ["__start__", "step_a"]),
+        ],
+    )
+    def test_fork_rejects_noncanonical_input_checkpoint_with_override(
+        self,
+        step,
+        next_nodes,
+    ):
+        adapter = MagicMock()
+        adapter.supports_graph_execution.return_value = True
+        adapter.create_fork = MagicMock()
+        adapter.load_checkpoint.return_value = ExecutionState(
+            current_node_id="__start__",
+            workflow_variables={"value": 0},
+            execution_path=[],
+            node_results={},
+        )
+
+        source_exec = _make_execution(
+            status=ExecutionStatus.COMPLETED, session_id="wtb-exec-src"
+        )
+        exec_repo = MagicMock()
+        exec_repo.get.return_value = source_exec
+        workflow_repo = MagicMock()
+        workflow_repo.get.return_value = _make_workflow()
+        controller = _make_controller(
+            state_adapter=adapter,
+            exec_repo=exec_repo,
+            workflow_repo=workflow_repo,
+        )
+
+        checkpoint_id = "cp-ambiguous"
+        adapter.get_checkpoint_history.return_value = [
+            {
+                "checkpoint_id": checkpoint_id,
+                "writes": {},
+                "next": next_nodes,
+                "step": step,
+            }
+        ]
+
+        with pytest.raises(RuntimeError, match="ambiguous continuation"):
+            controller.fork(
+                source_exec.id,
+                checkpoint_id,
+                new_initial_state={"value": 7},
+            )
+
+        adapter.create_fork.assert_not_called()
+        exec_repo.add.assert_not_called()
 
     def test_fork_skips_create_fork_when_not_supported(self):
         adapter = MagicMock()
@@ -470,6 +590,7 @@ class TestRollbackAndRunDeferredCommit:
         mock_execution = _make_execution(
             status=ExecutionStatus.PAUSED, session_id="wtb-1"
         )
+        mock_uow.executions.get.return_value = mock_execution
         mock_controller.rollback.return_value = mock_execution
         mock_controller.run.return_value = mock_execution
 

@@ -54,6 +54,8 @@ class ManagedController:
     """
     controller: ExecutionController
     uow: IUnitOfWork
+    owns_state_adapter: bool = False
+    owns_file_tracking: bool = False
     
     def __enter__(self) -> "ManagedController":
         self.controller.set_deferred_commit(True)
@@ -67,6 +69,25 @@ class ManagedController:
             else:
                 self.uow.rollback()
         finally:
+            seen_resources = set()
+            for attribute, is_owned in (
+                ("_state_adapter", self.owns_state_adapter),
+                ("_file_tracking", self.owns_file_tracking),
+            ):
+                if not is_owned:
+                    continue
+                resource = getattr(self.controller, attribute, None)
+                if resource is None or id(resource) in seen_resources:
+                    continue
+                seen_resources.add(id(resource))
+                close_resource = getattr(resource, "close", None)
+                if callable(close_resource):
+                    try:
+                        close_resource()
+                    except Exception:
+                        # UoW closure must still run even if an adapter's
+                        # best-effort cleanup reports an error.
+                        pass
             self.uow.__exit__(exc_type, exc_val, exc_tb)
         return False
 
@@ -118,6 +139,7 @@ class ExecutionControllerFactory:
         Returns:
             ManagedController with controller and managed UoW
         """
+        owns_file_tracking = False
         if file_tracking_service is None and self._config.file_tracking_config:
             ft_config = self._config.file_tracking_config
             if ft_config.enabled and not ft_config.postgres_url:
@@ -128,28 +150,64 @@ class ExecutionControllerFactory:
                     workspace_path=Path(ft_config.storage_path),
                     db_name="filetrack.db",
                 )
+                owns_file_tracking = True
                 output_dir = output_dir or str(Path(ft_config.storage_path) / "outputs")
 
-        uow = UnitOfWorkFactory.create(
-            mode=self._config.wtb_storage_mode,
-            db_url=self._config.wtb_db_url,
-            echo=False, #=self._config.log_sql for sql details
+        uow = None
+        state_adapter = None
+        uow_entered = False
+        try:
+            uow = UnitOfWorkFactory.create(
+                mode=self._config.wtb_storage_mode,
+                db_url=self._config.wtb_db_url,
+                echo=False, #=self._config.log_sql for sql details
+            )
+            uow.__enter__()
+            uow_entered = True
+
+            state_adapter = self._create_state_adapter_instance()
+
+            controller = ExecutionController(
+                execution_repository=uow.executions,
+                workflow_repository=uow.workflows,
+                state_adapter=state_adapter,
+                node_executor=DefaultNodeExecutor(),
+                unit_of_work=uow,
+                file_tracking_service=file_tracking_service,
+                output_dir=output_dir,
+            )
+        except BaseException as error:
+            seen_resources = set()
+            for resource, is_owned in (
+                (state_adapter, True),
+                (file_tracking_service, owns_file_tracking),
+            ):
+                if (
+                    not is_owned
+                    or resource is None
+                    or id(resource) in seen_resources
+                ):
+                    continue
+                seen_resources.add(id(resource))
+                close_resource = getattr(resource, "close", None)
+                if callable(close_resource):
+                    try:
+                        close_resource()
+                    except Exception as cleanup_error:
+                        error.add_note(f"Resource cleanup failed: {cleanup_error}")
+            if uow_entered:
+                try:
+                    uow.__exit__(type(error), error, error.__traceback__)
+                except Exception as cleanup_error:
+                    error.add_note(f"UoW cleanup failed: {cleanup_error}")
+            raise
+
+        return ManagedController(
+            controller=controller,
+            uow=uow,
+            owns_state_adapter=True,
+            owns_file_tracking=owns_file_tracking,
         )
-        uow.__enter__()
-        
-        state_adapter = self._create_state_adapter_instance()
-        
-        controller = ExecutionController(
-            execution_repository=uow.executions,
-            workflow_repository=uow.workflows,
-            state_adapter=state_adapter,
-            node_executor=DefaultNodeExecutor(),
-            unit_of_work=uow,
-            file_tracking_service=file_tracking_service,
-            output_dir=output_dir,
-        )
-        
-        return ManagedController(controller=controller, uow=uow)
     
     def _create_state_adapter_instance(self) -> IStateAdapter:
         """Create a new state adapter instance."""
@@ -215,34 +273,60 @@ class ExecutionControllerFactory:
     @staticmethod
     def _create_state_adapter(config: WTBConfig, uow: Optional[IUnitOfWork]) -> IStateAdapter:
         """Create state adapter based on config."""
-        if config.state_adapter_mode == "inmemory":
+        mode = config.state_adapter_mode
+        if mode == "inmemory":
             return InMemoryStateAdapter()
-        
-        elif config.state_adapter_mode == "langgraph":
-            try:
-                from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                    LangGraphStateAdapter, LangGraphConfig, LANGGRAPH_AVAILABLE,
+        if mode != "langgraph":
+            raise ValueError(f"Unsupported state adapter mode: {mode!r}")
+
+        try:
+            from wtb.infrastructure.adapters.langgraph_state_adapter import (
+                LangGraphStateAdapter,
+                LangGraphConfig,
+                LANGGRAPH_AVAILABLE,
+            )
+        except ImportError as error:
+            raise ImportError(
+                "LangGraph state adapter dependencies are unavailable"
+            ) from error
+
+        if not LANGGRAPH_AVAILABLE:
+            raise ImportError("LangGraph state adapter is unavailable")
+
+        storage_mode = config.wtb_storage_mode
+        if storage_mode == "inmemory":
+            lg_config = LangGraphConfig.for_testing()
+        elif storage_mode == "sqlalchemy":
+            database_url = str(config.wtb_db_url or "").strip()
+            normalized_url = database_url.lower()
+            if normalized_url.startswith(
+                ("postgresql://", "postgresql+", "postgres://")
+            ):
+                lg_config = LangGraphConfig.for_production(database_url)
+            elif normalized_url.startswith("sqlite:"):
+                import os
+
+                checkpoint_db = (
+                    getattr(config, "langgraph_checkpoint_path", None)
+                    or os.path.join(
+                        str(config.data_dir),
+                        "wtb_checkpoints.db",
+                    )
                 )
-                
-                if not LANGGRAPH_AVAILABLE:
-                    raise ImportError("LangGraph not available")
-                
-                if config.wtb_storage_mode == "sqlalchemy":
-                    checkpoint_db = f"{config.data_dir}/wtb_checkpoints.db"
-                    lg_config = LangGraphConfig.for_development(checkpoint_db)
-                else:
-                    lg_config = LangGraphConfig.for_testing()
-                
-                return LangGraphStateAdapter(lg_config)
-            except ImportError:
-                warnings.warn(
-                    "LangGraph not available, falling back to InMemoryStateAdapter",
-                    RuntimeWarning,
+                lg_config = LangGraphConfig.for_development(checkpoint_db)
+            elif not database_url:
+                raise ValueError(
+                    "Durable langgraph state requires wtb_db_url"
                 )
-                return InMemoryStateAdapter()
-        
+            else:
+                raise ValueError(
+                    "Unsupported database URL for langgraph state adapter: "
+                    f"{database_url!r}"
+                )
         else:
-            return InMemoryStateAdapter()
+            raise ValueError(f"Unsupported storage mode: {storage_mode!r}")
+
+        return LangGraphStateAdapter(lg_config)
     
     @staticmethod
     def _create_controller(
@@ -255,15 +339,17 @@ class ExecutionControllerFactory:
         """
         Create controller with given dependencies.
         
-        WARNING: Calls uow.__enter__() but does NOT manage exit.
-        For proper lifecycle, use create_isolated() instead.
+        Durable UoWs are entered for their repository/session lifecycle.
+        In-memory repositories are ready immediately and must not hold a
+        construction-thread transaction lock for the controller lifetime.
         """
-        warnings.warn(
-            "ExecutionControllerFactory.create() leaks UoW. Use create_isolated() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        uow.__enter__()
+        if not isinstance(uow, InMemoryUnitOfWork):
+            warnings.warn(
+                "ExecutionControllerFactory.create() leaks UoW. Use create_isolated() instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            uow.__enter__()
         return ExecutionController(
             execution_repository=uow.executions,
             workflow_repository=uow.workflows,
@@ -532,6 +618,8 @@ class BatchCoordinatorFactory:
             state_adapter=state_adapter,
             file_tracking=file_tracking,
             config=config,
+            owns_state_adapter=True,
+            owns_file_tracking=file_tracking is not None,
         )
     
     @staticmethod
@@ -555,6 +643,7 @@ class BatchCoordinatorFactory:
             uow_factory=uow_factory,
             controller_factory=DefaultExecutionControllerFactory(),
             state_adapter=state_adapter,
+            owns_state_adapter=True,
         )
     
     @staticmethod
@@ -577,27 +666,18 @@ class BatchCoordinatorFactory:
         def uow_factory() -> IUnitOfWork:
             return UnitOfWorkFactory.create(mode="sqlalchemy", db_url=db_url)
         
-        # Use LangGraph state adapter if available
-        try:
-            from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter, 
-                LangGraphConfig,
-                LANGGRAPH_AVAILABLE,
-            )
-            if LANGGRAPH_AVAILABLE:
-                checkpoint_db_path = os.path.join(data_dir, "wtb_checkpoints.db")
-                state_adapter = LangGraphStateAdapter(
-                    LangGraphConfig.for_development(checkpoint_db_path)
-                )
-            else:
-                state_adapter = InMemoryStateAdapter()
-        except ImportError:
-            state_adapter = InMemoryStateAdapter()
+        development_config = WTBConfig.for_development(data_dir)
+        state_adapter = ExecutionControllerFactory._create_state_adapter(
+            development_config,
+            None,
+        )
         
         return BatchExecutionCoordinator(
             uow_factory=uow_factory,
             controller_factory=DefaultExecutionControllerFactory(),
             state_adapter=state_adapter,
+            config=development_config,
+            owns_state_adapter=True,
         )
 
 
@@ -642,7 +722,10 @@ class WTBTestBenchFactory:
         
         outbox_repo = getattr(uow, 'outbox', None)
         wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+            exec_ctrl,
+            outbox_repo,
+            commit_fn=uow.commit,
+            rollback_fn=uow.rollback,
         )
         
         batch_runner = BatchTestRunnerFactory.create(config)
@@ -657,6 +740,8 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
+            owns_batch_runner=True,
+            owns_execution_resources=True,
         )
     
     @staticmethod
@@ -685,7 +770,10 @@ class WTBTestBenchFactory:
         
         outbox_repo = getattr(uow, 'outbox', None)
         wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+            exec_ctrl,
+            outbox_repo,
+            commit_fn=uow.commit,
+            rollback_fn=uow.rollback,
         )
         
         batch_runner = BatchTestRunnerFactory.create_for_testing()
@@ -700,6 +788,8 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
+            owns_batch_runner=True,
+            owns_execution_resources=True,
         )
     
     @staticmethod
@@ -732,35 +822,13 @@ class WTBTestBenchFactory:
         
         os.makedirs(data_dir, exist_ok=True)
         
-        db_url = f"sqlite:///{data_dir}/wtb.db"
+        config = WTBConfig.for_development(data_dir)
+        db_url = config.wtb_db_url
+        state_adapter = ExecutionControllerFactory._create_state_adapter(
+            config,
+            None,
+        )
         uow = UnitOfWorkFactory.create(mode="sqlalchemy", db_url=db_url)
-        
-        # Use LangGraph state adapter with SQLite checkpointer
-        try:
-            from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter, 
-                LangGraphConfig,
-                LANGGRAPH_AVAILABLE,
-            )
-            if LANGGRAPH_AVAILABLE:
-                checkpoint_db_path = os.path.join(data_dir, "wtb_checkpoints.db")
-                state_adapter = LangGraphStateAdapter(
-                    LangGraphConfig.for_development(checkpoint_db_path)
-                )
-            else:
-                import warnings
-                warnings.warn(
-                    "LangGraph not available, falling back to InMemoryStateAdapter",
-                    RuntimeWarning,
-                )
-                state_adapter = InMemoryStateAdapter()
-        except ImportError:
-            import warnings
-            warnings.warn(
-                "LangGraph checkpoint dependencies not available",
-                RuntimeWarning,
-            )
-            state_adapter = InMemoryStateAdapter()
         
         # Create file tracking service if enabled
         file_tracking_service = None
@@ -783,7 +851,6 @@ class WTBTestBenchFactory:
             output_dir=output_dir,
         )
         
-        config = WTBConfig.for_development(data_dir)
         if enable_file_tracking:
             config.filetracker_enabled = True
             config.file_tracking_config = FileTrackingConfig.for_development(
@@ -792,7 +859,10 @@ class WTBTestBenchFactory:
             )
         outbox_repo = getattr(uow, 'outbox', None)
         wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+            exec_ctrl,
+            outbox_repo,
+            commit_fn=uow.commit,
+            rollback_fn=uow.rollback,
         )
         
         if enable_ray:
@@ -816,6 +886,8 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
+            owns_batch_runner=True,
+            owns_execution_resources=True,
         )
     
     @staticmethod
@@ -838,50 +910,62 @@ class WTBTestBenchFactory:
         from wtb.application.services import ProjectService, VariantService
         import os
         from pathlib import Path
-        
-        if checkpointer_type == "sqlite":
-            os.makedirs(data_dir, exist_ok=True)
-        
-        if checkpointer_type == "memory":
-            uow = InMemoryUnitOfWork()
-        else:
-            db_url = f"sqlite:///{data_dir}/wtb.db"
-            uow = UnitOfWorkFactory.create(mode="sqlalchemy", db_url=db_url)
-        
+
+        supported_checkpointers = {"memory", "sqlite", "postgres"}
+        if checkpointer_type not in supported_checkpointers:
+            raise ValueError(
+                f"Unsupported checkpointer type: {checkpointer_type!r}"
+            )
+        if checkpointer_type == "postgres" and not connection_string:
+            raise ValueError(
+                "connection_string is required for postgres checkpointer"
+            )
+
         try:
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter, LangGraphConfig, CheckpointerType,
+                LangGraphStateAdapter,
+                LangGraphConfig,
                 LANGGRAPH_AVAILABLE,
             )
-            
-            if not LANGGRAPH_AVAILABLE:
-                raise ImportError("LangGraph not available")
-            
-            type_map = {
-                "memory": CheckpointerType.MEMORY,
-                "sqlite": CheckpointerType.SQLITE,
-                "postgres": CheckpointerType.POSTGRES,
-            }
-            
-            if checkpointer_type == "sqlite":
-                conn_str = connection_string or os.path.join(data_dir, "wtb_checkpoints.db")
-            else:
-                conn_str = connection_string
-            
-            lg_config = LangGraphConfig(
-                checkpointer_type=type_map.get(checkpointer_type, CheckpointerType.SQLITE),
-                connection_string=conn_str,
+        except ImportError as error:
+            raise ImportError(
+                "LangGraph state adapter dependencies are unavailable"
+            ) from error
+
+        if not LANGGRAPH_AVAILABLE:
+            raise ImportError("LangGraph state adapter is unavailable")
+
+        if checkpointer_type == "memory":
+            state_config = LangGraphConfig.for_testing()
+            bench_config = WTBConfig.for_testing()
+            bench_config.state_adapter_mode = "langgraph"
+            uow = InMemoryUnitOfWork()
+        elif checkpointer_type == "sqlite":
+            os.makedirs(data_dir, exist_ok=True)
+            checkpoint_path = connection_string or os.path.join(
+                data_dir,
+                "wtb_checkpoints.db",
             )
-            state_adapter = LangGraphStateAdapter(lg_config)
-            
-        except ImportError:
-            import warnings
-            warnings.warn(
-                "LangGraph not available, using in-memory",
-                RuntimeWarning,
+            state_config = LangGraphConfig.for_development(checkpoint_path)
+            bench_config = WTBConfig.for_development(data_dir)
+            bench_config.langgraph_checkpoint_path = checkpoint_path
+            uow = UnitOfWorkFactory.create(
+                mode="sqlalchemy",
+                db_url=bench_config.wtb_db_url,
             )
-            state_adapter = InMemoryStateAdapter()
-        
+        else:
+            state_config = LangGraphConfig.for_production(connection_string)
+            bench_config = WTBConfig.for_production(
+                db_url=connection_string,
+                data_dir=data_dir,
+            )
+            uow = UnitOfWorkFactory.create(
+                mode="sqlalchemy",
+                db_url=connection_string,
+            )
+
+        state_adapter = LangGraphStateAdapter(state_config)
+
         # Create file tracking service if enabled
         file_tracking_service = None
         output_dir = None
@@ -901,16 +985,15 @@ class WTBTestBenchFactory:
             output_dir=output_dir,
         )
         
-        lg_config = WTBConfig(
-            data_dir=data_dir,
-            state_adapter_mode="langgraph",
-        )
         outbox_repo = getattr(uow, 'outbox', None)
         wrapped_ctrl = OutboxExecutionControllerDecorator(
-            exec_ctrl, outbox_repo, commit_fn=uow.commit,
+            exec_ctrl,
+            outbox_repo,
+            commit_fn=uow.commit,
+            rollback_fn=uow.rollback,
         )
         
-        batch_runner = BatchTestRunnerFactory.create_threadpool(lg_config)
+        batch_runner = BatchTestRunnerFactory.create_threadpool(bench_config)
         
         variant_registry = NodeReplacerFactory.create_with_dependencies(uow)
         
@@ -922,4 +1005,6 @@ class WTBTestBenchFactory:
             variant_service=variant_service,
             execution_controller=wrapped_ctrl,
             batch_runner=batch_runner,
+            owns_batch_runner=True,
+            owns_execution_resources=True,
         )

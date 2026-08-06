@@ -68,3 +68,20 @@ class IAsyncFileTrackingService(ABC):
         Convenience method: Track files and link to checkpoint in one call.
         """
         pass
+
+    async def atrack_and_link_in_uow(
+        self,
+        uow: Any,
+        checkpoint_id: str,
+        file_paths: List[str],
+        message: str,
+    ) -> FileTrackingResult:
+        """Track and link files inside a caller-owned unit of work.
+
+        The default keeps legacy implementations instantiable, while callers
+        that require atomic execution and file metadata must fail closed unless
+        the service explicitly implements this capability.
+        """
+        raise NotImplementedError(
+            "File tracking service does not support a shared unit of work"
+        )

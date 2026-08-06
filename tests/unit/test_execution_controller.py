@@ -39,6 +39,7 @@ def _make_controller(
     exec_repo = exec_repo or MagicMock()
     workflow_repo = workflow_repo or MagicMock()
     state_adapter = state_adapter or MagicMock()
+    state_adapter.set_current_session.return_value = True
     uow = uow or MagicMock()
 
     return ExecutionController(
@@ -55,6 +56,7 @@ def _make_execution(status=ExecutionStatus.PENDING, exec_id="exec-1") -> Executi
         id=exec_id,
         workflow_id="wf-1",
         status=status,
+        session_id=f"wtb-{exec_id}",
         state=ExecutionState(
             current_node_id="start",
             workflow_variables={"value": 0},
@@ -62,6 +64,66 @@ def _make_execution(status=ExecutionStatus.PENDING, exec_id="exec-1") -> Executi
             node_results={},
         ),
     )
+
+
+class TestExecutionMetadataProtocol:
+
+    @pytest.mark.parametrize(
+        "backend",
+        ["langgraph_sqlite", "node_sqlite"],
+    )
+    def test_create_execution_writes_explicit_checkpoint_backend(self, backend):
+        adapter = MagicMock()
+        adapter.state_adapter_backend = backend
+        adapter.initialize_session.return_value = "session-1"
+        exec_repo = MagicMock()
+        ctrl = _make_controller(state_adapter=adapter, exec_repo=exec_repo)
+
+        created = ctrl.create_execution(
+            _make_workflow(),
+            metadata={"checkpoint_db_path": "actor-checkpoints.db"},
+        )
+
+        assert created.metadata["state_adapter_backend"] == backend
+        exec_repo.add.assert_called_once_with(created)
+
+    def test_create_execution_uses_requested_id_for_session_and_persistence(self):
+        adapter = MagicMock()
+        adapter.initialize_session.return_value = "stable-session"
+        exec_repo = MagicMock()
+        ctrl = _make_controller(state_adapter=adapter, exec_repo=exec_repo)
+
+        created = ctrl.create_execution(
+            _make_workflow(),
+            initial_state={"request": "stable"},
+            execution_id="stable-execution-id",
+        )
+
+        assert created.id == "stable-execution-id"
+        assert created.session_id == "stable-session"
+        session_call = adapter.initialize_session.call_args
+        assert session_call.kwargs["execution_id"] == "stable-execution-id"
+        assert session_call.kwargs["initial_state"] is created.state
+        exec_repo.add.assert_called_once_with(created)
+
+    @pytest.mark.parametrize("backend", [None, "memory"])
+    def test_create_execution_rejects_unrecognized_checkpoint_backend(
+        self,
+        backend,
+    ):
+        adapter = MagicMock()
+        adapter.state_adapter_backend = backend
+        exec_repo = MagicMock()
+        ctrl = _make_controller(state_adapter=adapter, exec_repo=exec_repo)
+
+        with pytest.raises(RuntimeError, match="state_adapter_backend"):
+            ctrl.create_execution(
+                _make_workflow(),
+                metadata={"checkpoint_db_path": "actor-checkpoints.db"},
+            )
+
+        adapter.initialize_session.assert_not_called()
+        exec_repo.add.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -261,6 +323,7 @@ class TestRollback:
 
     def test_rollback_syncs_external_cache_metadata(self):
         adapter = MagicMock()
+        adapter.state_adapter_backend = "langgraph_sqlite"
         adapter.rollback.return_value = ExecutionState(
             current_node_id="node_a",
             workflow_variables={
@@ -276,6 +339,7 @@ class TestRollback:
         execution.metadata = {
             "actor_id": "actor_1",
             "checkpoint_db_path": "/tmp/ray_actors/actor_1/wtb_checkpoints.db",
+            "state_adapter_backend": "langgraph_sqlite",
             "llm_cache_path": "/tmp/ray_actors/actor_1/llm_response_cache.db",
         }
         exec_repo = MagicMock()
@@ -294,6 +358,7 @@ class TestFork:
 
     def test_fork_preserves_external_cache_metadata(self):
         adapter = MagicMock()
+        adapter.state_adapter_backend = "node_sqlite"
         adapter.load_checkpoint.return_value = ExecutionState(
             current_node_id="node_a",
             workflow_variables={
@@ -312,6 +377,7 @@ class TestFork:
         source_execution.metadata = {
             "actor_id": "actor_2",
             "checkpoint_db_path": "/tmp/ray_actors/actor_2/wtb_checkpoints.db",
+            "state_adapter_backend": "node_sqlite",
             "llm_cache_path": "/tmp/ray_actors/actor_2/llm_response_cache.db",
             "cache_storage_scope": "actor_local",
             "llm_cache_refs": {"answer": "cache-456"},
@@ -335,6 +401,7 @@ class TestFork:
 
         assert forked.metadata["actor_id"] == "actor_2"
         assert forked.metadata["checkpoint_db_path"] == "/tmp/ray_actors/actor_2/wtb_checkpoints.db"
+        assert forked.metadata["state_adapter_backend"] == "node_sqlite"
         assert forked.metadata["llm_cache_path"] == "/tmp/ray_actors/actor_2/llm_response_cache.db"
         assert forked.metadata["llm_cache_refs"] == {"answer": "cache-456"}
         assert forked.metadata["llm_cache_hits"] == {"answer": False}

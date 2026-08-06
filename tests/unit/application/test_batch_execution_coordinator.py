@@ -46,6 +46,15 @@ from wtb.domain.models.outbox import OutboxEventType
 def mock_uow():
     """Create mock UnitOfWork."""
     uow = MagicMock()
+    stored_execution = Execution(
+        id="fixture-execution",
+        workflow_id="fixture-workflow",
+        status=ExecutionStatus.PAUSED,
+        state=ExecutionState(current_node_id="fixture-node"),
+        metadata={},
+    )
+    uow.executions = MagicMock()
+    uow.executions.get.return_value = stored_execution
     uow.outbox = MagicMock()
     uow.__enter__ = MagicMock(return_value=uow)
     uow.__exit__ = MagicMock(return_value=None)

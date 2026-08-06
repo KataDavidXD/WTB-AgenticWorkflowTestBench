@@ -24,7 +24,7 @@ from typing import List, Optional, Dict, Any
 
 import aiofiles
 import aiofiles.os
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wtb.domain.models.file_processing import (
@@ -118,16 +118,29 @@ class AsyncSQLAlchemyBlobRepository(IAsyncBlobRepository):
             storage_location=str(storage_location),
             content_size=len(content),
         )
+
+        # Besides closing the read-then-insert race, this UPDATE ensures the
+        # database has a real outer write transaction before a SAVEPOINT is
+        # opened. That matters on SQLite, where releasing an outermost
+        # SAVEPOINT can otherwise make the insert survive a later rollback.
+        increment_result = await self._session.execute(
+            update(FileBlobORM)
+            .where(FileBlobORM.content_hash == blob_id.value)
+            .values(reference_count=FileBlobORM.reference_count + 1)
+        )
+        if increment_result.rowcount and increment_result.rowcount > 0:
+            return blob_id
+
         blob_orm = FileBlobORM(**orm_dict)
-        self._session.add(blob_orm)
-        
-        # Flush to detect conflicts early (for concurrent writes)
+
+        # Isolate a concurrent unique-key conflict to a savepoint. Rolling back
+        # the whole session here would discard unrelated caller-owned changes.
         try:
-            await self._session.flush()
+            async with self._session.begin_nested():
+                self._session.add(blob_orm)
+                await self._session.flush()
         except IntegrityError:
             # Concurrent write of same content - another transaction committed first
-            # Rollback our insert and fetch the existing record
-            await self._session.rollback()
             existing = await self._session.get(FileBlobORM, blob_id.value)
             if existing:
                 existing.reference_count += 1
@@ -503,17 +516,19 @@ class AsyncSQLAlchemyCheckpointFileLinkRepository(IAsyncCheckpointFileLinkReposi
         self._session = session
     
     async def aadd(self, link: CheckpointFileLink) -> None:
-        """Add or update checkpoint-file link asynchronously."""
-        existing = await self._session.get(CheckpointFileLinkORM, link.checkpoint_id)
+        """Add an immutable checkpoint-file link asynchronously."""
+        checkpoint_id = str(link.checkpoint_id)
+        existing = await self._session.get(CheckpointFileLinkORM, checkpoint_id)
         
         if existing:
-            existing.commit_id = link.commit_id.value
-            existing.linked_at = link.linked_at
-            existing.file_count = link.file_count
-            existing.total_size_bytes = link.total_size_bytes
+            if existing.commit_id != link.commit_id.value:
+                raise ValueError(
+                    f"Checkpoint {checkpoint_id} is already linked to another commit"
+                )
+            return
         else:
             link_orm = CheckpointFileLinkORM(
-                checkpoint_id=link.checkpoint_id,
+                checkpoint_id=checkpoint_id,
                 commit_id=link.commit_id.value,
                 linked_at=link.linked_at,
                 file_count=link.file_count,
@@ -523,14 +538,10 @@ class AsyncSQLAlchemyCheckpointFileLinkRepository(IAsyncCheckpointFileLinkReposi
     
     async def aget_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
         """Get link by checkpoint ID."""
-        try:
-            cp_id_int = int(checkpoint_id)
-            link_orm = await self._session.get(CheckpointFileLinkORM, cp_id_int)
-            if not link_orm:
-                return None
-            return self._orm_to_domain(link_orm)
-        except ValueError:
+        link_orm = await self._session.get(CheckpointFileLinkORM, str(checkpoint_id))
+        if not link_orm:
             return None
+        return self._orm_to_domain(link_orm)
     
     async def aget_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
         """Get all links for a commit."""
@@ -543,16 +554,12 @@ class AsyncSQLAlchemyCheckpointFileLinkRepository(IAsyncCheckpointFileLinkReposi
     
     async def adelete_by_checkpoint(self, checkpoint_id: str) -> bool:
         """Delete link by checkpoint ID."""
-        try:
-            cp_id_int = int(checkpoint_id)
-            link_orm = await self._session.get(CheckpointFileLinkORM, cp_id_int)
-            if not link_orm:
-                return False
-            
-            await self._session.delete(link_orm)
-            return True
-        except ValueError:
+        link_orm = await self._session.get(CheckpointFileLinkORM, str(checkpoint_id))
+        if not link_orm:
             return False
+
+        await self._session.delete(link_orm)
+        return True
     
     async def adelete_by_commit(self, commit_id: CommitId) -> int:
         """Delete all links for a commit."""

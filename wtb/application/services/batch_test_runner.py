@@ -33,7 +33,9 @@ Usage:
 """
 
 import base64
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+import copy
+import math
+from concurrent.futures import ThreadPoolExecutor, Future, FIRST_COMPLETED, wait
 from threading import Lock
 from typing import Dict, Any, List, Optional, Callable, TYPE_CHECKING
 from datetime import datetime
@@ -47,6 +49,7 @@ from wtb.domain.models.batch_test import (
     BatchTestResult,
     BatchTestStatus,
     VariantCombination,
+    normalize_finite_metrics,
 )
 from wtb.domain.models.workflow import Execution, ExecutionStatus, TestWorkflow
 from wtb.domain.interfaces.batch_runner import (
@@ -74,6 +77,14 @@ class _RunningTest:
     completed: int = 0
     failed: int = 0
     cancelled: bool = False
+
+
+@dataclass
+class _VariantTaskState:
+    """Monotonic start time for per-variant timeout accounting."""
+    execution_id: str
+    started_at: Optional[float] = None
+    finished_at: Optional[float] = None
 
 
 class ThreadPoolBatchTestRunner(IBatchTestRunner):
@@ -142,7 +153,9 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             uow_factory: Legacy factory to create isolated UnitOfWork per thread
             state_adapter_factory: Legacy factory to create isolated StateAdapter per thread
             max_workers: Maximum concurrent workers
-            execution_timeout_seconds: Timeout for each variant execution
+            execution_timeout_seconds: Soft deadline for each variant. A result
+                completing after the deadline is failed, but the worker is safely
+                drained before a terminal batch result is returned.
             config: Optional WTBConfig for creating coordinators.
             
         Note:
@@ -159,6 +172,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         self._executor: Optional[ThreadPoolExecutor] = None
         self._running_tests: Dict[str, _RunningTest] = {}
         self._lock = Lock()
+        self._lifecycle_lock = Lock()
         self._shutdown = False
     
     # ═══════════════════════════════════════════════════════════════
@@ -175,84 +189,161 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         3. Wait for completion with progress tracking
         4. Aggregate results and build comparison matrix
         """
-        if self._shutdown:
-            raise BatchRunnerError("Runner has been shut down")
-        
+        if (
+            isinstance(self._max_workers, bool)
+            or not isinstance(self._max_workers, int)
+            or self._max_workers <= 0
+        ):
+            raise BatchRunnerError("max_workers must be a positive integer")
+
+        try:
+            timeout_seconds = float(self._execution_timeout)
+        except (TypeError, ValueError) as error:
+            raise BatchRunnerError(
+                "execution_timeout_seconds must be a finite non-negative number"
+            ) from error
+        if not math.isfinite(timeout_seconds) or timeout_seconds < 0:
+            raise BatchRunnerError(
+                "execution_timeout_seconds must be a finite non-negative number"
+            )
+
         # Validate batch test
         if not batch_test.variant_combinations:
             raise BatchRunnerError("No variant combinations to execute")
+
+        combination_names = [
+            combination.name for combination in batch_test.variant_combinations
+        ]
+        if len(set(combination_names)) != len(combination_names):
+            raise BatchRunnerError("Duplicate combination name in batch test")
         
         # Resolve workflow locally (not on self) for thread safety when
         # concurrent run_batch_test calls share the same runner instance.
         batch_workflow = getattr(batch_test, '_workflow', None)
-        
-        batch_test.start()
-        
-        # Ensure executor exists
-        if self._executor is None:
-            self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
-        
-        # Track running state
-        running_test = _RunningTest(
-            batch_test_id=batch_test.id,
-            futures=[],
-            started_at=datetime.now(),
-        )
-        
-        with self._lock:
-            self._running_tests[batch_test.id] = running_test
-        
+        batch_metadata = dict(batch_test.metadata or {})
+
         try:
-            # Submit all variants
-            futures_to_combo: Dict[Future, VariantCombination] = {}
-            
-            for combo in batch_test.variant_combinations:
-                runtime_graph = getattr(combo, "_runtime_graph", None)
-                future = self._executor.submit(
-                    self._execute_variant,
-                    batch_test.workflow_id,
-                    combo,
-                    batch_test.initial_state.copy(),
-                    runtime_graph,
-                    batch_workflow,
-                )
-                futures_to_combo[future] = combo
-                running_test.futures.append(future)
-            
-            # Process results as they complete
-            for future in as_completed(futures_to_combo.keys()):
-                combo = futures_to_combo[future]
-                
-                # Check for cancellation under lock for visibility
+            isolated_initial_states = [
+                copy.deepcopy(batch_test.initial_state)
+                for _ in batch_test.variant_combinations
+            ]
+        except Exception as error:
+            raise BatchRunnerError(
+                f"Failed to isolate initial state: {error}"
+            ) from error
+        
+        (
+            running_test,
+            futures_to_combo,
+            future_states,
+        ) = self._start_and_submit_batch(
+            batch_test,
+            batch_workflow,
+            batch_metadata,
+            isolated_initial_states,
+        )
+
+        try:
+            # A terminal BatchTest must not leave worker side effects running.
+            pending = set(futures_to_combo)
+            timed_out: set[Future] = set()
+
+            while pending:
                 with self._lock:
                     cancelled = running_test.cancelled
-                if cancelled:
-                    break
-                
-                try:
-                    result = future.result(timeout=self._execution_timeout)
-                    batch_test.add_result(result)
-                    
-                    with self._lock:
-                        if result.success:
-                            running_test.completed += 1
-                        else:
+
+                now = time.monotonic()
+                for future in pending:
+                    if cancelled:
+                        future.cancel()
+                        continue
+                    task_state = future_states[future]
+                    if (
+                        task_state.started_at is not None
+                        and now - task_state.started_at >= timeout_seconds
+                    ):
+                        timed_out.add(future)
+                        future.cancel()
+
+                done, _ = wait(
+                    pending,
+                    timeout=0.05,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
+
+                with self._lock:
+                    cancelled = running_test.cancelled
+
+                for future in done:
+                    pending.discard(future)
+                    if cancelled:
+                        continue
+
+                    task_state = future_states[future]
+                    if (
+                        task_state.started_at is not None
+                        and task_state.finished_at is not None
+                        and task_state.finished_at - task_state.started_at
+                        >= timeout_seconds
+                    ):
+                        timed_out.add(future)
+
+                    combo = futures_to_combo[future]
+                    if future in timed_out:
+                        timeout_execution_id = task_state.execution_id
+                        try:
+                            drained_result = future.result()
+                        except BaseException:
+                            drained_result = None
+                        drained_execution_id = getattr(
+                            drained_result,
+                            "execution_id",
+                            "",
+                        )
+                        if drained_execution_id:
+                            timeout_execution_id = drained_execution_id
+                        timeout_message = (
+                            "Variant execution timed out after "
+                            f"{timeout_seconds:g} seconds"
+                        )
+                        logger.error(f"Variant {combo.name}: {timeout_message}")
+                        batch_test.add_result(BatchTestResult(
+                            combination_name=combo.name,
+                            execution_id=timeout_execution_id,
+                            success=False,
+                            duration_ms=int(timeout_seconds * 1000),
+                            error_message=timeout_message,
+                        ))
+                        with self._lock:
                             running_test.failed += 1
-                            
-                except Exception as e:
-                    logger.error(f"Variant {combo.name} failed: {e}")
-                    
-                    error_result = BatchTestResult(
-                        combination_name=combo.name,
-                        execution_id="",
-                        success=False,
-                        error_message=str(e),
-                    )
-                    batch_test.add_result(error_result)
-                    
-                    with self._lock:
-                        running_test.failed += 1
-            
+                        continue
+
+                    try:
+                        result = future.result()
+                        batch_test.add_result(result)
+
+                        with self._lock:
+                            if result.success:
+                                running_test.completed += 1
+                            else:
+                                running_test.failed += 1
+
+                    except Exception as e:
+                        logger.error(f"Variant {combo.name} failed: {e}")
+
+                        error_result = BatchTestResult(
+                            combination_name=combo.name,
+                            execution_id=task_state.execution_id,
+                            success=False,
+                            error_message=str(e),
+                        )
+                        batch_test.add_result(error_result)
+
+                        with self._lock:
+                            running_test.failed += 1
+
             # Finalize
             if running_test.cancelled:
                 batch_test.cancel()
@@ -267,7 +358,98 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         finally:
             with self._lock:
                 self._running_tests.pop(batch_test.id, None)
-    
+
+    def _start_and_submit_batch(
+        self,
+        batch_test: BatchTest,
+        batch_workflow: Optional[Any],
+        batch_metadata: Dict[str, Any],
+        isolated_initial_states: List[Dict[str, Any]],
+    ) -> tuple[
+        _RunningTest,
+        Dict[Future, VariantCombination],
+        Dict[Future, _VariantTaskState],
+    ]:
+        """Atomically open the executor gate and submit one complete batch."""
+        with self._lifecycle_lock:
+            if self._shutdown:
+                raise BatchRunnerError("Runner has been shut down")
+
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+            executor = self._executor
+            batch_test.start()
+
+            running_test = _RunningTest(
+                batch_test_id=batch_test.id,
+                futures=[],
+                started_at=datetime.now(),
+            )
+            with self._lock:
+                self._running_tests[batch_test.id] = running_test
+
+            futures_to_combo: Dict[Future, VariantCombination] = {}
+            future_states: Dict[Future, _VariantTaskState] = {}
+            try:
+                for combo, isolated_initial_state in zip(
+                    batch_test.variant_combinations,
+                    isolated_initial_states,
+                ):
+                    runtime_graph = getattr(combo, "_runtime_graph", None)
+                    task_state = _VariantTaskState(execution_id=str(uuid.uuid4()))
+                    future = executor.submit(
+                        self._execute_variant_task,
+                        task_state,
+                        batch_test.workflow_id,
+                        combo,
+                        isolated_initial_state,
+                        runtime_graph,
+                        batch_workflow,
+                        batch_metadata,
+                    )
+                    futures_to_combo[future] = combo
+                    future_states[future] = task_state
+                    running_test.futures.append(future)
+            except BaseException as error:
+                for future in futures_to_combo:
+                    future.cancel()
+                if futures_to_combo:
+                    wait(list(futures_to_combo))
+                if batch_test.status is BatchTestStatus.RUNNING:
+                    batch_test.fail(f"Variant submission failed: {error}")
+                with self._lock:
+                    self._running_tests.pop(batch_test.id, None)
+                raise BatchRunnerError(
+                    f"Variant submit failed: {error}"
+                ) from error
+
+            return running_test, futures_to_combo, future_states
+
+    def _execute_variant_task(
+        self,
+        task_state: _VariantTaskState,
+        workflow_id: str,
+        combo: VariantCombination,
+        initial_state: Dict[str, Any],
+        workflow_graph: Optional[Any],
+        batch_workflow: Optional[Any],
+        batch_metadata: Dict[str, Any],
+    ) -> BatchTestResult:
+        """Record the actual worker start before executing a variant."""
+        task_state.started_at = time.monotonic()
+        try:
+            return self._execute_variant(
+                workflow_id,
+                combo,
+                initial_state,
+                workflow_graph,
+                batch_workflow,
+                batch_metadata,
+                task_state.execution_id,
+            )
+        finally:
+            task_state.finished_at = time.monotonic()
+
     def _execute_variant(
         self,
         workflow_id: str,
@@ -275,6 +457,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         initial_state: Dict[str, Any],
         workflow_graph: Optional[Any] = None,
         batch_workflow: Optional[Any] = None,
+        batch_metadata: Optional[Dict[str, Any]] = None,
+        execution_id: Optional[str] = None,
     ) -> BatchTestResult:
         """
         Execute a single variant combination.
@@ -298,7 +482,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         - Durability: Results persisted via UoW.commit()
         """
         start_time = time.time()
-        execution_id = str(uuid.uuid4())
+        execution_id = execution_id or str(uuid.uuid4())
         
         try:
             if workflow_graph is None:
@@ -322,11 +506,76 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                             failed_variant=combo.name,
                         ) from graph_error
 
+            if workflow_graph is None:
+                graph_factory_pickled = (batch_metadata or {}).get(
+                    "_graph_factory_pickled"
+                )
+                if graph_factory_pickled:
+                    try:
+                        try:
+                            import cloudpickle
+                        except ImportError:
+                            from ray import cloudpickle
+                        factory_payload = (
+                            base64.b64decode(
+                                graph_factory_pickled.encode("ascii"),
+                                validate=True,
+                            )
+                            if isinstance(graph_factory_pickled, str)
+                            else graph_factory_pickled
+                        )
+                        graph_factory = cloudpickle.loads(factory_payload)
+                        if not callable(graph_factory):
+                            raise TypeError("Serialized graph factory is not callable")
+                        workflow_graph = graph_factory()
+                        if workflow_graph is None:
+                            raise ValueError("Serialized graph factory returned no graph")
+                    except Exception as factory_error:
+                        raise BatchRunnerExecutionError(
+                            f"Failed to load serialized graph factory: {factory_error}",
+                            batch_test_id="",
+                            failed_variant=combo.name,
+                        ) from factory_error
+
+            if workflow_graph is None:
+                graph_factory_module = getattr(
+                    combo, "graph_factory_module", None
+                ) or (combo.metadata or {}).get("graph_factory_module")
+                graph_factory_name = getattr(
+                    combo, "graph_factory_name", None
+                ) or (combo.metadata or {}).get("graph_factory_name")
+                if graph_factory_module or graph_factory_name:
+                    if not graph_factory_module or not graph_factory_name:
+                        raise BatchRunnerExecutionError(
+                            "Configured graph factory requires module and name",
+                            batch_test_id="",
+                            failed_variant=combo.name,
+                        )
+                    try:
+                        from wtb.application.services.graph_loader import (
+                            load_graph_factory,
+                        )
+
+                        factory_fn = load_graph_factory(
+                            graph_factory_module,
+                            graph_factory_name,
+                        )
+                        workflow_graph = factory_fn()
+                        if workflow_graph is None:
+                            raise ValueError("graph factory returned no graph")
+                    except Exception as factory_error:
+                        raise BatchRunnerExecutionError(
+                            f"Failed to load configured graph factory: {factory_error}",
+                            batch_test_id="",
+                            failed_variant=combo.name,
+                        ) from factory_error
+
             # v1.7: Use controller factory if available (preferred)
             if self._controller_factory is not None:
                 return self._execute_with_controller_factory(
                     workflow_id, combo, initial_state, workflow_graph, start_time,
                     batch_workflow,
+                    execution_id,
                 )
             
             # Legacy path: use uow_factory + state_adapter_factory
@@ -355,6 +604,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         workflow_graph: Optional[Any],
         start_time: float,
         batch_workflow: Optional[Any] = None,
+        execution_id: Optional[str] = None,
     ) -> BatchTestResult:
         """
         Execute variant using v1.7 controller factory pattern.
@@ -364,29 +614,6 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         
         ACID Compliance: Each execution gets isolated controller + UoW.
         """
-        # Import graph from factory if not provided (mirror Ray pattern)
-        if workflow_graph is None:
-            graph_factory_module = getattr(combo, 'graph_factory_module', None)
-            graph_factory_name = getattr(combo, 'graph_factory_name', None)
-            if not graph_factory_module:
-                graph_factory_module = (combo.metadata or {}).get("graph_factory_module")
-            if not graph_factory_name:
-                graph_factory_name = (combo.metadata or {}).get("graph_factory_name")
-            if graph_factory_module and graph_factory_name:
-                try:
-                    from wtb.application.services.graph_loader import load_graph_factory
-                    factory_fn = load_graph_factory(graph_factory_module, graph_factory_name)
-                    workflow_graph = factory_fn()
-                    logger.info(
-                        f"ThreadPool: Imported graph from "
-                        f"{graph_factory_module}.{graph_factory_name} for {combo.name}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"ThreadPool: Failed to import graph factory "
-                        f"{graph_factory_module}.{graph_factory_name}: {e}"
-                    )
-        
         with self._controller_factory() as managed:
             controller = managed.controller
             uow = managed.uow
@@ -409,12 +636,13 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                     uow.rollback()
             
             variant_state = initial_state.copy()
-            variant_state["_variant_config"] = combo.variants
+            variant_state["_variant_config"] = copy.deepcopy(combo.variants)
             variant_state["_variant_name"] = combo.name
             
             execution = controller.create_execution(
                 workflow=workflow,
                 initial_state=variant_state,
+                execution_id=execution_id,
             )
             
             execution = controller.run(execution.id, graph=workflow_graph)
@@ -491,13 +719,14 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             
             # Apply variants to initial state
             variant_state = initial_state.copy()
-            variant_state["_variant_config"] = combo.variants
+            variant_state["_variant_config"] = copy.deepcopy(combo.variants)
             variant_state["_variant_name"] = combo.name
             
             # Create and run execution
             execution = controller.create_execution(
                 workflow=workflow,
                 initial_state=variant_state,
+                execution_id=execution_id,
             )
             
             execution = controller.run(execution.id, graph=workflow_graph)
@@ -537,11 +766,11 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             
             # Common metric patterns
             if "overall_score" in vars:
-                metrics["overall_score"] = float(vars["overall_score"])
+                metrics["overall_score"] = vars["overall_score"]
             if "accuracy" in vars:
-                metrics["accuracy"] = float(vars["accuracy"])
+                metrics["accuracy"] = vars["accuracy"]
             if "latency_ms" in vars:
-                metrics["latency_ms"] = float(vars["latency_ms"])
+                metrics["latency_ms"] = vars["latency_ms"]
             if "_metrics" in vars and isinstance(vars["_metrics"], dict):
                 metrics.update(vars["_metrics"])
         
@@ -549,7 +778,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         if "overall_score" not in metrics:
             metrics["overall_score"] = 1.0 if execution.status == ExecutionStatus.COMPLETED else 0.0
         
-        return metrics
+        return normalize_finite_metrics(metrics)
     
     
     def get_status(self, batch_test_id: str) -> BatchRunnerStatus:
@@ -620,12 +849,12 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
 
     def shutdown(self) -> None:
         """Shutdown the executor."""
-        self._shutdown = True
-        
-        if self._executor is not None:
-            self._executor.shutdown(wait=True)
-            self._executor = None
-        
+        with self._lifecycle_lock:
+            self._shutdown = True
+            if self._executor is not None:
+                self._executor.shutdown(wait=True)
+                self._executor = None
+
         with self._lock:
             self._running_tests.clear()
 

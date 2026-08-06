@@ -79,7 +79,7 @@ class TestCheckpointFileLinkRepository:
         retrieved = repo.get_by_checkpoint(42)
         
         assert retrieved is not None
-        assert retrieved.checkpoint_id == 42
+        assert retrieved.checkpoint_id == "42"
         assert retrieved.commit_id.value == commit_id.value
         assert retrieved.file_count == 5
         assert retrieved.total_size_bytes == 1024000

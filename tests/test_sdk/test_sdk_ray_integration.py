@@ -249,6 +249,7 @@ class TestSDKBatchTesting:
         item = result.results[0]
         assert item.success is True
         assert item.error_message is None
+        assert item.overall_score == 1.0
 
         execution = wtb_langgraph.get_execution(item.execution_id)
         assert execution.status is ExecutionStatus.COMPLETED
@@ -520,6 +521,287 @@ class TestSDKBatchTesting:
         assert len(result.results) == 1
         assert result.results[0].success is True
 
+    def test_sequential_continues_after_one_test_case_raises(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+    ):
+        """Each matrix cell must produce a result even if one run raises."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"sequential_case_failure_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        wtb_langgraph.register_project(project)
+        created_ids = iter(("exec-0", "exec-1", "exec-2"))
+
+        def create_execution(**_kwargs):
+            return SimpleNamespace(id=next(created_ids))
+
+        def run_execution(execution_id, graph):
+            assert graph is not None
+            if execution_id == "exec-1":
+                raise RuntimeError("case one failed")
+            score = 0.9 if execution_id == "exec-0" else 0.7
+            return SimpleNamespace(
+                id=execution_id,
+                status=ExecutionStatus.COMPLETED,
+                error_message=None,
+                checkpoint_id=None,
+                state=SimpleNamespace(
+                    workflow_variables={
+                        "overall_score": score,
+                        "_metrics": {"accuracy": score - 0.1},
+                        "unrelated_number": 99,
+                    },
+                    execution_path=[],
+                ),
+            )
+
+        with (
+            patch.object(
+                wtb_langgraph._exec_ctrl,
+                "create_execution",
+                side_effect=create_execution,
+            ),
+            patch.object(
+                wtb_langgraph._exec_ctrl,
+                "run",
+                side_effect=run_execution,
+            ),
+        ):
+            result = wtb_langgraph.run_batch_test(
+                project=project.name,
+                variant_matrix=[{}],
+                test_cases=[{"case": 0}, {"case": 1}, {"case": 2}],
+            )
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert len(result.results) == 3
+        assert [item.test_case_index for item in result.results] == [0, 1, 2]
+        assert [item.success for item in result.results] == [True, False, True]
+        assert [item.overall_score for item in result.results] == [0.9, 0.0, 0.7]
+        assert result.results[0].metrics == {
+            "overall_score": 0.9,
+            "accuracy": 0.8,
+        }
+        assert result.best_combination_name is None
+
+    def test_sequential_deep_copies_nested_state_for_each_execution(
+        self,
+        wtb_langgraph,
+        simple_graph_factory,
+    ):
+        """A run cannot mutate another variant's nested initial state."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"sequential_state_isolation_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="sequential"),
+        )
+        wtb_langgraph.register_project(project)
+        source_case = {"nested": {"seen": []}}
+        created_ids = iter(("exec-a", "exec-b"))
+        received_states = []
+
+        def create_execution(workflow, initial_state):
+            received_states.append(list(initial_state["nested"]["seen"]))
+            initial_state["nested"]["seen"].append("worker-mutation")
+            return SimpleNamespace(id=next(created_ids))
+
+        def run_execution(execution_id, graph):
+            return SimpleNamespace(
+                id=execution_id,
+                status=ExecutionStatus.COMPLETED,
+                error_message=None,
+                checkpoint_id=None,
+                state=SimpleNamespace(
+                    workflow_variables={},
+                    execution_path=[],
+                ),
+            )
+
+        with (
+            patch.object(
+                wtb_langgraph._exec_ctrl,
+                "create_execution",
+                side_effect=create_execution,
+            ),
+            patch.object(
+                wtb_langgraph._exec_ctrl,
+                "run",
+                side_effect=run_execution,
+            ),
+        ):
+            result = wtb_langgraph.run_batch_test(
+                project=project.name,
+                variant_matrix=[{}, {}],
+                test_cases=[source_case],
+            )
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert received_states == [[], []]
+        assert source_case == {"nested": {"seen": []}}
+
+    def test_all_batch_inputs_are_isolated_before_first_runner_call(
+        self,
+        wtb_inmemory,
+        simple_graph_factory,
+    ):
+        """An uncopyable later case cannot allow an earlier case to run."""
+        from unittest.mock import MagicMock
+        from wtb.sdk import ExecutionConfig
+
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("cannot isolate later case")
+
+        project = WorkflowProject(
+            name=f"precopy_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="threadpool"),
+        )
+        wtb_inmemory.register_project(project)
+        runner = MagicMock()
+        wtb_inmemory._batch_runner = runner
+
+        with pytest.raises(TypeError, match="cannot isolate later case"):
+            wtb_inmemory.run_batch_test(
+                project=project.name,
+                variant_matrix=[{}],
+                test_cases=[{"case": 0}, {"value": Uncopyable()}],
+            )
+
+        runner.run_batch_test.assert_not_called()
+
+    @pytest.mark.parametrize("executor", ["threadpool", "ray"])
+    def test_complete_multi_case_matrix_uses_global_success_status(
+        self,
+        wtb_inmemory,
+        simple_graph_factory,
+        executor,
+    ):
+        """A complete matrix with any success has the same status in every mode."""
+        from wtb.application.services.batch_test_runner import (
+            ThreadPoolBatchTestRunner,
+        )
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"{executor}_partial_success_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor=executor),
+        )
+        wtb_inmemory.register_project(project)
+
+        if executor == "threadpool":
+            runner = ThreadPoolBatchTestRunner.__new__(ThreadPoolBatchTestRunner)
+        else:
+            fake_ray_type = type(
+                "RayBatchTestRunner",
+                (),
+                {"__module__": "wtb.application.services.ray_batch_runner"},
+            )
+            runner = fake_ray_type()
+
+        calls = 0
+
+        def run_case(batch):
+            nonlocal calls
+            batch.start()
+            success = calls == 1
+            batch.add_result(
+                BatchTestResult(
+                    combination_name="variant_0",
+                    execution_id=f"exec-{calls}",
+                    success=success,
+                    overall_score=0.5 if success else 0.0,
+                )
+            )
+            calls += 1
+            if success:
+                batch.complete()
+            else:
+                batch.fail("all variants failed for this case")
+            return batch
+
+        runner.run_batch_test = run_case
+        wtb_inmemory._batch_runner = runner
+
+        result = wtb_inmemory.run_batch_test(
+            project=project.name,
+            variant_matrix=[{}],
+            test_cases=[{"case": 0}, {"case": 1}],
+        )
+
+        assert result.status is BatchTestStatus.COMPLETED
+        assert result.is_complete() is True
+        assert [item.success for item in result.results] == [False, True]
+        assert result.best_combination_name is None
+
+    def test_multi_case_rejects_duplicate_result_identity_with_missing_combo(
+        self,
+        wtb_inmemory,
+        simple_graph_factory,
+    ):
+        """A result count match cannot hide a missing combination identity."""
+        from wtb.application.services.batch_test_runner import (
+            ThreadPoolBatchTestRunner,
+        )
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"identity_incomplete_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="threadpool"),
+        )
+        wtb_inmemory.register_project(project)
+        runner = ThreadPoolBatchTestRunner.__new__(ThreadPoolBatchTestRunner)
+        case_index = 0
+
+        def run_case(batch):
+            nonlocal case_index
+            batch.start()
+            batch.add_result(
+                BatchTestResult(
+                    combination_name="variant_0",
+                    execution_id=f"exec-{case_index}-a",
+                    success=True,
+                    overall_score=0.8,
+                )
+            )
+            batch.add_result(
+                BatchTestResult(
+                    combination_name="variant_0",
+                    execution_id=f"exec-{case_index}-duplicate",
+                    success=True,
+                    overall_score=0.7,
+                )
+            )
+            case_index += 1
+            batch.complete()
+            return batch
+
+        runner.run_batch_test = run_case
+        wtb_inmemory._batch_runner = runner
+
+        result = wtb_inmemory.run_batch_test(
+            project=project.name,
+            variant_matrix=[{}, {"node_b": "alternate"}],
+            test_cases=[{"case": 0}, {"case": 1}],
+        )
+
+        assert result.status is BatchTestStatus.FAILED
+        assert result.is_complete() is False
+        assert "identities" in result.metadata["error_message"]
+
     def test_multi_case_batch_rebuilds_aggregate_metadata(self, wtb_inmemory):
         """Aggregated results must rebuild IDs, best result, and comparison data."""
         from tests.integration.test_real_file_control_flow_modes import (
@@ -555,6 +837,9 @@ class TestSDKBatchTesting:
 
         assert result.status is BatchTestStatus.COMPLETED
         assert len(result.results) == 2
+        assert result.metadata["test_case_count"] == 2
+        assert [item.test_case_index for item in result.results] == [0, 1]
+        assert result.is_complete() is True
         assert all(item.success for item in result.results)
         result_ids = {item.execution_id for item in result.results}
         assert set(result.execution_ids) == result_ids
@@ -624,6 +909,76 @@ class TestSDKBatchTesting:
         assert result.status is expected_status
         assert len(result.results) == 1
         assert result.results[0].execution_id == "completed-case"
+
+    def test_batch_control_operations_resolve_graph_from_result_execution(
+        self,
+        wtb_inmemory,
+    ):
+        """Rollback, fork, and checkpoint reads must not use the first project."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        first_graph = object()
+        expected_graph = object()
+        first_project = SimpleNamespace(
+            id="workflow-first",
+            build_graph=MagicMock(return_value=first_graph),
+        )
+        expected_project = SimpleNamespace(
+            id="workflow-expected",
+            build_graph=MagicMock(return_value=expected_graph),
+        )
+        wtb_inmemory._project_cache = {
+            "first": first_project,
+            "expected": expected_project,
+        }
+        source_execution = SimpleNamespace(
+            id="exec-expected",
+            workflow_id="workflow-expected",
+            state=None,
+        )
+        batch_result = BatchTestResult(
+            combination_name="variant_0",
+            execution_id=source_execution.id,
+            success=True,
+            last_checkpoint_id="checkpoint-1",
+        )
+        coordinator = MagicMock()
+        coordinator.rollback.return_value = source_execution
+        coordinator.fork.return_value = SimpleNamespace(id="forked-execution")
+        coordinator.get_checkpoints.return_value = [
+            {
+                "checkpoint_id": "checkpoint-1",
+                "step": 1,
+                "writes": {},
+                "next": [],
+                "values": {},
+            }
+        ]
+
+        with (
+            patch.object(
+                wtb_inmemory,
+                "get_batch_coordinator",
+                return_value=coordinator,
+            ),
+            patch.object(
+                wtb_inmemory,
+                "get_execution",
+                return_value=source_execution,
+            ),
+        ):
+            rollback = wtb_inmemory.rollback_batch_result(batch_result)
+            fork = wtb_inmemory.fork_batch_result(batch_result)
+            checkpoints = wtb_inmemory.get_batch_result_checkpoints(batch_result)
+
+        assert rollback.success is True
+        assert fork.error is None
+        assert fork.fork_execution_id == "forked-execution"
+        assert checkpoints
+        assert coordinator.rollback.call_args.kwargs["graph"] is expected_graph
+        assert coordinator.fork.call_args.kwargs["graph"] is expected_graph
+        assert coordinator.get_checkpoints.call_args.kwargs["graph"] is expected_graph
 
     def test_case_batches_keep_pickled_graph_factory_metadata(self, wtb_inmemory):
         """Every case batch must retain an unimportable graph factory."""

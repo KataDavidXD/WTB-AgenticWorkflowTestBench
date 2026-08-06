@@ -9,7 +9,35 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from enum import Enum
+import math
+from numbers import Real
 import uuid
+
+
+def normalize_finite_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
+    """Return numeric finite metrics or reject the entire metric payload."""
+    if not isinstance(metrics, dict):
+        raise ValueError("metrics must be a dictionary of finite real numbers")
+
+    normalized: Dict[str, float] = {}
+    for name, value in metrics.items():
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise ValueError(f"metric '{name}' must be a finite real number")
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError(f"metric '{name}' must be a finite real number")
+        normalized[name] = numeric
+    return normalized
+
+
+def normalize_finite_score(value: Any, name: str = "overall_score") -> float:
+    """Normalize one score with the same contract as metric values."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"metric '{name}' must be a finite real number")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"metric '{name}' must be a finite real number")
+    return normalized
 
 
 class BatchTestStatus(Enum):
@@ -109,7 +137,12 @@ class BatchTestResult:
     file_commit_id: Optional[str] = None      # FileTracker commit ID
     checkpoint_count: int = 0                  # Number of checkpoints
     last_checkpoint_id: Optional[str] = None   # Most recent checkpoint ID
+    test_case_index: Optional[int] = None       # Multi-case result identity
     
+    def __post_init__(self) -> None:
+        self.metrics = normalize_finite_metrics(self.metrics)
+        self.overall_score = normalize_finite_score(self.overall_score)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "combination_name": self.combination_name,
@@ -123,6 +156,7 @@ class BatchTestResult:
             "file_commit_id": self.file_commit_id,
             "checkpoint_count": self.checkpoint_count,
             "last_checkpoint_id": self.last_checkpoint_id,
+            "test_case_index": self.test_case_index,
         }
     
     @classmethod
@@ -139,6 +173,7 @@ class BatchTestResult:
             file_commit_id=data.get("file_commit_id"),
             checkpoint_count=data.get("checkpoint_count", 0),
             last_checkpoint_id=data.get("last_checkpoint_id"),
+            test_case_index=data.get("test_case_index"),
         )
 
 
@@ -205,9 +240,9 @@ class BatchTest:
         """
         if self.status != BatchTestStatus.RUNNING:
             raise ValueError(f"Cannot complete batch test in status {self.status.value}")
+        self._determine_best()
         self.status = BatchTestStatus.COMPLETED
         self.completed_at = datetime.now()
-        self._determine_best()
     
     def fail(self, error_message: str):
         """
@@ -242,17 +277,61 @@ class BatchTest:
         if result.execution_id not in self.execution_ids:
             self.execution_ids.append(result.execution_id)
     
+    def _expected_test_case_count(self) -> int:
+        """Return the number of cases required for each combination."""
+        try:
+            return max(1, int(self.metadata.get("test_case_count", 1)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _results_by_combination(self) -> Dict[str, List[BatchTestResult]]:
+        """Group results while preserving combination insertion order."""
+        grouped: Dict[str, List[BatchTestResult]] = {}
+        for result in self.results:
+            grouped.setdefault(result.combination_name, []).append(result)
+        return grouped
+
+    def _aggregate_scores(self) -> Dict[str, float]:
+        """Average complete per-case scores for each combination."""
+        expected = self._expected_test_case_count()
+        aggregate_scores: Dict[str, float] = {}
+        for name, results in self._results_by_combination().items():
+            if len(results) != expected:
+                continue
+            if expected > 1:
+                case_indexes = {
+                    result.test_case_index for result in results
+                }
+                if case_indexes != set(range(expected)):
+                    continue
+            aggregate_scores[name] = sum(
+                result.overall_score for result in results
+            ) / expected
+        return aggregate_scores
+
     def _determine_best(self):
-        """Determine the best variant combination based on scores."""
+        """Determine the best complete combination by mean score across cases."""
         if not self.results:
             return
         
-        successful = [r for r in self.results if r.success]
-        if not successful:
-            return
-        
-        best = max(successful, key=lambda r: r.overall_score)
-        self.best_combination_name = best.combination_name
+        expected = self._expected_test_case_count()
+        candidates: List[tuple[float, str]] = []
+        for name, results in self._results_by_combination().items():
+            if len(results) != expected or any(not result.success for result in results):
+                continue
+
+            if expected > 1:
+                case_indexes = [result.test_case_index for result in results]
+                if set(case_indexes) != set(range(expected)):
+                    continue
+
+            candidates.append((
+                sum(result.overall_score for result in results) / expected,
+                name,
+            ))
+
+        if candidates:
+            _, self.best_combination_name = max(candidates, key=lambda item: item[0])
     
     def build_comparison_matrix(self) -> Dict[str, Any]:
         """Build a comparison matrix of all results."""
@@ -268,6 +347,7 @@ class BatchTest:
             "combinations": [],
             "metrics": list(all_metrics),
             "data": [],
+            "aggregate_scores": self._aggregate_scores(),
         }
         
         for result in self.results:
@@ -276,6 +356,7 @@ class BatchTest:
                 "execution_id": result.execution_id,
                 "success": result.success,
                 "overall_score": result.overall_score,
+                "test_case_index": result.test_case_index,
                 "duration_ms": result.duration_ms,
                 # v1.8: Rollback support fields for coordinator access
                 "file_commit_id": result.file_commit_id,
@@ -285,7 +366,15 @@ class BatchTest:
             for metric in all_metrics:
                 row[metric] = result.metrics.get(metric)
             
-            matrix["combinations"].append(result.combination_name)
+            row_label = result.combination_name
+            if (
+                self._expected_test_case_count() > 1
+                and result.test_case_index is not None
+            ):
+                row_label = (
+                    f"{result.combination_name}[case_{result.test_case_index}]"
+                )
+            matrix["combinations"].append(row_label)
             matrix["data"].append(row)
         
         self.comparison_matrix = matrix
@@ -308,8 +397,30 @@ class BatchTest:
         return successful / len(self.results)
     
     def is_complete(self) -> bool:
-        """Check if all variant combinations have been executed."""
-        return len(self.results) >= len(self.variant_combinations)
+        """Check if every variant has a result for every requested test case."""
+        expected_cases = self._expected_test_case_count()
+        combination_names = [item.name for item in self.variant_combinations]
+        if len(combination_names) != len(set(combination_names)):
+            return False
+
+        expected_identities = {
+            (name, case_index)
+            for name in combination_names
+            for case_index in range(expected_cases)
+        }
+        actual_identities = [
+            (
+                result.combination_name,
+                0 if expected_cases == 1 and result.test_case_index is None
+                else result.test_case_index,
+            )
+            for result in self.results
+        ]
+        return (
+            len(actual_identities) == len(expected_identities)
+            and len(actual_identities) == len(set(actual_identities))
+            and set(actual_identities) == expected_identities
+        )
     
     # === Serialization ===
     

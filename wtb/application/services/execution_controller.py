@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class NodeBoundaryClaimConflict(RuntimeError):
+    """A competing runner owns or has advanced the durable node boundary."""
+
+
 _SAFE_COMPARE_OPS = {
     ast.Eq: operator.eq,
     ast.NotEq: operator.ne,
@@ -307,6 +311,27 @@ class ExecutionController(IExecutionController):
             if value:
                 metadata[field_name] = value
 
+        checkpoint_db_path = metadata.get("checkpoint_db_path")
+        if checkpoint_db_path:
+            adapter_backend = getattr(
+                self._state_adapter,
+                "state_adapter_backend",
+                None,
+            )
+            allowed_backends = {"langgraph_sqlite", "node_sqlite"}
+            if adapter_backend not in allowed_backends:
+                raise RuntimeError(
+                    "Cannot persist checkpoint_db_path without a recognized "
+                    "state_adapter_backend"
+                )
+            persisted_backend = metadata.get("state_adapter_backend")
+            if persisted_backend and persisted_backend != adapter_backend:
+                raise RuntimeError(
+                    "Execution state_adapter_backend does not match the current "
+                    "state adapter"
+                )
+            metadata["state_adapter_backend"] = adapter_backend
+
         if (
             "cache_storage_scope" not in metadata
             and (
@@ -321,7 +346,9 @@ class ExecutionController(IExecutionController):
         self, 
         workflow: TestWorkflow,
         initial_state: Optional[Dict[str, Any]] = None,
-        breakpoints: Optional[List[str]] = None
+        breakpoints: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        execution_id: Optional[str] = None,
     ) -> Execution:
         """Create a new execution for a workflow."""
         # Validate workflow
@@ -339,11 +366,15 @@ class ExecutionController(IExecutionController):
         
         # Create execution
         execution = Execution(
+            id=execution_id if execution_id is not None else str(uuid.uuid4()),
             workflow_id=workflow.id,
             status=ExecutionStatus.PENDING,
             state=state,
             breakpoints=breakpoints or [],
+            metadata=copy.deepcopy(metadata or {}),
         )
+
+        self._sync_external_cache_metadata(execution)
         
         # Initialize state adapter session (returns session_id string)
         session_id = self._state_adapter.initialize_session(
@@ -368,21 +399,212 @@ class ExecutionController(IExecutionController):
         3. Otherwise -> DefaultNodeExecutor with WTB workflow nodes
         """
         execution = self._get_execution(execution_id)
-        
+        return self._run_execution(execution, graph=graph)
+
+    def _run_execution(
+        self,
+        execution: Execution,
+        graph: Optional[Any] = None,
+        *,
+        session_activated: bool = False,
+    ) -> Execution:
+        """Run an already-loaded execution without discarding local updates."""
         if graph is not None and self._supports_langgraph_execution():
             self._state_adapter.set_workflow_graph(graph, force_recompile=True)
-            return self._run_with_langgraph(execution)
+            return self._run_with_langgraph(
+                execution,
+                session_activated=session_activated,
+            )
         
         if self._supports_langgraph_execution() and self._state_adapter.has_graph():
-            return self._run_with_langgraph(execution)
+            return self._run_with_langgraph(
+                execution,
+                session_activated=session_activated,
+            )
         
-        return self._run_with_node_executor(execution)
+        return self._run_with_node_executor(
+            execution,
+            session_activated=session_activated,
+        )
     
     def _supports_langgraph_execution(self) -> bool:
         """Check if state adapter supports LangGraph native execution."""
         return self._state_adapter.supports_graph_execution()
+
+    def _activate_execution_session(self, execution: Execution) -> bool:
+        """Activate one execution's adapter session without accepting fail-open False."""
+        if not execution.session_id:
+            return False
+
+        activated = self._state_adapter.set_current_session(
+            execution.session_id,
+            execution_id=execution.id,
+        )
+        return activated is not False
+
+    def _prepare_node_resume_claim_token(
+        self,
+        execution: Execution,
+        *,
+        refresh: bool = False,
+    ) -> Optional[str]:
+        """Return a stable, durable token for one explicit graphless resume."""
+        if getattr(
+            self._state_adapter,
+            "state_adapter_backend",
+            None,
+        ) != "node_sqlite":
+            return None
+
+        metadata = execution.metadata
+        if not isinstance(metadata, dict):
+            metadata = {}
+            execution.metadata = metadata
+
+        token = metadata.get("node_resume_claim_token")
+        if refresh:
+            token = str(uuid.uuid4())
+            prepare_resume = getattr(self._state_adapter, "prepare_resume", None)
+            if not callable(prepare_resume):
+                raise RuntimeError("node_sqlite adapter cannot prepare resume")
+            if prepare_resume(token) is False:
+                raise RuntimeError("Could not prepare explicit resume")
+        elif not isinstance(token, str) or not token:
+            raise RuntimeError(
+                "Paused node_sqlite execution has no durable resume token"
+            )
+        metadata["node_resume_claim_token"] = token
+        return token
+
+    @staticmethod
+    def _normalized_checkpoint_path(value: Any) -> str:
+        """Normalize a declared local checkpoint path without discovering one."""
+        try:
+            path_value = os.fspath(value)
+        except TypeError as error:
+            raise RuntimeError("Invalid checkpoint_db_path") from error
+        if not path_value:
+            raise RuntimeError("Missing checkpoint_db_path")
+        return os.path.normcase(
+            os.path.abspath(os.path.expanduser(path_value))
+        )
+
+    def _reconcile_node_sqlite_recovery(
+        self,
+        execution: Execution,
+    ) -> tuple[bool, bool]:
+        """Reconcile one durable node head before any graphless side effect.
+
+        Only PENDING/RUNNING executions that explicitly declare the exact
+        ``node_sqlite`` backend and path participate. The result is
+        ``(reconciled, terminal)`` so only a proven recovery continuation may
+        enter the node loop in persisted RUNNING state.
+        """
+        if execution.status not in (
+            ExecutionStatus.PENDING,
+            ExecutionStatus.RUNNING,
+        ):
+            return False, False
+
+        metadata = execution.metadata
+        if not isinstance(metadata, dict):
+            return False, False
+        if metadata.get("state_adapter_backend") != "node_sqlite":
+            return False, False
+
+        declared_path = metadata.get("checkpoint_db_path")
+        if not declared_path:
+            raise RuntimeError(
+                "node_sqlite recovery requires an explicit checkpoint_db_path"
+            )
+        if getattr(self._state_adapter, "state_adapter_backend", None) != "node_sqlite":
+            raise RuntimeError(
+                "Declared node_sqlite recovery backend does not match state adapter"
+            )
+        adapter_path = getattr(self._state_adapter, "storage_path", None)
+        if adapter_path is None:
+            raise RuntimeError("node_sqlite state adapter has no storage path")
+        if self._normalized_checkpoint_path(declared_path) != (
+            self._normalized_checkpoint_path(adapter_path)
+        ):
+            raise RuntimeError(
+                "Declared checkpoint_db_path does not match state adapter storage"
+            )
+
+        get_recovery_head = getattr(self._state_adapter, "get_recovery_head", None)
+        if not callable(get_recovery_head):
+            raise RuntimeError("node_sqlite state adapter cannot recover durable state")
+        head = get_recovery_head()
+        if head is None and execution.status is ExecutionStatus.PENDING:
+            return False, False
+
+        terminal = False
+        if head is None:
+            execution.status = ExecutionStatus.FAILED
+            execution.error_message = (
+                "Recovery required: persisted running execution has no durable node head"
+            )
+            execution.error_node_id = execution.state.current_node_id
+            execution.completed_at = datetime.now()
+            metadata["recovery_required"] = True
+            metadata["recovery_reason"] = "recovery_head_missing"
+            terminal = True
+        elif not isinstance(head, dict):
+            raise RuntimeError("node_sqlite recovery head is invalid")
+        elif head.get("status") == "completed":
+            recovered_state = head.get("state")
+            exit_checkpoint_id = head.get("exit_checkpoint_id")
+            if not isinstance(recovered_state, ExecutionState) or not exit_checkpoint_id:
+                raise RuntimeError(
+                    "Completed recovery boundary has no valid owned exit checkpoint"
+                )
+            execution.state = copy.deepcopy(recovered_state)
+            execution.checkpoint_id = str(exit_checkpoint_id)
+            execution.status = ExecutionStatus.RUNNING
+            execution.error_message = None
+            execution.error_node_id = None
+            execution.completed_at = None
+            if execution.started_at is None and head.get("started_at"):
+                try:
+                    execution.started_at = datetime.fromisoformat(head["started_at"])
+                except (TypeError, ValueError):
+                    execution.started_at = datetime.now()
+            metadata.pop("recovery_required", None)
+            metadata.pop("recovery_reason", None)
+        elif head.get("status") == "started":
+            node_id = head.get("node_id")
+            execution.status = ExecutionStatus.FAILED
+            execution.error_message = (
+                f"Recovery required: node {node_id} outcome is unknown"
+            )
+            execution.error_node_id = node_id
+            execution.completed_at = datetime.now()
+            metadata["recovery_required"] = True
+            metadata["recovery_reason"] = "node_outcome_unknown"
+            terminal = True
+        elif head.get("status") == "failed":
+            node_id = head.get("node_id")
+            execution.status = ExecutionStatus.FAILED
+            execution.error_message = head.get("error_message") or f"Node {node_id} failed"
+            execution.error_node_id = node_id
+            execution.completed_at = datetime.now()
+            metadata.pop("recovery_required", None)
+            metadata.pop("recovery_reason", None)
+            terminal = True
+        else:
+            raise RuntimeError("node_sqlite recovery head has invalid status")
+
+        self._sync_external_cache_metadata(execution)
+        self._exec_repo.update(execution)
+        self._commit()
+        return True, terminal
     
-    def _run_with_langgraph(self, execution: Execution) -> Execution:
+    def _run_with_langgraph(
+        self,
+        execution: Execution,
+        *,
+        session_activated: bool = False,
+    ) -> Execution:
         """
         Execute workflow using LangGraph native execution.
         
@@ -392,10 +614,11 @@ class ExecutionController(IExecutionController):
         
         Graph must already be set on adapter (done by run() before dispatching).
         """
-        if execution.session_id:
-            self._state_adapter.set_current_session(
-                execution.session_id, execution_id=execution.id
-            )
+        if (
+            not session_activated
+            and not self._activate_execution_session(execution)
+        ):
+            raise RuntimeError("Could not activate execution session")
 
         try:
             if execution.status == ExecutionStatus.PENDING:
@@ -549,25 +772,52 @@ class ExecutionController(IExecutionController):
         if not output_files_data:
             return []
 
-        output_dir = Path(self._output_dir) if self._output_dir else Path("outputs")
+        output_dir = (
+            Path(self._output_dir) if self._output_dir else Path("outputs")
+        ).resolve()
+        validated_outputs: List[tuple[Path, Any, bool]] = []
+        for filename, content in output_files_data.items():
+            if not isinstance(filename, str) or not filename.strip():
+                raise ValueError(f"Invalid output file path: {filename!r}")
+
+            relative_path = Path(filename)
+            if (
+                relative_path.is_absolute()
+                or relative_path.drive
+                or relative_path.root
+                or ".." in relative_path.parts
+            ):
+                raise ValueError(f"Unsafe output file path: {filename}")
+
+            file_path = (output_dir / relative_path).resolve()
+            try:
+                file_path.relative_to(output_dir)
+            except ValueError as exc:
+                raise ValueError(f"Unsafe output file path: {filename}") from exc
+            if file_path == output_dir:
+                raise ValueError(f"Unsafe output file path: {filename}")
+
+            if isinstance(content, bytes):
+                encoded_content, is_binary = content, True
+            elif isinstance(content, str):
+                encoded_content, is_binary = content, False
+            else:
+                encoded_content = json.dumps(
+                    content, indent=2, ensure_ascii=False
+                )
+                is_binary = False
+            validated_outputs.append((file_path, encoded_content, is_binary))
+
         output_dir.mkdir(parents=True, exist_ok=True)
 
         written_paths: List[str] = []
-        for filename, content in output_files_data.items():
-            try:
-                file_path = output_dir / filename
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-
-                if isinstance(content, bytes):
-                    file_path.write_bytes(content)
-                elif isinstance(content, str):
-                    file_path.write_text(content, encoding="utf-8")
-                else:
-                    file_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
-
-                written_paths.append(str(file_path.absolute()))
-            except Exception as e:
-                logger.warning(f"Failed to write output file {filename}: {e}")
+        for file_path, content, is_binary in validated_outputs:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            if is_binary:
+                file_path.write_bytes(content)
+            else:
+                file_path.write_text(content, encoding="utf-8")
+            written_paths.append(str(file_path))
 
         return written_paths
 
@@ -606,6 +856,19 @@ class ExecutionController(IExecutionController):
         except Exception:
             return None
 
+    @staticmethod
+    def _checkpoint_has_output_files(state: Any) -> bool:
+        """Return whether a checkpoint state declares materialized files."""
+        if isinstance(state, ExecutionState):
+            values = state.workflow_variables
+        elif isinstance(state, dict):
+            values = state
+        else:
+            return False
+
+        output_files = values.get("_output_files") if isinstance(values, dict) else None
+        return isinstance(output_files, dict) and bool(output_files)
+
     def _require_checkpoint_file_commit(
         self,
         checkpoint_id: Optional[str],
@@ -623,8 +886,41 @@ class ExecutionController(IExecutionController):
             "Files must be linked with track_and_link at checkpoint creation time."
         )
     
-    def _run_with_node_executor(self, execution: Execution) -> Execution:
+    def _run_with_node_executor(
+        self,
+        execution: Execution,
+        *,
+        session_activated: bool = False,
+    ) -> Execution:
         """Legacy execution using DefaultNodeExecutor with WTB workflow nodes."""
+        if (
+            not session_activated
+            and not self._activate_execution_session(execution)
+        ):
+            raise RuntimeError("Could not activate execution session")
+
+        recovery_reconciled, recovery_terminal = (
+            self._reconcile_node_sqlite_recovery(execution)
+        )
+        if recovery_terminal:
+            return execution
+
+        resume_claim_id: Optional[str] = None
+        if execution.status == ExecutionStatus.PAUSED:
+            resume_claim_token = self._prepare_node_resume_claim_token(execution)
+            if resume_claim_token is not None:
+                claim_resume = getattr(self._state_adapter, "claim_resume", None)
+                if not callable(claim_resume):
+                    raise RuntimeError("node_sqlite adapter cannot claim resume")
+                claimed_resume = claim_resume(resume_claim_token)
+                if not claimed_resume:
+                    raise NodeBoundaryClaimConflict(
+                        "Could not claim explicit resume for execution"
+                    )
+                resume_claim_id = str(claimed_resume)
+                if isinstance(execution.metadata, dict):
+                    execution.metadata.pop("node_resume_claim_token", None)
+
         workflow = self._get_workflow(execution.workflow_id)
         
         # Start execution if pending
@@ -632,12 +928,10 @@ class ExecutionController(IExecutionController):
             execution.start()
         elif execution.status == ExecutionStatus.PAUSED:
             execution.resume()
+        elif execution.status == ExecutionStatus.RUNNING and recovery_reconciled:
+            pass
         else:
             raise RuntimeError(f"Cannot run execution in status {execution.status.value}")
-        
-        # Ensure state adapter session is set
-        if execution.session_id:
-            self._state_adapter.set_current_session(execution.session_id)
         
         # Main execution loop
         try:
@@ -656,6 +950,7 @@ class ExecutionController(IExecutionController):
                         f"Breakpoint: {current_node_id}"
                     )
                     execution.remove_breakpoint(current_node_id)
+                    self._prepare_node_resume_claim_token(execution, refresh=True)
                     execution.pause()
                     break
                 
@@ -665,6 +960,7 @@ class ExecutionController(IExecutionController):
                     raise ValueError(f"Node {current_node_id} not found in workflow")
                 
                 # Create checkpoint before node execution
+                expected_predecessor_checkpoint_id = execution.checkpoint_id
                 entry_cp_id = self._create_checkpoint(
                     execution,
                     current_node_id,
@@ -672,7 +968,30 @@ class ExecutionController(IExecutionController):
                 )
                 
                 # Mark node as started
-                self._state_adapter.mark_node_started(current_node_id, entry_cp_id)
+                if getattr(
+                    self._state_adapter,
+                    "state_adapter_backend",
+                    None,
+                ) == "node_sqlite":
+                    boundary_id = self._state_adapter.mark_node_started(
+                        current_node_id,
+                        entry_cp_id,
+                        expected_predecessor_checkpoint_id=(
+                            expected_predecessor_checkpoint_id
+                        ),
+                        enforce_predecessor=True,
+                        resume_claim_id=resume_claim_id,
+                    )
+                else:
+                    boundary_id = self._state_adapter.mark_node_started(
+                        current_node_id,
+                        entry_cp_id,
+                    )
+                if not boundary_id:
+                    raise NodeBoundaryClaimConflict(
+                        f"Could not claim node {current_node_id} for execution"
+                    )
+                resume_claim_id = None
                 
                 # Execute node
                 result = self._node_executor.execute(
@@ -691,21 +1010,39 @@ class ExecutionController(IExecutionController):
                 
                 if isinstance(result.output, dict):
                     execution.state.workflow_variables.update(result.output)
-                
+
+                # The durable after-node checkpoint represents continuation
+                # from the successor, not re-entry into the completed node.
+                next_node_id = self._determine_next_node(
+                    workflow,
+                    execution,
+                    result.output,
+                )
+                checkpoint_state = copy.deepcopy(execution.state)
+                checkpoint_state.current_node_id = next_node_id
+
                 # Create checkpoint after node execution
                 exit_cp_id = self._create_checkpoint(
                     execution,
                     current_node_id,
-                    f"After: {current_node_id}"
+                    f"After: {current_node_id}",
+                    state=checkpoint_state,
                 )
                 
                 # Mark node as completed
-                self._state_adapter.mark_node_completed(current_node_id, exit_cp_id)
+                boundary_completed = self._state_adapter.mark_node_completed(
+                    current_node_id,
+                    exit_cp_id,
+                )
+                if boundary_completed is False:
+                    raise RuntimeError(
+                        f"Could not mark node {current_node_id} as completed"
+                    )
                 
-                # Determine next node
-                next_node_id = self._determine_next_node(workflow, execution, result.output)
                 execution.state.current_node_id = next_node_id
         
+        except NodeBoundaryClaimConflict:
+            raise
         except Exception as e:
             execution.fail(str(e), execution.state.current_node_id)
         
@@ -722,12 +1059,16 @@ class ExecutionController(IExecutionController):
         
         if not execution.can_pause():
             raise ValueError(f"Cannot pause execution in status {execution.status.value}")
+
+        if not self._activate_execution_session(execution):
+            raise RuntimeError("Could not activate execution session")
         
         self._create_checkpoint(
             execution,
             execution.state.current_node_id or "unknown",
             "Manual Pause"
         )
+        self._prepare_node_resume_claim_token(execution, refresh=True)
         
         execution.pause()
         self._exec_repo.update(execution)
@@ -742,20 +1083,78 @@ class ExecutionController(IExecutionController):
     ) -> Execution:
         """Resume paused execution."""
         execution = self._get_execution(execution_id)
-        
-        if not execution.can_resume():
-            if (
-                execution.status == ExecutionStatus.PENDING
-                and (execution.metadata or {}).get("fork_type") == "checkpoint_fork"
-            ):
-                execution.status = ExecutionStatus.PAUSED
-            else:
-                raise ValueError(f"Cannot resume execution in status {execution.status.value}")
-        
-        if modified_state:
-            execution.state.workflow_variables.update(modified_state)
-        
-        return self.run(execution_id)
+
+        metadata = execution.metadata or {}
+        pending_checkpoint_fork = (
+            execution.status == ExecutionStatus.PENDING
+            and metadata.get("fork_type") == "checkpoint_fork"
+        )
+        if not execution.can_resume() and not pending_checkpoint_fork:
+            raise ValueError(
+                f"Cannot resume execution in status {execution.status.value}"
+            )
+
+        # Session selection is the first external preflight. It must succeed
+        # before checkpoint files, graph state, or the aliased domain object
+        # can be changed.
+        if not self._activate_execution_session(execution):
+            raise RuntimeError("Could not activate resume session")
+
+        source_has_output_files = metadata.get("source_checkpoint_has_output_files")
+        if source_has_output_files is None:
+            source_has_output_files = self._checkpoint_has_output_files(execution.state)
+
+        # Restore checkpoint-linked files before mutating the execution. Some
+        # repositories return their stored domain instance directly, so an
+        # early status/state update would otherwise leak through a failed CAS
+        # restore even without an explicit repository update or commit.
+        restore_status = None
+        source_checkpoint_id = metadata.get("source_checkpoint_id")
+        if (
+            source_checkpoint_id
+            and metadata.get("fork_type") == "checkpoint_fork"
+            and source_has_output_files
+            and self._file_tracking
+            and self._file_tracking.is_available()
+            and self._output_dir
+        ):
+            restore_status = self._restore_checkpoint_files(
+                source_checkpoint_id,
+                execution.state,
+                has_output_files=True,
+            )
+
+        state_updates = dict(modified_state or {})
+        if restore_status is not None:
+            state_updates["_file_restore_status"] = restore_status
+
+        # A LangGraph resume must update the checkpoint for this execution's
+        # thread, not whichever session happens to be active on the adapter.
+        graph_resume = (
+            self._supports_langgraph_execution()
+            and self._state_adapter.has_graph()
+        )
+        if graph_resume:
+            if state_updates:
+                update_state = getattr(self._state_adapter, "update_state", None)
+                if not callable(update_state):
+                    raise RuntimeError("State adapter cannot apply resume state")
+                updated = update_state(
+                    dict(state_updates),
+                    as_node=metadata.get("source_checkpoint_as_node"),
+                )
+                if updated is False:
+                    raise RuntimeError("Could not apply resume state")
+
+        # Only mutate the domain object after every external preflight has
+        # succeeded. A checkpoint fork is persisted as PENDING by older stores
+        # but must enter the ordinary PAUSED -> RUNNING resume transition.
+        if pending_checkpoint_fork:
+            execution.status = ExecutionStatus.PAUSED
+        if state_updates:
+            execution.state.workflow_variables.update(state_updates)
+
+        return self._run_execution(execution, session_activated=True)
     
     def stop(self, execution_id: str) -> Execution:
         """Stop and cancel execution."""
@@ -778,15 +1177,29 @@ class ExecutionController(IExecutionController):
             checkpoint_id: Checkpoint ID (UUID string)
         """
         execution = self._get_execution(execution_id)
-        
-        # initialize_session is on IStateAdapter -- connect to execution's thread
-        self._state_adapter.initialize_session(
-            execution_id,
-            execution.state or ExecutionState(workflow_variables={}),
-        )
-        
+
+        if not self._activate_execution_session(execution):
+            raise RuntimeError("Could not activate execution session")
+
+        # Load and restore checkpoint-linked files before moving the adapter's
+        # active checkpoint. A CAS/link failure must leave adapter state intact.
+        preflight_state = self._state_adapter.load_checkpoint(checkpoint_id)
+        if isinstance(preflight_state, dict):
+            preflight_state = ExecutionState(
+                current_node_id=preflight_state.get("current_node_id"),
+                workflow_variables=dict(preflight_state),
+                execution_path=preflight_state.get("execution_path", []),
+                node_results=preflight_state.get("node_results", {}),
+            )
+        restore_status = None
+        if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
+            restore_status = self._restore_checkpoint_files(
+                checkpoint_id,
+                preflight_state,
+            )
+
         restored_state = self._state_adapter.rollback(checkpoint_id)
-        
+
         # Type normalization: ensure ExecutionState for domain model
         if isinstance(restored_state, dict):
             restored_state = ExecutionState(
@@ -795,18 +1208,16 @@ class ExecutionController(IExecutionController):
                 execution_path=restored_state.get("execution_path", []),
                 node_results=restored_state.get("node_results", {}),
             )
-        
+
         # Domain model validates transition, clones state, clears errors, sets PAUSED
         execution.restore_from_checkpoint(restored_state)
+        if restore_status is not None:
+            execution.state.workflow_variables["_file_restore_status"] = restore_status
         execution.checkpoint_id = checkpoint_id
         execution.metadata = dict(execution.metadata or {})
         execution.metadata["resume_checkpoint_id"] = checkpoint_id
+        self._prepare_node_resume_claim_token(execution, refresh=True)
         self._sync_external_cache_metadata(execution)
-        
-        # File restore is keyed by checkpoint_id. The ideal path requires the
-        # checkpoint to already be linked to a CAS file commit.
-        if self._file_tracking and self._file_tracking.is_available() and self._output_dir:
-            self._restore_checkpoint_files(execution, checkpoint_id, restored_state)
         
         self._exec_repo.update(execution)
         self._commit()
@@ -815,11 +1226,17 @@ class ExecutionController(IExecutionController):
     
     def _restore_checkpoint_files(
         self,
-        execution: Execution,
         checkpoint_id: str,
         source_state: ExecutionState,
-    ) -> None:
+        *,
+        has_output_files: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Restore checkpoint files via required CAS checkpoint link."""
+        if has_output_files is None:
+            has_output_files = self._checkpoint_has_output_files(source_state)
+        if not has_output_files:
+            return None
+
         self._require_checkpoint_file_commit(checkpoint_id)
         restore_fn = getattr(self._file_tracking, "restore_from_checkpoint", None)
         if not callable(restore_fn):
@@ -831,18 +1248,112 @@ class ExecutionController(IExecutionController):
         if file_restore_error:
             raise RuntimeError(file_restore_error)
 
-        execution.state.workflow_variables["_file_restore_status"] = {
+        values = (
+            source_state.workflow_variables
+            if isinstance(source_state, ExecutionState)
+            else source_state
+        )
+        output_files = values.get("_output_files", {}) if isinstance(values, dict) else {}
+        expected_file_count = (
+            len(output_files)
+            if isinstance(output_files, dict) and output_files
+            else None
+        )
+        if files_restored_count <= 0:
+            expected_description = expected_file_count or "at least 1"
+            raise RuntimeError(
+                f"Expected {expected_description} checkpoint files to be restored, "
+                f"but restored {files_restored_count}"
+            )
+        if expected_file_count is not None and files_restored_count != expected_file_count:
+            raise RuntimeError(
+                f"Expected {expected_file_count} checkpoint files to be restored, "
+                f"but restored {files_restored_count}"
+            )
+
+        return {
             "attempted": True,
-            "success": files_restored_count > 0,
+            "success": True,
             "files_restored": files_restored_count,
-            "error": file_restore_error,
+            "error": None,
         }
     
     def fork(
         self,
         execution_id: str,
         checkpoint_id: str,
-        new_initial_state: Optional[Dict[str, Any]] = None
+        new_initial_state: Optional[Dict[str, Any]] = None,
+    ) -> Execution:
+        """Atomically fork while always restoring the source adapter session."""
+        source_execution = self._get_execution(execution_id)
+        source_session_id = source_execution.session_id
+        fork_execution_id = str(uuid.uuid4())
+        forked_execution: Optional[Execution] = None
+        operation_error: Optional[Exception] = None
+
+        try:
+            forked_execution = self._fork_impl(
+                execution_id,
+                checkpoint_id,
+                new_initial_state,
+                fork_execution_id=fork_execution_id,
+            )
+        except Exception as exc:
+            operation_error = exc
+            rollback = getattr(self._uow, "rollback", None)
+            if callable(rollback):
+                try:
+                    rollback()
+                except Exception as rollback_error:
+                    logger.warning(f"Could not roll back failed fork: {rollback_error}")
+
+            try:
+                self._exec_repo.delete(fork_execution_id)
+                self._commit()
+            except Exception as cleanup_error:
+                logger.warning(f"Could not remove failed fork record: {cleanup_error}")
+            raise
+        finally:
+            if source_session_id:
+                try:
+                    restored = self._state_adapter.set_current_session(
+                        source_session_id,
+                        execution_id=execution_id,
+                    )
+                    if restored is False:
+                        raise RuntimeError("Could not restore source session")
+                except Exception as restore_error:
+                    if forked_execution is not None:
+                        try:
+                            self._exec_repo.delete(fork_execution_id)
+                            self._commit()
+                        except Exception as cleanup_error:
+                            logger.error(
+                                "Could not remove fork after source session "
+                                f"restore failure: {cleanup_error}"
+                            )
+                    if operation_error is not None:
+                        operation_error.add_note(
+                            "Additionally failed to restore source session: "
+                            f"{restore_error}"
+                        )
+                        logger.error(
+                            f"Failed to restore source session: {restore_error}"
+                        )
+                    else:
+                        raise
+
+        if forked_execution is None:
+            raise RuntimeError("Fork did not produce an execution")
+        return forked_execution
+
+    def _fork_impl(
+        self,
+        execution_id: str,
+        checkpoint_id: str,
+        new_initial_state: Optional[Dict[str, Any]] = None,
+        *,
+        fork_execution_id: str,
     ) -> Execution:
         """
         Fork an execution to create a new independent execution.
@@ -870,48 +1381,142 @@ class ExecutionController(IExecutionController):
         if not workflow:
             raise ValueError(f"Workflow '{source_execution.workflow_id}' not found")
         
-        # Connect adapter to source execution's checkpoint thread
-        self._state_adapter.initialize_session(
-            execution_id,
-            source_execution.state or ExecutionState(workflow_variables={}),
-        )
+        if not self._activate_execution_session(source_execution):
+            raise RuntimeError("Could not activate execution session")
         
         # Load checkpoint state
         checkpoint_state = self._state_adapter.load_checkpoint(checkpoint_id)
-        if self._file_tracking and self._file_tracking.is_available():
+        if (
+            self._checkpoint_has_output_files(checkpoint_state)
+            and self._file_tracking
+            and self._file_tracking.is_available()
+        ):
             self._require_checkpoint_file_commit(checkpoint_id)
-        
-        # Merge checkpoint state with new_initial_state
-        forked_state_vars = {}
-        if checkpoint_state and isinstance(checkpoint_state, ExecutionState):
-            forked_state_vars = checkpoint_state.workflow_variables.copy()
-        elif checkpoint_state and isinstance(checkpoint_state, dict):
-            forked_state_vars = checkpoint_state.copy()
-        
-        if new_initial_state:
-            forked_state_vars.update(new_initial_state)
-        
-        # Create new execution ID
-        fork_execution_id = str(uuid.uuid4())
+        fork_as_node: Optional[str] = None
+        initial_input_state: Optional[Dict[str, Any]] = None
+        graph_execution = self._state_adapter.supports_graph_execution()
+        if graph_execution:
+            checkpoint_history = self._state_adapter.get_checkpoint_history()
+            source_checkpoint = next(
+                (
+                    item
+                    for item in checkpoint_history
+                    if (item.get("checkpoint_id") or item.get("id"))
+                    == checkpoint_id
+                ),
+                None,
+            )
+            if source_checkpoint is None:
+                raise RuntimeError(
+                    f"Cannot preserve continuation for checkpoint {checkpoint_id}"
+                )
+            writes = source_checkpoint.get("writes")
+            writer_nodes = list(writes) if isinstance(writes, dict) else []
+            if len(writer_nodes) == 1:
+                fork_as_node = writer_nodes[0]
+            else:
+                source_step = source_checkpoint.get("step")
+                preceding_checkpoints = [
+                    item
+                    for item in checkpoint_history
+                    if isinstance(source_step, int)
+                    and isinstance(item.get("step"), int)
+                    and item["step"] < source_step
+                ]
+                if preceding_checkpoints:
+                    parent_checkpoint = max(
+                        preceding_checkpoints,
+                        key=lambda item: item["step"],
+                    )
+                    scheduled_nodes = list(
+                        parent_checkpoint.get("next") or []
+                    )
+                    if len(scheduled_nodes) == 1:
+                        fork_as_node = scheduled_nodes[0]
+                    else:
+                        remaining_nodes = set(
+                            source_checkpoint.get("next") or []
+                        )
+                        completed_nodes = [
+                            node_id
+                            for node_id in scheduled_nodes
+                            if node_id not in remaining_nodes
+                        ]
+                        if len(completed_nodes) == 1:
+                            fork_as_node = completed_nodes[0]
+            if (
+                fork_as_node is None
+                and source_checkpoint.get("step") == -1
+                and list(source_checkpoint.get("next") or []) == ["__start__"]
+            ):
+                step_zero_checkpoints = [
+                    item
+                    for item in checkpoint_history
+                    if item.get("step") == 0
+                ]
+                if (
+                    len(step_zero_checkpoints) != 1
+                    or not isinstance(step_zero_checkpoints[0].get("values"), dict)
+                ):
+                    raise RuntimeError(
+                        f"Cannot preserve initial state for checkpoint {checkpoint_id}"
+                    )
+                # LangGraph's canonical input checkpoint has no writer. Treat
+                # its virtual start task as the writer so a fork resumes at
+                # the graph entry point without broadening ambiguous cases.
+                initial_input_state = copy.deepcopy(
+                    step_zero_checkpoints[0]["values"]
+                )
+                fork_as_node = "__start__"
+            if fork_as_node is None:
+                raise RuntimeError(
+                    f"Checkpoint {checkpoint_id} has ambiguous continuation metadata"
+                )
+
+        if graph_execution:
+            # LangGraph owns continuation in its forked thread. The domain
+            # execution mirrors workflow values while the graph schedules the
+            # successor from checkpoint metadata.
+            if initial_input_state is not None:
+                forked_state_vars = copy.deepcopy(initial_input_state)
+            elif isinstance(checkpoint_state, ExecutionState):
+                forked_state_vars = copy.deepcopy(
+                    checkpoint_state.workflow_variables
+                )
+            elif isinstance(checkpoint_state, dict):
+                forked_state_vars = copy.deepcopy(checkpoint_state)
+            else:
+                forked_state_vars = {}
+
+            if new_initial_state:
+                forked_state_vars.update(copy.deepcopy(new_initial_state))
+
+            forked_exec_state = ExecutionState(
+                current_node_id=workflow.entry_point,
+                workflow_variables=forked_state_vars,
+                execution_path=[],
+                node_results={},
+            )
+        else:
+            if not isinstance(checkpoint_state, ExecutionState):
+                raise TypeError(
+                    "Node checkpoint must restore a complete ExecutionState"
+                )
+            forked_exec_state = copy.deepcopy(checkpoint_state)
+            if new_initial_state:
+                forked_exec_state.workflow_variables.update(
+                    copy.deepcopy(new_initial_state)
+                )
         
         # Seed forked LangGraph thread with source checkpoint state so that
         # time-travel / resume on the fork has the correct checkpoint history.
         # Must happen while adapter is still pointed at the source thread.
         fork_thread_id = f"wtb-{fork_execution_id}"
         _create_fork = getattr(self._state_adapter, "create_fork", None)
-        if callable(_create_fork) and self._state_adapter.supports_graph_execution():
-            try:
-                _create_fork(fork_thread_id, from_checkpoint_id=checkpoint_id)
-            except Exception as e:
-                logger.warning(f"Could not seed fork checkpoint history: {e}")
-        
-        # Create new execution state
-        forked_exec_state = ExecutionState(
-            current_node_id=workflow.entry_point,
-            workflow_variables=forked_state_vars,
-            execution_path=[],
-            node_results={},
-        )
+        if graph_execution:
+            if not callable(_create_fork):
+                raise RuntimeError("State adapter does not support checkpoint forks")
+            _create_fork(fork_thread_id, from_checkpoint_id=checkpoint_id)
         
         # Create new execution record. A checkpoint fork is resumable from the
         # forked LangGraph thread, so it starts PAUSED rather than PENDING.
@@ -931,39 +1536,44 @@ class ExecutionController(IExecutionController):
         )
         forked_execution.session_id = session_id
 
-        # Apply variant overrides to the forked LangGraph thread. create_fork()
-        # copies checkpoint state and next-node metadata; update_state() overlays
-        # the caller's changes while preserving the fork's independent thread.
-        if (
-            new_initial_state
-            and self._state_adapter.supports_graph_execution()
-            and hasattr(self._state_adapter, "update_state")
-        ):
+        # Attribute the fork checkpoint to the source writer so LangGraph
+        # schedules only the original successor. Normal checkpoints overlay
+        # only caller changes to avoid replaying reducers; the input checkpoint
+        # must seed the original input values that live in its step-zero child.
+        if graph_execution:
+            update_state = getattr(self._state_adapter, "update_state", None)
+            if not callable(update_state):
+                raise RuntimeError("State adapter does not support fork state updates")
             try:
-                self._state_adapter.update_state(forked_state_vars)
-            except Exception as e:
-                logger.warning(f"Could not apply fork initial state: {e}")
+                state_update = dict(new_initial_state or {})
+                if initial_input_state is not None:
+                    state_update = copy.deepcopy(forked_state_vars)
+                updated = update_state(
+                    state_update,
+                    as_node=fork_as_node,
+                )
+                if updated is False:
+                    raise RuntimeError("Could not establish fork continuation state")
+            except Exception:
+                raise
 
         forked_execution.metadata.update(
             {
                 "forked_from": execution_id,
                 "source_checkpoint_id": checkpoint_id,
+                "source_checkpoint_has_output_files": (
+                    self._checkpoint_has_output_files(checkpoint_state)
+                ),
+                "source_checkpoint_as_node": fork_as_node,
                 "fork_type": "checkpoint_fork",
             }
         )
+        self._prepare_node_resume_claim_token(forked_execution, refresh=True)
         self._sync_external_cache_metadata(forked_execution)
         
         # Persist forked execution
         self._exec_repo.add(forked_execution)
         self._commit()
-        
-        # Restore adapter session to source execution so subsequent calls
-        # on the source don't operate on the forked thread
-        if source_execution.session_id:
-            self._state_adapter.set_current_session(
-                source_execution.session_id,
-                execution_id=execution_id,
-            )
         
         logger.info(f"Forked execution {fork_execution_id} from {execution_id} at checkpoint {checkpoint_id[:8]}...")
         
@@ -1000,11 +1610,12 @@ class ExecutionController(IExecutionController):
         self, 
         execution: Execution,
         node_id: str,
-        name: str
+        name: str,
+        state: Optional[ExecutionState] = None,
     ) -> str:
         """Create a checkpoint via state adapter. Returns checkpoint_id (string)."""
         checkpoint_id = self._state_adapter.save_checkpoint(
-            state=execution.state,
+            state=state if state is not None else execution.state,
             node_id=node_id,
             trigger=CheckpointTrigger.AUTO,
             name=name,
@@ -1072,11 +1683,8 @@ class ExecutionController(IExecutionController):
         """Get full checkpoint history for time-travel."""
         execution = self._get_execution(execution_id)
         
-        if execution.session_id:
-            self._state_adapter.set_current_session(
-                execution.session_id,
-                execution_id=execution.id,
-            )
+        if not self._activate_execution_session(execution):
+            return []
         
         return self._state_adapter.get_checkpoint_history()
     
@@ -1088,8 +1696,8 @@ class ExecutionController(IExecutionController):
         """Update execution state mid-execution (human-in-the-loop)."""
         execution = self._get_execution(execution_id)
         
-        if execution.session_id:
-            self._state_adapter.set_current_session(execution.session_id)
+        if not self._activate_execution_session(execution):
+            return False
         
         if self._state_adapter.update_state(values):
             execution.state.workflow_variables.update(values)
@@ -1105,8 +1713,8 @@ class ExecutionController(IExecutionController):
         
         execution = self._get_execution(execution_id)
         
-        if execution.session_id:
-            self._state_adapter.set_current_session(execution.session_id)
+        if not self._activate_execution_session(execution):
+            raise RuntimeError("Could not activate execution session")
         
         # Find checkpoint for this node
         history = self._state_adapter.get_checkpoint_history()

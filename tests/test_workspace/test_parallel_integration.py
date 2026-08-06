@@ -257,24 +257,18 @@ class TestConcurrentFileWrites:
         lock = threading.Lock()
         
         def execute_and_write(ws: Workspace, worker_id: int):
-            original_cwd = os.getcwd()
-            try:
-                ws.activate()
-                
-                # Write multiple files
-                for j in range(5):
-                    output_file = ws.output_dir / f"output_{j}.txt"
-                    output_file.parent.mkdir(parents=True, exist_ok=True)
-                    output_file.write_text(f"Worker {worker_id}, file {j}")
-                
-                with lock:
-                    success_count[0] += 1
-                
-            finally:
-                ws.deactivate()
-                os.chdir(original_cwd)
+            # output_dir is absolute; process-wide chdir is neither needed nor
+            # safe across threads (Workspace.activate documents this contract).
+            for j in range(5):
+                output_file = ws.output_dir / f"output_{j}.txt"
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                output_file.write_text(f"Worker {worker_id}, file {j}")
+
+            with lock:
+                success_count[0] += 1
         
         # Use ThreadPoolExecutor for controlled concurrency
+        original_cwd = Path.cwd()
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [
                 executor.submit(execute_and_write, ws, i)
@@ -288,6 +282,7 @@ class TestConcurrentFileWrites:
                     print(f"Worker failed: {e}")
         
         assert success_count[0] == num_workers
+        assert Path.cwd() == original_cwd
         
         # Cleanup
         manager.cleanup_batch("batch-high-concurrency")
@@ -562,28 +557,22 @@ class TestBatchTestParallelism:
         results = {}
         
         def execute_runner(ws: Workspace, runner_type: str):
-            original_cwd = os.getcwd()
-            try:
-                ws.activate()
-                
-                # Simulate execution with deterministic result
-                result = {
-                    "runner": runner_type,
-                    "output": [1, 2, 3, 4, 5],  # Same output
-                    "metrics": {"accuracy": 0.95, "latency_ms": 100},
-                }
-                
-                output_file = ws.output_dir / "result.json"
-                output_file.parent.mkdir(parents=True, exist_ok=True)
-                output_file.write_text(json.dumps(result))
-                
-                results[runner_type] = result
-                
-            finally:
-                ws.deactivate()
-                os.chdir(original_cwd)
+            # Both writes use absolute paths; concurrent process-wide chdir
+            # would violate Workspace.activate's non-thread-safe contract.
+            result = {
+                "runner": runner_type,
+                "output": [1, 2, 3, 4, 5],  # Same output
+                "metrics": {"accuracy": 0.95, "latency_ms": 100},
+            }
+
+            output_file = ws.output_dir / "result.json"
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(json.dumps(result))
+
+            results[runner_type] = result
         
         # Execute both in parallel
+        original_cwd = Path.cwd()
         threads = [
             threading.Thread(target=execute_runner, args=(ws_threadpool, "threadpool")),
             threading.Thread(target=execute_runner, args=(ws_ray, "ray")),
@@ -596,6 +585,7 @@ class TestBatchTestParallelism:
         
         # Compare results (parity check)
         assert results["threadpool"]["output"] == results["ray"]["output"]
+        assert Path.cwd() == original_cwd
         
         manager.cleanup_batch(batch_id)
 

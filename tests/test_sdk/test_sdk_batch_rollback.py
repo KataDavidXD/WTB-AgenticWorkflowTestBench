@@ -51,6 +51,10 @@ def mock_variant_service():
 def mock_execution_controller():
     """Create mock execution controller."""
     controller = Mock()
+    controller.get_status.return_value = Execution(
+        id="exec-123",
+        workflow_id="workflow-123",
+    )
     controller.supports_time_travel.return_value = True
     controller.get_checkpoint_history.return_value = [
         {
@@ -100,12 +104,21 @@ def wtb_with_mocks(
     mock_batch_runner,
 ):
     """Create WTBTestBench with mock dependencies."""
-    return WTBTestBench(
+    mock_batch_runner.create_rollback_coordinator.return_value.get_checkpoints.return_value = (
+        mock_execution_controller.get_checkpoint_history.return_value
+    )
+    bench = WTBTestBench(
         project_service=mock_project_service,
         variant_service=mock_variant_service,
         execution_controller=mock_execution_controller,
         batch_runner=mock_batch_runner,
     )
+    project = Mock()
+    project.id = "workflow-123"
+    project.name = "mock-project"
+    project.build_graph.return_value = object()
+    bench._project_cache[project.name] = project
+    return bench
 
 
 @pytest.fixture
@@ -219,6 +232,18 @@ class TestGetBatchCoordinator:
         assert coord1 is coord2
         # Factory should only be called once
         assert mock_batch_runner.create_rollback_coordinator.call_count == 1
+
+    def test_bench_close_closes_cached_coordinator(
+        self,
+        wtb_with_mocks,
+        mock_batch_runner,
+    ):
+        """A lazily-created coordinator must not outlive its owning bench."""
+        coordinator = wtb_with_mocks.get_batch_coordinator()
+
+        wtb_with_mocks.close()
+
+        coordinator.close.assert_called_once_with()
     
     def test_fallback_without_batch_runner(
         self,

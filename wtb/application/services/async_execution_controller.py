@@ -28,12 +28,16 @@ from contextvars import ContextVar
 from typing import Optional, Dict, Any, List, AsyncIterator, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+import asyncio
 import logging
+from threading import Lock
 import uuid
 
 from wtb.domain.interfaces.async_state_adapter import IAsyncStateAdapter
 from wtb.domain.interfaces.async_unit_of_work import IAsyncUnitOfWork
 from wtb.domain.interfaces.async_file_tracking import IAsyncFileTrackingService
+from wtb.domain.interfaces.state_adapter import CheckpointTrigger
 from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 
@@ -46,6 +50,27 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 # Result Types
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+_ADAPTER_LOCK_ATTRIBUTE = "_wtb_async_execution_lock"
+_ADAPTER_LOCK_CREATION = Lock()
+
+
+def _shared_state_adapter_lock(state_adapter: IAsyncStateAdapter) -> asyncio.Lock:
+    """Return one operation lock shared by every controller for an adapter."""
+    with _ADAPTER_LOCK_CREATION:
+        adapter_vars = getattr(state_adapter, "__dict__", None)
+        if not isinstance(adapter_vars, dict):
+            raise ValueError(
+                "Async state adapter must support shared operation locking"
+            )
+        lock = adapter_vars.get(_ADAPTER_LOCK_ATTRIBUTE)
+        if lock is None:
+            lock = asyncio.Lock()
+            setattr(state_adapter, _ADAPTER_LOCK_ATTRIBUTE, lock)
+        if not isinstance(lock, asyncio.Lock):
+            raise ValueError("Async state adapter operation lock is invalid")
+        return lock
 
 
 @dataclass
@@ -129,12 +154,60 @@ class AsyncExecutionController:
         self._current_execution_var: ContextVar[Optional[Execution]] = ContextVar(
             "async_exec_current_execution", default=None
         )
+        self._state_adapter_lock = _shared_state_adapter_lock(state_adapter)
+
+    async def _activate_current_adapter_session(self) -> None:
+        """Bind the shared adapter to this task's execution before state access."""
+        execution = self._current_execution_var.get()
+        if execution is None:
+            raise RuntimeError("No active async execution")
+        if not execution.session_id:
+            raise RuntimeError("Active async execution has no session")
+
+        activate = getattr(self._state_adapter, "aset_current_session", None)
+        if not callable(activate):
+            raise RuntimeError(
+                "Async state adapter cannot activate an execution session"
+            )
+        activated = await activate(
+            execution.session_id,
+            execution_id=execution.id,
+        )
+        if activated is False:
+            raise RuntimeError(
+                f"Could not activate async execution session {execution.session_id}"
+            )
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Main Execution Methods
     # ═══════════════════════════════════════════════════════════════════════════
     
     async def arun(
+        self,
+        execution_id: str,
+        graph: Optional["StateGraph"] = None,
+        track_output_files: Optional[List[str]] = None,
+    ) -> AsyncExecutionResult:
+        """Run with exclusive access to the adapter's mutable session and graph."""
+        try:
+            async with self._state_adapter_lock:
+                return await self._arun_with_adapter(
+                    execution_id,
+                    graph=graph,
+                    track_output_files=track_output_files,
+                )
+        except asyncio.CancelledError as cancellation:
+            try:
+                await self._apersist_cancelled_execution(execution_id)
+            except Exception as persistence_error:
+                cancellation.add_note(
+                    "Additionally failed to persist CANCELLED execution state: "
+                    f"{persistence_error}"
+                )
+                raise cancellation from persistence_error
+            raise
+
+    async def _arun_with_adapter(
         self, 
         execution_id: str, 
         graph: Optional["StateGraph"] = None,
@@ -195,19 +268,33 @@ class AsyncExecutionController:
                 # Update execution with results
                 execution.state.workflow_variables = final_state
                 
-                # Track output files asynchronously if configured
-                checkpoint_id = None
+                # Resolve the real LangGraph checkpoint before linking files.
+                # CAS commit IDs and graph checkpoint IDs are separate domains.
+                current_state = await self._state_adapter.aget_current_state()
+                checkpoint_id = await self._aresolve_final_checkpoint_id(
+                    current_state=current_state,
+                    final_state=final_state,
+                    current_node_id=execution.state.current_node_id,
+                )
+
                 if track_output_files and self._file_tracking:
-                    tracking_result = await self._file_tracking.atrack_files(
+                    tracking_result = await self._atrack_and_link(
+                        uow,
+                        checkpoint_id=checkpoint_id,
                         file_paths=track_output_files,
                         message=f"Execution {execution_id} output files",
                     )
-                    checkpoint_id = tracking_result.commit_id
-                
-                # Get final checkpoint ID from state adapter
-                if not checkpoint_id:
-                    current_state = await self._state_adapter.aget_current_state()
-                    checkpoint_id = current_state.get("_checkpoint_id")
+                    if not tracking_result or not getattr(
+                        tracking_result, "commit_id", None
+                    ):
+                        raise RuntimeError("File tracking did not produce a file commit")
+                    expected_count = len(track_output_files)
+                    tracked_count = getattr(tracking_result, "files_tracked", None)
+                    if tracked_count != expected_count:
+                        raise RuntimeError(
+                            f"Expected {expected_count} files to be tracked, "
+                            f"but tracked {tracked_count}"
+                        )
                 
                 # Mark execution as completed
                 execution.status = ExecutionStatus.COMPLETED
@@ -248,19 +335,32 @@ class AsyncExecutionController:
                 )
                 
             except Exception as e:
-                # Mark execution as failed
+                # The active transaction may be unusable (especially after a
+                # commit failure). Roll it back, then persist FAILED through a
+                # fresh UoW without allowing secondary errors to mask `e`.
+                try:
+                    await uow.arollback()
+                except Exception as rollback_error:
+                    e.add_note(
+                        "Additionally failed to roll back the execution transaction: "
+                        f"{rollback_error}"
+                    )
+                    logger.error(
+                        "Could not roll back failed async execution transaction: "
+                        f"{rollback_error}"
+                    )
+
+                await self._apersist_failed_execution(execution_id, e)
                 execution.status = ExecutionStatus.FAILED
                 execution.error_message = str(e)
                 execution.completed_at = datetime.now()
-                await uow.executions.aupdate(execution)
-                await uow.acommit()
-                
+
                 duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                
+
                 logger.error(
                     f"Async execution failed: {execution_id}, error={e}"
                 )
-                
+
                 return AsyncExecutionResult(
                     execution_id=execution_id,
                     status=ExecutionStatus.FAILED,
@@ -268,8 +368,152 @@ class AsyncExecutionController:
                     error_message=str(e),
                     duration_ms=duration_ms,
                 )
+
+    async def _apersist_failed_execution(
+        self,
+        execution_id: str,
+        primary_error: Exception,
+    ) -> None:
+        """Persist FAILED through a clean transaction or surface the primary error."""
+        try:
+            async with self._uow_factory() as failure_uow:
+                failed_execution = await failure_uow.executions.aget(execution_id)
+                if failed_execution is None:
+                    raise RuntimeError(
+                        f"Execution not found while persisting failure: {execution_id}"
+                    )
+                failed_execution.status = ExecutionStatus.FAILED
+                failed_execution.error_message = str(primary_error)
+                failed_execution.completed_at = datetime.now()
+                await failure_uow.executions.aupdate(failed_execution)
+                await failure_uow.acommit()
+        except Exception as persistence_error:
+            primary_error.add_note(
+                "Additionally failed to persist FAILED execution state: "
+                f"{persistence_error}"
+            )
+            logger.error(
+                "Could not persist FAILED async execution state: "
+                f"{persistence_error}"
+            )
+            raise primary_error from persistence_error
+
+    async def _aresolve_final_checkpoint_id(
+        self,
+        current_state: Dict[str, Any],
+        final_state: Dict[str, Any],
+        current_node_id: Optional[str],
+    ) -> str:
+        """Resolve or create the final graph checkpoint ID."""
+        checkpoint_id = None
+        if isinstance(current_state, dict):
+            checkpoint_id = current_state.get("_checkpoint_id")
+        if checkpoint_id:
+            return str(checkpoint_id)
+
+        get_checkpoints = getattr(self._state_adapter, "aget_checkpoints", None)
+        if callable(get_checkpoints):
+            history = await get_checkpoints(limit=1)
+            for checkpoint in history or []:
+                if not isinstance(checkpoint, dict):
+                    continue
+                checkpoint_id = checkpoint.get("checkpoint_id") or checkpoint.get("id")
+                if checkpoint_id:
+                    return str(checkpoint_id)
+
+        save_checkpoint = getattr(self._state_adapter, "asave_checkpoint", None)
+        if not callable(save_checkpoint):
+            raise RuntimeError("State adapter did not expose a final checkpoint")
+
+        if not current_node_id:
+            raise RuntimeError("Cannot save final checkpoint without a current node")
+
+        state_values = final_state or current_state or {}
+        checkpoint_id = await save_checkpoint(
+            state=ExecutionState(workflow_variables=dict(state_values or {})),
+            node_id=current_node_id,
+            trigger=CheckpointTrigger.AUTO,
+            name="Final execution state",
+        )
+        if not checkpoint_id:
+            raise RuntimeError("State adapter did not create a final checkpoint")
+        return str(checkpoint_id)
+
+    async def _atrack_and_link(
+        self,
+        uow: IAsyncUnitOfWork,
+        *,
+        checkpoint_id: str,
+        file_paths: List[str],
+        message: str,
+    ):
+        """Track files atomically in the execution's caller-owned UoW."""
+        track_in_uow = getattr(
+            self._file_tracking,
+            "atrack_and_link_in_uow",
+            None,
+        )
+        implementation = getattr(
+            type(self._file_tracking),
+            "atrack_and_link_in_uow",
+            None,
+        )
+        if (
+            not callable(track_in_uow)
+            or implementation is IAsyncFileTrackingService.atrack_and_link_in_uow
+        ):
+            raise RuntimeError(
+                "File tracking service must support a shared unit of work"
+            )
+        try:
+            return await track_in_uow(
+                uow,
+                checkpoint_id=checkpoint_id,
+                file_paths=file_paths,
+                message=message,
+            )
+        except NotImplementedError as error:
+            raise RuntimeError(
+                "File tracking service must support a shared unit of work"
+            ) from error
     
     async def astream(
+        self,
+        execution_id: str,
+        graph: Optional["StateGraph"] = None,
+        stream_mode: str = "updates",
+    ) -> AsyncIterator[AsyncStreamEvent]:
+        """Stream with exclusive access to the adapter session and graph."""
+        async with self._state_adapter_lock:
+            try:
+                async for event in self._astream_with_adapter(
+                    execution_id,
+                    graph=graph,
+                    stream_mode=stream_mode,
+                ):
+                    yield event
+            except (asyncio.CancelledError, GeneratorExit):
+                await self._apersist_cancelled_execution(execution_id)
+                raise
+
+    async def _apersist_cancelled_execution(self, execution_id: str) -> None:
+        """Persist stream cancellation so an interrupted stream is terminal."""
+        async with self._uow_factory() as uow:
+            execution = await uow.executions.aget(execution_id)
+            if execution is None:
+                raise RuntimeError(
+                    f"Execution not found while persisting cancellation: {execution_id}"
+                )
+            if execution.status not in (
+                ExecutionStatus.COMPLETED,
+                ExecutionStatus.FAILED,
+                ExecutionStatus.CANCELLED,
+            ):
+                execution.cancel()
+                await uow.executions.aupdate(execution)
+                await uow.acommit()
+
+    async def _astream_with_adapter(
         self, 
         execution_id: str, 
         graph: Optional["StateGraph"] = None,
@@ -371,6 +615,20 @@ class AsyncExecutionController:
         name: Optional[str] = None,
         track_files: Optional[List[str]] = None,
     ) -> str:
+        """Save a checkpoint without sharing mutable adapter context."""
+        async with self._state_adapter_lock:
+            return await self._asave_checkpoint_with_adapter(
+                node_id,
+                name=name,
+                track_files=track_files,
+            )
+
+    async def _asave_checkpoint_with_adapter(
+        self,
+        node_id: str,
+        name: Optional[str] = None,
+        track_files: Optional[List[str]] = None,
+    ) -> str:
         """
         Save checkpoint with optional file tracking.
         
@@ -386,22 +644,22 @@ class AsyncExecutionController:
         """
         if not self._current_execution_var.get():
             raise RuntimeError("No active execution")
-        
+        await self._activate_current_adapter_session()
+
         async with self._uow_factory() as uow:
-            from wtb.domain.models.workflow import CheckpointTrigger
-            
             # Save state checkpoint
             current_state = await self._state_adapter.aget_current_state()
             checkpoint_id = await self._state_adapter.asave_checkpoint(
                 state=ExecutionState(workflow_variables=current_state),
                 node_id=node_id,
-                trigger=CheckpointTrigger.NODE_COMPLETE,
+                trigger=CheckpointTrigger.NODE_END,
                 name=name,
             )
             
             # Track files if provided
             if track_files and self._file_tracking:
-                await self._file_tracking.atrack_and_link(
+                await self._atrack_and_link(
+                    uow,
                     checkpoint_id=checkpoint_id,
                     file_paths=track_files,
                     message=f"Checkpoint {name or node_id} files",
@@ -415,34 +673,88 @@ class AsyncExecutionController:
             
             return checkpoint_id
     
-    async def arollback_to_checkpoint(self, checkpoint_id: str) -> ExecutionState:
-        """
-        Rollback to checkpoint asynchronously.
-        
-        Restores state and optionally files from checkpoint.
-        
+    async def arollback_to_checkpoint(
+        self,
+        checkpoint_id: str,
+        restore_output_dir: Optional[Path] = None,
+    ) -> ExecutionState:
+        """Rollback without sharing mutable adapter context."""
+        async with self._state_adapter_lock:
+            return await self._arollback_with_adapter(
+                checkpoint_id,
+                restore_output_dir=restore_output_dir,
+            )
+
+    async def _arollback_with_adapter(
+        self,
+        checkpoint_id: str,
+        restore_output_dir: Optional[Path] = None,
+    ) -> ExecutionState:
+        """Rollback state and, when requested, its linked files asynchronously.
+
+        Without ``restore_output_dir`` this is explicitly a state-only rollback.
+        When a directory is provided, linked files must be restored completely
+        before the execution record is updated and committed.
+
         Args:
-            checkpoint_id: Checkpoint to rollback to
-            
+            checkpoint_id: Checkpoint to rollback to.
+            restore_output_dir: Optional destination for checkpoint-linked files.
+
         Returns:
-            ExecutionState after rollback
+            ExecutionState after rollback.
         """
-        if not self._current_execution_var.get():
+        current_execution = self._current_execution_var.get()
+        if not current_execution:
             raise RuntimeError("No active execution")
-        
+        await self._activate_current_adapter_session()
+
         async with self._uow_factory() as uow:
-            # Rollback state
+            preflight_state = None
+            if restore_output_dir is not None:
+                if self._file_tracking is None:
+                    raise RuntimeError(
+                        "File restoration requested but no file tracking service is configured"
+                    )
+                # Load and restore files before moving the adapter checkpoint.
+                # CAS/link failures therefore leave adapter state unchanged.
+                preflight_state = await self._state_adapter.aload_checkpoint(
+                    checkpoint_id
+                )
+                restored_count = await self._file_tracking.arestore_files(
+                    checkpoint_id,
+                    Path(restore_output_dir),
+                )
+                values = (
+                    preflight_state.workflow_variables
+                    if isinstance(preflight_state, ExecutionState)
+                    else preflight_state
+                )
+                output_files = (
+                    values.get("_output_files", {})
+                    if isinstance(values, dict)
+                    else {}
+                )
+                expected_count = (
+                    len(output_files) if isinstance(output_files, dict) else 0
+                )
+                if expected_count > 0 and restored_count != expected_count:
+                    raise RuntimeError(
+                        f"Expected {expected_count} checkpoint files to be restored, "
+                        f"but restored {restored_count}"
+                    )
+                if expected_count == 0 and restored_count <= 0:
+                    raise RuntimeError(
+                        "Expected at least 1 checkpoint file to be restored, "
+                        f"but restored {restored_count}"
+                    )
+
             state = await self._state_adapter.arollback(checkpoint_id)
-            
-            # Update execution record
-            self._current_execution_var.get().state = state
-            self._current_execution_var.get().checkpoint_id = checkpoint_id
-            await uow.executions.aupdate(self._current_execution_var.get())
-            
+            current_execution.state = state
+            current_execution.checkpoint_id = checkpoint_id
+            await uow.executions.aupdate(current_execution)
             await uow.acommit()
-            
+
             logger.info(f"Rolled back to checkpoint: {checkpoint_id}")
-            
             return state
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -450,6 +762,18 @@ class AsyncExecutionController:
     # ═══════════════════════════════════════════════════════════════════════════
     
     async def afork(
+        self,
+        new_execution_id: str,
+        from_checkpoint_id: Optional[str] = None,
+    ) -> "AsyncExecutionController":
+        """Fork without sharing mutable adapter context."""
+        async with self._state_adapter_lock:
+            return await self._afork_with_adapter(
+                new_execution_id,
+                from_checkpoint_id=from_checkpoint_id,
+            )
+
+    async def _afork_with_adapter(
         self,
         new_execution_id: str,
         from_checkpoint_id: Optional[str] = None,
@@ -468,7 +792,8 @@ class AsyncExecutionController:
         """
         if not self._current_execution_var.get():
             raise RuntimeError("No active execution")
-        
+        await self._activate_current_adapter_session()
+
         async with self._uow_factory() as uow:
             # Create forked state adapter
             fork_thread_id = f"wtb-{new_execution_id}"
@@ -521,13 +846,17 @@ class AsyncExecutionController:
     
     async def aget_current_state(self) -> Dict[str, Any]:
         """Get current execution state."""
-        return await self._state_adapter.aget_current_state()
+        async with self._state_adapter_lock:
+            await self._activate_current_adapter_session()
+            return await self._state_adapter.aget_current_state()
     
     async def aget_checkpoints(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get checkpoint history for current execution."""
-        if hasattr(self._state_adapter, 'aget_checkpoints'):
-            return await self._state_adapter.aget_checkpoints(limit)
-        return []
+        async with self._state_adapter_lock:
+            await self._activate_current_adapter_session()
+            if hasattr(self._state_adapter, 'aget_checkpoints'):
+                return await self._state_adapter.aget_checkpoints(limit)
+            return []
     
     @property
     def current_execution(self) -> Optional[Execution]:
@@ -590,11 +919,24 @@ class AsyncExecutionControllerFactory:
             LangGraphConfig,
             CheckpointerType,
         )
-        
-        config = LangGraphConfig(
-            checkpointer_type=CheckpointerType(checkpointer_type),
-            db_path=db_path,
-        )
+
+        try:
+            selected_type = CheckpointerType(checkpointer_type)
+        except ValueError as error:
+            raise ValueError(
+                f"Unsupported async checkpointer type: {checkpointer_type!r}"
+            ) from error
+
+        if selected_type is CheckpointerType.MEMORY:
+            config = LangGraphConfig.for_testing()
+        elif selected_type is CheckpointerType.SQLITE:
+            if not db_path:
+                raise ValueError("db_path is required for sqlite checkpointer")
+            config = LangGraphConfig.for_development(db_path)
+        else:
+            if not db_path:
+                raise ValueError("db_path is required for postgres checkpointer")
+            config = LangGraphConfig.for_production(db_path)
         
         state_adapter = AsyncLangGraphStateAdapter(config)
         

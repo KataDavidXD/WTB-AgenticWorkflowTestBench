@@ -28,8 +28,13 @@ Domain Models (REUSED, not duplicated):
 from __future__ import annotations
 
 import base64
+import copy
+import os
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from functools import wraps
+from typing import Any, Callable, Dict, Iterator, List, Optional, TYPE_CHECKING
 from datetime import datetime, timezone
 import logging
 
@@ -40,9 +45,21 @@ from wtb.domain.models.batch_test import (
     BatchTest,
     BatchTestResult,
     BatchTestStatus,
+    normalize_finite_metrics,
 )
 
 from .workflow_project import WorkflowProject
+
+
+def _serialized_adapter_access(method):
+    """Serialize operations that may observe or mutate the shared adapter."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lifecycle_lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces import (
@@ -53,6 +70,11 @@ if TYPE_CHECKING:
     from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
 
 logger = logging.getLogger(__name__)
+
+_EXECUTION_STATE_ADAPTER_BACKENDS = {
+    "langgraph_sqlite",
+    "node_sqlite",
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -238,9 +260,15 @@ class WTBTestBenchBuilder:
         
         # Apply partial overrides from builder
         if self._batch_runner is not None:
-            bench._batch_runner = self._batch_runner
+            bench._replace_batch_runner(
+                self._batch_runner,
+                owns_batch_runner=False,
+            )
         if self._execution_controller is not None:
-            bench._execution_controller = self._execution_controller
+            bench._replace_execution_controller(
+                self._execution_controller,
+                owns_execution_resources=False,
+            )
         return bench
     
     def _has_all_custom_dependencies(self) -> bool:
@@ -280,6 +308,9 @@ class WTBTestBench:
         variant_service: "VariantService",
         execution_controller: "IExecutionController",
         batch_runner: Optional["IBatchTestRunner"] = None,
+        *,
+        owns_batch_runner: bool = False,
+        owns_execution_resources: bool = False,
     ):
         """
         Initialize WTBTestBench with Application Services.
@@ -289,11 +320,17 @@ class WTBTestBench:
             variant_service: Application service for variant management
             execution_controller: Domain interface for execution lifecycle
             batch_runner: Optional batch test runner
+            owns_batch_runner: Whether this bench must shut down the runner
+            owns_execution_resources: Whether this bench owns the controller's
+                state adapter, file tracker, and UoW
         """
         self._project_service = project_service
         self._variant_service = variant_service
         self._exec_ctrl = execution_controller
         self._batch_runner = batch_runner
+        self._owns_batch_runner = bool(owns_batch_runner)
+        self._owns_execution_resources = bool(owns_execution_resources)
+        self._lifecycle_lock = threading.RLock()
         self._closed = False
         
         # SDK-level caches
@@ -313,32 +350,112 @@ class WTBTestBench:
         A batch-runner shutdown failure is propagated and leaves the bench
         open so actor termination and resource cleanup can be retried.
         """
-        if self._closed:
-            return
+        with self._lifecycle_lock:
+            if self._closed:
+                return
 
-        if self._batch_runner is not None:
-            _shutdown = getattr(self._batch_runner, "shutdown", None)
-            if callable(_shutdown):
-                _shutdown()
+            if self._owns_batch_runner and self._batch_runner is not None:
+                shutdown = getattr(self._batch_runner, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
 
-        inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
-        adapter = getattr(inner, "_state_adapter", None)
-        if adapter is not None:
-            _close = getattr(adapter, "close", None)
-            if callable(_close):
-                try:
-                    _close()
-                except Exception:
-                    pass
+            coordinator = getattr(self, "_batch_coordinator", None)
+            if coordinator is not None:
+                close_coordinator = getattr(coordinator, "close", None)
+                if callable(close_coordinator):
+                    try:
+                        close_coordinator()
+                    except Exception:
+                        pass
+                self._batch_coordinator = None
 
-        uow = getattr(inner, "_uow", None)
-        if uow is not None:
-            try:
-                uow.__exit__(None, None, None)
-            except Exception:
-                pass
+            if self._owns_execution_resources:
+                inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+                adapter = getattr(inner, "_state_adapter", None)
+                file_tracking = getattr(inner, "_file_tracking", None)
+                uow = getattr(inner, "_uow", None)
+                seen_resources = set()
 
-        self._closed = True
+                for resource in (adapter, file_tracking):
+                    if resource is None or id(resource) in seen_resources:
+                        continue
+                    seen_resources.add(id(resource))
+                    close_resource = getattr(resource, "close", None)
+                    if callable(close_resource):
+                        try:
+                            close_resource()
+                        except Exception:
+                            pass
+
+                if uow is not None and id(uow) not in seen_resources:
+                    try:
+                        uow.__exit__(None, None, None)
+                    except Exception:
+                        pass
+
+            self._closed = True
+
+    def _replace_batch_runner(
+        self,
+        batch_runner: Optional["IBatchTestRunner"],
+        *,
+        owns_batch_runner: bool,
+    ) -> None:
+        """Replace the runner without leaking an owned previous instance."""
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("WTBTestBench is closed")
+            if batch_runner is self._batch_runner:
+                self._owns_batch_runner = bool(owns_batch_runner)
+                return
+
+            previous = self._batch_runner
+            if self._owns_batch_runner and previous is not None:
+                shutdown = getattr(previous, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+
+            self._batch_runner = batch_runner
+            self._owns_batch_runner = bool(owns_batch_runner)
+
+    def _replace_execution_controller(
+        self,
+        execution_controller: "IExecutionController",
+        *,
+        owns_execution_resources: bool,
+    ) -> None:
+        """Replace the controller and release resources owned by the bench."""
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("WTBTestBench is closed")
+            if execution_controller is self._exec_ctrl:
+                self._owns_execution_resources = bool(owns_execution_resources)
+                return
+
+            if self._owns_execution_resources:
+                inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+                adapter = getattr(inner, "_state_adapter", None)
+                file_tracking = getattr(inner, "_file_tracking", None)
+                uow = getattr(inner, "_uow", None)
+                seen_resources = set()
+                for resource in (adapter, file_tracking):
+                    if resource is None or id(resource) in seen_resources:
+                        continue
+                    seen_resources.add(id(resource))
+                    close_resource = getattr(resource, "close", None)
+                    if callable(close_resource):
+                        try:
+                            close_resource()
+                        except Exception:
+                            pass
+                if uow is not None and id(uow) not in seen_resources:
+                    try:
+                        uow.__exit__(None, None, None)
+                    except Exception:
+                        pass
+
+            self._exec_ctrl = execution_controller
+            self._owns_execution_resources = bool(owns_execution_resources)
 
     def __enter__(self) -> "WTBTestBench":
         return self
@@ -423,6 +540,7 @@ class WTBTestBench:
     # Execution - Returns domain Execution directly
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def run(
         self,
         project: str,
@@ -448,8 +566,16 @@ class WTBTestBench:
             raise ValueError(f"Workflow for project '{project}' not found")
         
         run_initial_state = dict(initial_state)
+        execution_metadata: Dict[str, Any] = {}
         if variant_config:
-            run_initial_state.setdefault("_variant_config", dict(variant_config))
+            run_initial_state.setdefault(
+                "_variant_config",
+                copy.deepcopy(variant_config),
+            )
+            execution_metadata["_variant_config"] = copy.deepcopy(variant_config)
+        if workflow_variant is not None:
+            run_initial_state["_workflow_variant"] = workflow_variant
+            execution_metadata["_workflow_variant"] = workflow_variant
 
         # Build graph
         graph = proj.build_graph(
@@ -458,11 +584,14 @@ class WTBTestBench:
         )
         
         # Create and run execution via ExecutionController
-        execution = self._exec_ctrl.create_execution(
-            workflow=workflow,
-            initial_state=run_initial_state,
-            breakpoints=breakpoints or [],
-        )
+        create_kwargs: Dict[str, Any] = {
+            "workflow": workflow,
+            "initial_state": run_initial_state,
+            "breakpoints": breakpoints or [],
+        }
+        if execution_metadata:
+            create_kwargs["metadata"] = execution_metadata
+        execution = self._exec_ctrl.create_execution(**create_kwargs)
         
         return self._exec_ctrl.run(execution.id, graph=graph)
     
@@ -470,21 +599,34 @@ class WTBTestBench:
     # Execution Control - Delegates to IExecutionController
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def pause(self, execution_id: str) -> Execution:
         """Pause execution. Returns domain Execution."""
+        execution = self.get_execution(execution_id)
+        metadata = getattr(execution, "metadata", None)
+        if isinstance(metadata, dict) and metadata.get("checkpoint_db_path"):
+            graph = self._require_graph_for_execution(
+                execution_id,
+                execution=execution,
+            )
+            with self._prepare_controller_graph(graph, execution=execution):
+                return self._exec_ctrl.pause(execution_id)
         return self._exec_ctrl.pause(execution_id)
     
+    @_serialized_adapter_access
     def resume(self, execution_id: str, modified_state: Optional[Dict[str, Any]] = None) -> Execution:
         """Resume execution. Returns domain Execution."""
         execution = self.get_execution(execution_id)
-        graph = self._resolve_graph_for_execution(execution_id, execution=execution)
-        self._prepare_controller_graph(graph, execution=execution)
-        return self._exec_ctrl.resume(execution_id, modified_state)
+        graph = self._require_graph_for_execution(execution_id, execution=execution)
+        with self._prepare_controller_graph(graph, execution=execution):
+            return self._exec_ctrl.resume(execution_id, modified_state)
     
+    @_serialized_adapter_access
     def stop(self, execution_id: str) -> Execution:
         """Stop execution. Returns domain Execution."""
         return self._exec_ctrl.stop(execution_id)
     
+    @_serialized_adapter_access
     def rollback(self, execution_id: str, checkpoint_id: str) -> RollbackResult:
         """
         Rollback to a checkpoint. Returns RollbackResult (operation DTO).
@@ -494,18 +636,31 @@ class WTBTestBench:
             checkpoint_id: Checkpoint ID (UUID string)
         """
         try:
-            self._exec_ctrl.rollback(execution_id, checkpoint_id)
+            execution = self.get_execution(execution_id)
+            graph = self._require_graph_for_execution(
+                execution_id,
+                execution=execution,
+            )
+            with self._prepare_controller_graph(graph, execution=execution):
+                self._exec_ctrl.rollback(execution_id, checkpoint_id)
             return RollbackResult(execution_id=execution_id, to_checkpoint_id=checkpoint_id, success=True)
         except Exception as e:
             return RollbackResult(execution_id=execution_id, to_checkpoint_id=checkpoint_id, success=False, error=str(e))
     
+    @_serialized_adapter_access
     def rollback_to_node(self, execution_id: str, node_id: str) -> RollbackResult:
         """Rollback to after a specific node completed."""
         if not self._exec_ctrl.supports_time_travel():
             return RollbackResult(execution_id=execution_id, to_checkpoint_id="", success=False, error="Time-travel not supported")
         
         try:
-            execution = self._exec_ctrl.rollback_to_node(execution_id, node_id)
+            execution = self.get_execution(execution_id)
+            graph = self._require_graph_for_execution(
+                execution_id,
+                execution=execution,
+            )
+            with self._prepare_controller_graph(graph, execution=execution):
+                execution = self._exec_ctrl.rollback_to_node(execution_id, node_id)
             return RollbackResult(
                 execution_id=execution_id,
                 to_checkpoint_id=execution.checkpoint_id or "",
@@ -518,6 +673,7 @@ class WTBTestBench:
     # Forking - Delegates to ExecutionController.fork()
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def fork(self, execution_id: str, checkpoint_id: str, new_initial_state: Optional[Dict[str, Any]] = None) -> ForkResult:
         """
         Fork an execution to create a new independent execution.
@@ -534,7 +690,17 @@ class WTBTestBench:
             ForkResult with fork details including the new execution ID
         """
         try:
-            forked_execution = self._exec_ctrl.fork(execution_id, checkpoint_id, new_initial_state)
+            execution = self.get_execution(execution_id)
+            graph = self._require_graph_for_execution(
+                execution_id,
+                execution=execution,
+            )
+            with self._prepare_controller_graph(graph, execution=execution):
+                forked_execution = self._exec_ctrl.fork(
+                    execution_id,
+                    checkpoint_id,
+                    new_initial_state,
+                )
             
             return ForkResult(
                 fork_execution_id=forked_execution.id,
@@ -568,21 +734,12 @@ class WTBTestBench:
         Returns:
             BatchExecutionCoordinator instance
         """
-        if not hasattr(self, '_batch_coordinator') or self._batch_coordinator is None:
-            self._batch_coordinator = self._create_batch_coordinator()
-        return self._batch_coordinator
-    
-    def _resolve_graph_for_result(self, graph: Optional[Any] = None) -> Optional[Any]:
-        """Resolve a compiled LangGraph graph from the project cache if not provided."""
-        if graph is not None:
-            return graph
-        for proj in self._project_cache.values():
-            if callable(getattr(proj, "graph_factory", None)):
-                try:
-                    return proj.graph_factory()
-                except Exception:
-                    continue
-        return None
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("WTBTestBench is closed")
+            if not hasattr(self, '_batch_coordinator') or self._batch_coordinator is None:
+                self._batch_coordinator = self._create_batch_coordinator()
+            return self._batch_coordinator
 
     def _resolve_graph_for_execution(
         self,
@@ -596,40 +753,170 @@ class WTBTestBench:
             except Exception:
                 return None
 
+        metadata = (
+            getattr(execution, "metadata", None)
+            if isinstance(getattr(execution, "metadata", None), dict)
+            else {}
+        )
         state_vars = {}
         if execution.state and execution.state.workflow_variables:
             state_vars = execution.state.workflow_variables
-        variant_config = state_vars.get("_variant_config")
+        variant_config = metadata.get(
+            "_variant_config",
+            state_vars.get("_variant_config"),
+        )
+        workflow_variant = metadata.get(
+            "_workflow_variant",
+            state_vars.get("_workflow_variant"),
+        )
 
-        for proj in self._project_cache.values():
-            if proj.id == execution.workflow_id:
-                return proj.build_graph(variant_config=variant_config)
-
-        if len(self._project_cache) == 1:
-            proj = next(iter(self._project_cache.values()))
-            return proj.build_graph(variant_config=variant_config)
+        matching_projects = {
+            id(proj): proj
+            for cache_name, proj in self._project_cache.items()
+            if execution.workflow_id
+            in (proj.id, getattr(proj, "name", cache_name), cache_name)
+        }
+        if len(matching_projects) == 1:
+            proj = next(iter(matching_projects.values()))
+            build_kwargs = {"variant_config": variant_config}
+            if workflow_variant is not None:
+                build_kwargs["workflow_variant"] = workflow_variant
+            return proj.build_graph(**build_kwargs)
 
         return None
 
+    def _require_graph_for_execution(
+        self,
+        execution_id: str,
+        execution: Optional[Execution] = None,
+    ) -> Optional[Any]:
+        """Resolve one execution-owned graph or reject the control operation.
+
+        Node-executor checkpoints do not have a LangGraph graph contract. A
+        persisted ``node_sqlite`` execution therefore remains controllable
+        without a registered SDK project, provided its exact state adapter is
+        rebound by :meth:`_prepare_controller_graph`.
+        """
+        graph = self._resolve_graph_for_execution(
+            execution_id,
+            execution=execution,
+        )
+        if graph is None:
+            if self._execution_state_adapter_backend(execution) == "node_sqlite":
+                return None
+            workflow_id = getattr(execution, "workflow_id", None)
+            raise ValueError(
+                "No registered project matches "
+                f"workflow_id '{workflow_id}' for execution '{execution_id}'"
+            )
+        return graph
+
+    @contextmanager
     def _prepare_controller_graph(
         self,
         graph: Optional[Any],
         execution: Optional[Execution] = None,
-    ) -> None:
-        """Prime the underlying controller's state adapter before resume."""
-        if graph is None:
-            return
+    ) -> Iterator[None]:
+        """Temporarily bind an execution-specific graph and state adapter."""
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("WTBTestBench is closed")
 
-        controller = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
-        state_adapter = self._state_adapter_for_execution(
-            execution,
-            fallback=getattr(controller, "_state_adapter", None),
-        )
-        if state_adapter is not None:
-            setattr(controller, "_state_adapter", state_adapter)
-        set_graph = getattr(state_adapter, "set_workflow_graph", None)
-        if callable(set_graph):
-            set_graph(graph, force_recompile=True)
+            controller = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+            original_adapter = getattr(controller, "_state_adapter", None)
+            state_adapter = self._state_adapter_for_execution(
+                execution,
+                fallback=original_adapter,
+            )
+            temporary_adapter = (
+                state_adapter is not None and state_adapter is not original_adapter
+            )
+            if temporary_adapter:
+                setattr(controller, "_state_adapter", state_adapter)
+
+            try:
+                set_graph = (
+                    getattr(state_adapter, "set_workflow_graph", None)
+                    if graph is not None
+                    else None
+                )
+                if callable(set_graph):
+                    set_graph(graph, force_recompile=True)
+                yield
+            finally:
+                if temporary_adapter:
+                    setattr(controller, "_state_adapter", original_adapter)
+                    close_adapter = getattr(state_adapter, "close", None)
+                    if callable(close_adapter):
+                        try:
+                            close_adapter()
+                        except Exception as close_error:
+                            logger.warning(
+                                "Could not close temporary state adapter: %s",
+                                close_error,
+                            )
+
+    @staticmethod
+    def _execution_state_adapter_backend(
+        execution: Optional[Execution],
+    ) -> Optional[str]:
+        """Return the persisted adapter backend for actor-local execution state."""
+        if execution is None:
+            return None
+
+        metadata = getattr(execution, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        if not metadata.get("checkpoint_db_path"):
+            return None
+
+        backend = metadata.get("state_adapter_backend")
+        if not backend:
+            raise RuntimeError(
+                "Missing state_adapter_backend for execution-specific "
+                f"checkpoint storage on execution '{execution.id}'"
+            )
+        if backend not in _EXECUTION_STATE_ADAPTER_BACKENDS:
+            raise RuntimeError(
+                "Unsupported execution-specific state adapter backend "
+                f"'{backend}' for execution '{execution.id}'"
+            )
+        return backend
+
+    @staticmethod
+    def _normalized_state_adapter_path(value: Any) -> Optional[str]:
+        """Normalize adapter paths before deciding whether reuse is safe."""
+        if value is None:
+            return None
+        try:
+            path_value = os.fspath(value)
+        except TypeError:
+            path_value = str(value)
+        if not path_value:
+            return None
+        return os.path.normcase(os.path.abspath(os.path.expanduser(path_value)))
+
+    @staticmethod
+    def _state_adapter_identity(adapter: Optional[Any]) -> tuple[Optional[str], Any]:
+        """Return the advertised backend and storage path of an adapter."""
+        if adapter is None:
+            return None, None
+
+        backend = getattr(adapter, "state_adapter_backend", None)
+        if (
+            not isinstance(backend, str)
+            or backend not in _EXECUTION_STATE_ADAPTER_BACKENDS
+        ):
+            backend = None
+
+        storage_path = getattr(adapter, "storage_path", None)
+        if storage_path is None:
+            storage_path = getattr(
+                getattr(adapter, "_config", None),
+                "connection_string",
+                None,
+            )
+        return backend, storage_path
 
     def _state_adapter_for_execution(
         self,
@@ -637,42 +924,69 @@ class WTBTestBench:
         fallback: Optional[Any],
     ) -> Optional[Any]:
         """Use actor-local checkpoint storage when execution metadata requires it."""
-        if execution is None:
+        backend = self._execution_state_adapter_backend(execution)
+        if backend is None or execution is None:
             return fallback
 
-        metadata = execution.metadata or {}
-        if not isinstance(metadata, dict) or not metadata.get("checkpoint_db_path"):
+        checkpoint_db_path = self._normalized_state_adapter_path(
+            execution.metadata["checkpoint_db_path"]
+        )
+        if checkpoint_db_path is None:
+            raise RuntimeError(
+                "Could not resolve execution-specific state adapter storage "
+                f"for execution '{execution.id}'"
+            )
+
+        fallback_backend, fallback_path = self._state_adapter_identity(fallback)
+        if (
+            fallback_backend == backend
+            and self._normalized_state_adapter_path(fallback_path)
+            == checkpoint_db_path
+        ):
             return fallback
+
+        if backend == "node_sqlite":
+            try:
+                from wtb.infrastructure.adapters.sqlite_state_adapter import (
+                    SqliteStateAdapter,
+                )
+
+                return SqliteStateAdapter(storage_path=checkpoint_db_path)
+            except Exception as error:
+                raise RuntimeError(
+                    "Could not create execution-specific node_sqlite state adapter "
+                    f"for execution '{execution.id}' at '{checkpoint_db_path}': "
+                    f"{error}"
+                ) from error
 
         try:
-            from wtb.application.services.external_storage import (
-                resolve_execution_storage_paths,
-            )
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
                 LANGGRAPH_AVAILABLE,
                 LangGraphConfig,
                 LangGraphStateAdapter,
             )
-        except Exception:
-            return fallback
+        except Exception as error:
+            raise RuntimeError(
+                "Could not import execution-specific langgraph_sqlite state "
+                f"adapter for execution '{execution.id}': {error}"
+            ) from error
 
         if not LANGGRAPH_AVAILABLE:
-            return fallback
+            raise RuntimeError(
+                "Could not create execution-specific langgraph_sqlite state "
+                f"adapter for execution '{execution.id}': LangGraph is unavailable"
+            )
 
-        paths = resolve_execution_storage_paths(
-            metadata,
-            fallback_actor_id=metadata.get("actor_id"),
-        )
-        checkpoint_db_path = str(paths.checkpoint_db_path)
-        existing_connection = getattr(
-            getattr(fallback, "_config", None),
-            "connection_string",
-            None,
-        )
-        if existing_connection and str(existing_connection) == checkpoint_db_path:
-            return fallback
-
-        return LangGraphStateAdapter(LangGraphConfig.for_development(checkpoint_db_path))
+        try:
+            return LangGraphStateAdapter(
+                LangGraphConfig.for_development(checkpoint_db_path)
+            )
+        except Exception as error:
+            raise RuntimeError(
+                "Could not create execution-specific langgraph_sqlite state "
+                f"adapter for execution '{execution.id}' at "
+                f"'{checkpoint_db_path}': {error}"
+            ) from error
     
     def rollback_batch_result(
         self,
@@ -719,9 +1033,12 @@ class WTBTestBench:
                 "Use get_batch_result_checkpoints() to list available checkpoints."
             )
         
-        resolved_graph = self._resolve_graph_for_result(graph)
-        
         try:
+            resolved_graph = (
+                graph
+                if graph is not None
+                else self._require_graph_for_execution(result.execution_id)
+            )
             coordinator = self.get_batch_coordinator()
             execution = coordinator.rollback(result.execution_id, cp_id, graph=resolved_graph)
             
@@ -790,9 +1107,12 @@ class WTBTestBench:
                 "Use get_batch_result_checkpoints() to list available checkpoints."
             )
         
-        resolved_graph = self._resolve_graph_for_result(graph)
-        
         try:
+            resolved_graph = (
+                graph
+                if graph is not None
+                else self._require_graph_for_execution(result.execution_id)
+            )
             coordinator = self.get_batch_coordinator()
             forked = coordinator.fork(result.execution_id, cp_id, new_state, graph=resolved_graph)
             
@@ -861,14 +1181,11 @@ class WTBTestBench:
         if not result.execution_id:
             return []
 
-        try:
-            coordinator = self.get_batch_coordinator()
-            graph = self._resolve_graph_for_result()
-            history = coordinator.get_checkpoints(result.execution_id, graph=graph)
-            if history:
-                return self._checkpoint_dicts_to_domain(result.execution_id, history)
-        except Exception:
-            pass
+        coordinator = self.get_batch_coordinator()
+        graph = self._resolve_graph_for_execution(result.execution_id)
+        history = coordinator.get_checkpoints(result.execution_id, graph=graph)
+        if history:
+            return self._checkpoint_dicts_to_domain(result.execution_id, history)
 
         return self.get_checkpoints(result.execution_id)
     
@@ -933,6 +1250,8 @@ class WTBTestBench:
         Run batch tests. Returns domain BatchTest with results.
         """
         proj = self._project_cache.get(project)
+        isolated_variant_matrix = copy.deepcopy(variant_matrix)
+        isolated_test_cases = copy.deepcopy(test_cases)
         requested_executor = getattr(
             getattr(proj, "execution", None),
             "batch_executor",
@@ -940,7 +1259,11 @@ class WTBTestBench:
         )
 
         if requested_executor == "sequential":
-            return self._run_batch_sequential(project, variant_matrix, test_cases)
+            return self._run_batch_sequential(
+                project,
+                isolated_variant_matrix,
+                isolated_test_cases,
+            )
 
         if not self._batch_runner:
             if requested_executor in {"ray", "threadpool"}:
@@ -951,7 +1274,11 @@ class WTBTestBench:
                     "Recreate the test bench with the requested executor or use "
                     "ExecutionConfig(batch_executor='sequential')."
                 )
-            return self._run_batch_sequential(project, variant_matrix, test_cases)
+            return self._run_batch_sequential(
+                project,
+                isolated_variant_matrix,
+                isolated_test_cases,
+            )
 
         runner_executor = None
         from wtb.application.services.batch_test_runner import ThreadPoolBatchTestRunner
@@ -1013,7 +1340,8 @@ class WTBTestBench:
             batch_test.metadata["_graph_factory_pickled"] = gf_pickled
         
         from wtb.domain.models.batch_test import VariantCombination
-        for i, variant_config in enumerate(variant_matrix):
+        for i, variant_config in enumerate(isolated_variant_matrix):
+            isolated_variant_config = copy.deepcopy(variant_config)
             combo_metadata: Dict[str, Any] = {}
             runtime_graph: Optional[Any] = None
             graph: Optional[Any] = None
@@ -1021,12 +1349,14 @@ class WTBTestBench:
                 proj
                 and any(
                     proj.get_variant(node_id, variant_name) is not None
-                    for node_id, variant_name in variant_config.items()
+                    for node_id, variant_name in isolated_variant_config.items()
                 )
             )
             if registered_variant_selected:
                 try:
-                    graph = proj.build_graph(variant_config=variant_config)
+                    graph = proj.build_graph(
+                        variant_config=copy.deepcopy(isolated_variant_config)
+                    )
                     try:
                         import cloudpickle
                     except ImportError:
@@ -1054,34 +1384,45 @@ class WTBTestBench:
 
             batch_test.variant_combinations.append(VariantCombination(
                 name=f"variant_{i}",
-                variants=variant_config,
+                variants=isolated_variant_config,
                 metadata=combo_metadata,
                 graph_factory_module=gf_module,
                 graph_factory_name=gf_name,
                 _runtime_graph=runtime_graph,
             ))
         
-        if not test_cases:
+        if not isolated_test_cases:
             result = self._batch_runner.run_batch_test(batch_test)
+            result.metadata["test_case_count"] = 1
+            for item in result.results:
+                item.test_case_index = 0
+            result.build_comparison_matrix()
             self._expire_session()
             return result
         
         all_results = []
-        for test_case in test_cases:
+        for case_index, test_case in enumerate(isolated_test_cases):
             case_batch = BatchTest(workflow_id=batch_test.workflow_id, _workflow=workflow)
             case_batch.metadata = dict(batch_test.metadata)
             case_batch.variant_combinations = list(batch_test.variant_combinations)
-            case_batch.initial_state = test_case
-            all_results.append(self._batch_runner.run_batch_test(case_batch))
+            case_batch.initial_state = copy.deepcopy(test_case)
+            case_result = self._batch_runner.run_batch_test(case_batch)
+            for item in case_result.results:
+                item.test_case_index = case_index
+            all_results.append(case_result)
         
         if len(all_results) == 1:
+            all_results[0].metadata["test_case_count"] = 1
+            all_results[0].build_comparison_matrix()
             self._expire_session()
             return all_results[0]
 
+        combined_metadata = dict(batch_test.metadata)
+        combined_metadata["test_case_count"] = len(isolated_test_cases)
         combined = BatchTest(
             workflow_id=batch_test.workflow_id,
             variant_combinations=list(batch_test.variant_combinations),
-            metadata=dict(batch_test.metadata),
+            metadata=combined_metadata,
             _workflow=workflow,
         )
         combined.start()
@@ -1089,10 +1430,18 @@ class WTBTestBench:
             for result in case_result.results:
                 combined.add_result(result)
 
-        expected_results_per_case = len(batch_test.variant_combinations)
+        expected_names = {
+            combination.name for combination in batch_test.variant_combinations
+        }
         incomplete_cases = [
             case_result for case_result in all_results
-            if len(case_result.results) != expected_results_per_case
+            if (
+                len(case_result.results) != len(expected_names)
+                or len({item.combination_name for item in case_result.results})
+                != len(case_result.results)
+                or {item.combination_name for item in case_result.results}
+                != expected_names
+            )
         ]
         if any(
             case_result.status is BatchTestStatus.CANCELLED
@@ -1101,15 +1450,10 @@ class WTBTestBench:
             # Cancellation takes precedence because the requested test matrix
             # was not fully evaluated, even if earlier cases produced results.
             combined.cancel()
-        elif any(
-            case_result.status is not BatchTestStatus.COMPLETED
-            for case_result in all_results
-        ):
-            combined.fail("One or more batch test cases did not complete")
         elif incomplete_cases:
             combined.fail(
-                "Incomplete test-case results: expected "
-                f"{expected_results_per_case} result(s) per case"
+                "Incomplete test-case result identities: expected exactly "
+                f"{sorted(expected_names)} for every case"
             )
         elif combined.results and all(
             not result.success for result in combined.results
@@ -1122,6 +1466,30 @@ class WTBTestBench:
         self._expire_session()
         return combined
     
+    @staticmethod
+    def _extract_batch_result_metrics(execution: Execution) -> Dict[str, float]:
+        """Extract batch metrics with the same contract used by worker modes."""
+        metrics: Dict[str, float] = {}
+        if execution.state:
+            variables = (
+                getattr(execution.state, "workflow_variables", {}) or {}
+            )
+            if "overall_score" in variables:
+                metrics["overall_score"] = variables["overall_score"]
+            if "accuracy" in variables:
+                metrics["accuracy"] = variables["accuracy"]
+            if "latency_ms" in variables:
+                metrics["latency_ms"] = variables["latency_ms"]
+            if "_metrics" in variables and isinstance(variables["_metrics"], dict):
+                metrics.update(variables["_metrics"])
+
+        if "overall_score" not in metrics:
+            metrics["overall_score"] = (
+                1.0 if execution.status == ExecutionStatus.COMPLETED else 0.0
+            )
+        return normalize_finite_metrics(metrics)
+
+    @_serialized_adapter_access
     def _run_batch_sequential(
         self,
         project: str,
@@ -1139,7 +1507,8 @@ class WTBTestBench:
 
         if not variant_matrix:
             raise BatchRunnerError("No variant combinations to execute")
-        cases = test_cases or [{}]
+        isolated_variant_matrix = copy.deepcopy(variant_matrix)
+        cases = copy.deepcopy(test_cases or [{}])
 
         
         if project not in self._project_cache:
@@ -1150,38 +1519,38 @@ class WTBTestBench:
         if not workflow:
             raise ValueError(f"Project '{project}' not found")
         
-        batch_test = BatchTest(workflow_id=workflow.id)
+        batch_test = BatchTest(
+            workflow_id=workflow.id,
+            metadata={"test_case_count": len(cases)},
+        )
         
         from wtb.domain.models.batch_test import VariantCombination
-        for i, variant_config in enumerate(variant_matrix):
+        for i, variant_config in enumerate(isolated_variant_matrix):
             batch_test.variant_combinations.append(
-                VariantCombination(name=f"variant_{i}", variants=variant_config)
+                VariantCombination(
+                    name=f"variant_{i}",
+                    variants=copy.deepcopy(variant_config),
+                )
             )
         
         batch_test.start()
         
-        for i, variant_config in enumerate(variant_matrix):
+        for i, variant_config in enumerate(isolated_variant_matrix):
             variant_name = f"variant_{i}"
-            start_ms = _time.time()
-            
-            try:
-                graph = proj.build_graph(variant_config=variant_config)
-                
-                for test_case in cases:
+            for case_index, test_case in enumerate(cases):
+                start_ms = _time.time()
+                try:
+                    graph = proj.build_graph(
+                        variant_config=copy.deepcopy(variant_config)
+                    )
                     execution = self._exec_ctrl.create_execution(
                         workflow=workflow,
-                        initial_state=test_case,
+                        initial_state=copy.deepcopy(test_case),
                     )
                     execution = self._exec_ctrl.run(execution.id, graph=graph)
                     
                     duration_ms = int((_time.time() - start_ms) * 1000)
-                    metrics = {}
-                    if execution.state:
-                        wv = getattr(execution.state, "workflow_variables", {}) or {}
-                        metrics = {
-                            k: v for k, v in wv.items()
-                            if isinstance(v, (int, float))
-                        }
+                    metrics = self._extract_batch_result_metrics(execution)
                     
                     result = BatchTestResult(
                         combination_name=variant_name,
@@ -1190,25 +1559,26 @@ class WTBTestBench:
                         error_message=execution.error_message,
                         duration_ms=duration_ms,
                         metrics=metrics,
-                        overall_score=metrics.get("overall_score", 0.0),
+                        overall_score=metrics["overall_score"],
                         last_checkpoint_id=getattr(execution, "checkpoint_id", None),
                         checkpoint_count=(
                             len(execution.state.execution_path)
                             if execution.state else 0
                         ),
+                        test_case_index=case_index,
                     )
                     batch_test.add_result(result)
-                    
-            except Exception as e:
-                duration_ms = int((_time.time() - start_ms) * 1000)
-                result = BatchTestResult(
-                    combination_name=variant_name,
-                    execution_id="",
-                    success=False,
-                    error_message=str(e),
-                    duration_ms=duration_ms,
-                )
-                batch_test.add_result(result)
+                except Exception as e:
+                    duration_ms = int((_time.time() - start_ms) * 1000)
+                    result = BatchTestResult(
+                        combination_name=variant_name,
+                        execution_id="",
+                        success=False,
+                        error_message=str(e),
+                        duration_ms=duration_ms,
+                        test_case_index=case_index,
+                    )
+                    batch_test.add_result(result)
         
         if batch_test.results and all(
             not result.success for result in batch_test.results
@@ -1243,21 +1613,34 @@ class WTBTestBench:
         """Get execution. Returns domain Execution."""
         return self._exec_ctrl.get_status(execution_id)
     
+    @_serialized_adapter_access
     def get_checkpoints(self, execution_id: str) -> List[Checkpoint]:
         """Get checkpoints. Returns domain Checkpoint list."""
         if not self._exec_ctrl.supports_time_travel():
             return []
-        
-        history = self._exec_ctrl.get_checkpoint_history(execution_id)
+
+        execution = self.get_execution(execution_id)
+        metadata = getattr(execution, "metadata", None)
+        if isinstance(metadata, dict) and metadata.get("checkpoint_db_path"):
+            graph = self._require_graph_for_execution(
+                execution_id,
+                execution=execution,
+            )
+            with self._prepare_controller_graph(graph, execution=execution):
+                history = self._exec_ctrl.get_checkpoint_history(execution_id)
+        else:
+            history = self._exec_ctrl.get_checkpoint_history(execution_id)
         return self._checkpoint_dicts_to_domain(execution_id, history)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Capability Checks
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def supports_time_travel(self) -> bool:
         return self._exec_ctrl.supports_time_travel()
     
+    @_serialized_adapter_access
     def supports_streaming(self) -> bool:
         return self._exec_ctrl.supports_streaming()
     

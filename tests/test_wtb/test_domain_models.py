@@ -6,6 +6,7 @@ Tests the core domain entities, value objects, and aggregates.
 
 import pytest
 from datetime import datetime
+from unittest.mock import patch
 
 from wtb.domain.models import (
     WorkflowNode,
@@ -558,6 +559,38 @@ class TestBatchTest:
         batch.complete()
         assert batch.status == BatchTestStatus.COMPLETED
         assert batch.completed_at is not None
+
+    def test_complete_computes_best_before_terminal_transition(self):
+        """Aggregation failure must leave the batch recoverably RUNNING."""
+        batch = BatchTest(name="Test", workflow_id="wf1")
+        batch.start()
+
+        with patch.object(
+            batch,
+            "_determine_best",
+            side_effect=ValueError("invalid result aggregation"),
+        ):
+            with pytest.raises(ValueError, match="invalid result aggregation"):
+                batch.complete()
+
+        assert batch.status is BatchTestStatus.RUNNING
+        assert batch.completed_at is None
+
+    @pytest.mark.parametrize(
+        "invalid_metric",
+        [True, "0.9", float("nan"), float("inf"), float("-inf")],
+    )
+    def test_batch_result_rejects_non_finite_or_non_real_metrics(
+        self,
+        invalid_metric,
+    ):
+        with pytest.raises(ValueError, match="metric"):
+            BatchTestResult(
+                combination_name="A",
+                execution_id="exec-invalid-metric",
+                success=True,
+                metrics={"score": invalid_metric},
+            )
     
     def test_add_results(self):
         """Test adding results to batch test."""
@@ -604,6 +637,125 @@ class TestBatchTest:
         batch.complete()
         
         assert batch.best_combination_name == "B"
+
+    def test_single_case_matrix_preserves_legacy_combination_label(self):
+        """Case identity must not change the public label for one-case batches."""
+        batch = BatchTest(
+            name="Single-case",
+            workflow_id="wf1",
+            variant_combinations=[VariantCombination(name="A")],
+            metadata={"test_case_count": 1},
+        )
+        batch.add_result(BatchTestResult(
+            combination_name="A",
+            execution_id="A-0",
+            success=True,
+            overall_score=1.0,
+            test_case_index=0,
+        ))
+
+        matrix = batch.build_comparison_matrix()
+
+        assert matrix["combinations"] == ["A"]
+        assert matrix["data"][0]["test_case_index"] == 0
+
+    def test_determine_best_aggregates_scores_across_test_cases(self):
+        """A single lucky case must not win a multi-case comparison."""
+        batch = BatchTest(
+            name="Multi-case",
+            workflow_id="wf1",
+            variant_combinations=[
+                VariantCombination(name="A"),
+                VariantCombination(name="B"),
+            ],
+            metadata={"test_case_count": 2},
+        )
+        batch.start()
+
+        for name, case_index, score in (
+            ("A", 0, 1.0),
+            ("A", 1, 0.0),
+            ("B", 0, 0.8),
+            ("B", 1, 0.8),
+        ):
+            batch.add_result(BatchTestResult(
+                combination_name=name,
+                execution_id=f"{name}-{case_index}",
+                success=True,
+                overall_score=score,
+                test_case_index=case_index,
+            ))
+
+        batch.complete()
+        matrix = batch.build_comparison_matrix()
+
+        assert batch.best_combination_name == "B"
+        assert matrix["aggregate_scores"] == {"A": 0.5, "B": 0.8}
+        assert matrix["combinations"] == [
+            "A[case_0]",
+            "A[case_1]",
+            "B[case_0]",
+            "B[case_1]",
+        ]
+        assert [row["test_case_index"] for row in matrix["data"]] == [0, 1, 0, 1]
+
+    def test_multi_case_best_requires_every_case_to_succeed(self):
+        """A variant with a failed case is ineligible even with a higher mean."""
+        batch = BatchTest(
+            name="Multi-case failure",
+            workflow_id="wf1",
+            variant_combinations=[
+                VariantCombination(name="A"),
+                VariantCombination(name="B"),
+            ],
+            metadata={"test_case_count": 2},
+        )
+        batch.start()
+        for result in (
+            BatchTestResult(
+                "A", "A-0", True, overall_score=1.0, test_case_index=0
+            ),
+            BatchTestResult(
+                "A", "A-1", False, overall_score=1.0, test_case_index=1
+            ),
+            BatchTestResult(
+                "B", "B-0", True, overall_score=0.6, test_case_index=0
+            ),
+            BatchTestResult(
+                "B", "B-1", True, overall_score=0.6, test_case_index=1
+            ),
+        ):
+            batch.add_result(result)
+
+        batch.complete()
+
+        assert batch.best_combination_name == "B"
+        restored = BatchTest.from_dict(batch.to_dict())
+        assert [result.test_case_index for result in restored.results] == [0, 1, 0, 1]
+
+    def test_multi_case_is_not_complete_when_a_case_identity_is_duplicated(self):
+        """A duplicate case result must not hide another missing case."""
+        batch = BatchTest(
+            name="Duplicate case",
+            workflow_id="wf1",
+            variant_combinations=[
+                VariantCombination(name="A"),
+                VariantCombination(name="B"),
+            ],
+            metadata={"test_case_count": 2},
+        )
+        for name, case_index in (("A", 0), ("A", 0), ("B", 0), ("B", 1)):
+            batch.add_result(BatchTestResult(
+                combination_name=name,
+                execution_id=f"{name}-{case_index}",
+                success=True,
+                test_case_index=case_index,
+            ))
+
+        matrix = batch.build_comparison_matrix()
+
+        assert not batch.is_complete()
+        assert "A" not in matrix["aggregate_scores"]
     
     def test_success_rate(self):
         """Test success rate calculation."""

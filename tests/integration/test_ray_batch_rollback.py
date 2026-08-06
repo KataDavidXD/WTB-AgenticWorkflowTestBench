@@ -388,6 +388,8 @@ class TestCoordinatorBehavior:
         mock_execution.status = ExecutionStatus.PAUSED
         mock_execution.state = MagicMock()
         mock_execution.state.workflow_variables = {}
+        mock_execution.metadata = {}
+        mock_uow.executions.get.return_value = mock_execution
         
         mock_controller = MagicMock()
         mock_controller.rollback.return_value = mock_execution
@@ -431,6 +433,11 @@ class TestCoordinatorBehavior:
         mock_forked.id = "forked-789"
         mock_forked.status = ExecutionStatus.PAUSED
         mock_forked.state = MagicMock()
+
+        mock_source = MagicMock(spec=Execution)
+        mock_source.id = "exec-123"
+        mock_source.metadata = {}
+        mock_uow.executions.get.return_value = mock_source
         
         mock_controller = MagicMock()
         mock_controller.fork.return_value = mock_forked

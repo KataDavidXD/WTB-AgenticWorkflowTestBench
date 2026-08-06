@@ -13,6 +13,7 @@ Benefits:
 from typing import Any, Dict, List, Optional
 from copy import deepcopy
 from datetime import datetime
+from threading import RLock
 
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
 from wtb.domain.interfaces.repositories import (
@@ -507,28 +508,26 @@ class InMemoryBlobRepository(IBlobRepository):
         self._store: Dict[str, bytes] = {}
     
     def save(self, content: bytes) -> BlobId:
-        import hashlib
-        hash_hex = hashlib.sha256(content).hexdigest()
-        blob_id = BlobId(hash=hash_hex)
-        self._store[hash_hex] = content
+        blob_id = BlobId.from_content(content)
+        self._store[blob_id.value] = content
         return blob_id
     
     def get(self, blob_id: BlobId) -> Optional[bytes]:
-        return self._store.get(blob_id.hash)
+        return self._store.get(blob_id.value)
     
     def exists(self, blob_id: BlobId) -> bool:
-        return blob_id.hash in self._store
+        return blob_id.value in self._store
     
     def delete(self, blob_id: BlobId) -> bool:
-        if blob_id.hash in self._store:
-            del self._store[blob_id.hash]
+        if blob_id.value in self._store:
+            del self._store[blob_id.value]
             return True
         return False
     
     def restore_to_file(self, blob_id: BlobId, output_path: str) -> None:
-        content = self._store.get(blob_id.hash)
+        content = self._store.get(blob_id.value)
         if content is None:
-            raise FileNotFoundError(f"Blob not found: {blob_id.hash}")
+            raise FileNotFoundError(f"Blob not found: {blob_id.value}")
         import os
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         with open(output_path, "wb") as f:
@@ -609,12 +608,26 @@ class InMemoryUnitOfWork(IUnitOfWork):
         with uow:
             uow.workflows.add(workflow)
             uow.executions.add(execution)
-            uow.commit()  # No-op, data already in memory
+            uow.commit()  # Establish a new rollback baseline
     
     Note: For true isolation between tests, create a new InMemoryUnitOfWork
     instance for each test.
     """
-    
+
+    _REPOSITORY_NAMES = (
+        "workflows",
+        "executions",
+        "variants",
+        "batch_tests",
+        "evaluation_results",
+        "node_boundaries",
+        "checkpoint_file_links",
+        "outbox",
+        "audit_logs",
+        "blobs",
+        "file_commits",
+    )
+
     def __init__(self):
         # Initialize all repositories
         self.workflows: IWorkflowRepository = InMemoryWorkflowRepository()
@@ -630,34 +643,71 @@ class InMemoryUnitOfWork(IUnitOfWork):
         self.file_commits: IFileCommitRepository = InMemoryFileCommitRepository()
         
         self._in_transaction = False
-    
+        self._transaction_lock = RLock()
+        self._transaction_depth = 0
+        self._committed_state = self._capture_repository_state()
+
+    def _capture_repository_state(self) -> Dict[str, Any]:
+        """Copy the atomically committed state of every repository."""
+        return {
+            name: deepcopy(getattr(getattr(self, name), "_store"))
+            for name in self._REPOSITORY_NAMES
+        }
+
+    def _restore_repository_state(self, snapshot: Dict[str, Any]) -> None:
+        """Restore contents while preserving injected repository objects."""
+        for name in self._REPOSITORY_NAMES:
+            repository = getattr(self, name)
+            repository._store = deepcopy(snapshot[name])
+
     def __enter__(self) -> "InMemoryUnitOfWork":
+        # Repository mutations are immediate, so the lock must span the whole
+        # transaction. Locking commit/rollback alone can snapshot another
+        # thread's uncommitted rows.
+        self._transaction_lock.acquire()
+        self._transaction_depth += 1
         self._in_transaction = True
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._in_transaction = False
-        # No rollback needed - in-memory doesn't have pending state
+        if self._transaction_depth <= 0:
+            self._in_transaction = False
+            return False
+
+        try:
+            if exc_type is not None or self._transaction_depth == 1:
+                self.rollback()
+        finally:
+            self._transaction_depth -= 1
+            self._in_transaction = self._transaction_depth > 0
+            self._transaction_lock.release()
+        return False
     
     def commit(self):
-        """No-op for in-memory - data is already persisted in dicts."""
-        pass
+        """Atomically advance the rollback baseline to current repository state."""
+        with self._transaction_lock:
+            self._committed_state = self._capture_repository_state()
     
     def rollback(self):
-        """No-op for in-memory - create new UoW instance for isolation."""
-        pass
+        """Restore all repositories to the last successful commit."""
+        with self._transaction_lock:
+            self._restore_repository_state(self._committed_state)
     
     def reset(self):
-        """Reset all repositories (for testing)."""
-        self.workflows = InMemoryWorkflowRepository()
-        self.executions = InMemoryExecutionRepository()
-        self.variants = InMemoryNodeVariantRepository()
-        self.batch_tests = InMemoryBatchTestRepository()
-        self.evaluation_results = InMemoryEvaluationResultRepository()
-        self.node_boundaries = InMemoryNodeBoundaryRepository()
-        self.checkpoint_file_links = InMemoryCheckpointFileLinkRepository()
-        self.outbox = InMemoryOutboxRepository()
-        self.audit_logs = InMemoryAuditLogRepository()
-        self.blobs = InMemoryBlobRepository()
-        self.file_commits = InMemoryFileCommitRepository()
+        """Atomically reset repositories without crossing a transaction."""
+        with self._transaction_lock:
+            self.workflows = InMemoryWorkflowRepository()
+            self.executions = InMemoryExecutionRepository()
+            self.variants = InMemoryNodeVariantRepository()
+            self.batch_tests = InMemoryBatchTestRepository()
+            self.evaluation_results = InMemoryEvaluationResultRepository()
+            self.node_boundaries = InMemoryNodeBoundaryRepository()
+            self.checkpoint_file_links = InMemoryCheckpointFileLinkRepository()
+            self.outbox = InMemoryOutboxRepository()
+            self.audit_logs = InMemoryAuditLogRepository()
+            self.blobs = InMemoryBlobRepository()
+            self.file_commits = InMemoryFileCommitRepository()
+            self._committed_state = self._capture_repository_state()
+            if self._transaction_depth == 0:
+                self._in_transaction = False
 

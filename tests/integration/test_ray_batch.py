@@ -64,8 +64,14 @@ def _make_batch_test(
 ) -> BatchTest:
     if combinations is None:
         combinations = [
-            VariantCombination(name="variant_a", variants={"key": "a"}),
-            VariantCombination(name="variant_b", variants={"key": "b"}),
+            VariantCombination(
+                name="variant_a",
+                variants={"key": "a"},
+            ),
+            VariantCombination(
+                name="variant_b",
+                variants={"key": "b"},
+            ),
         ]
     return BatchTest(
         name="test-batch",
@@ -252,6 +258,7 @@ class TestEventBridge:
                 self.actor_pool_events = []
                 self.started_events = []
                 self.completed_events = []
+                self.failed_events = []
 
             @property
             def event_bus(self):
@@ -265,6 +272,9 @@ class TestEventBridge:
 
             def on_variant_execution_completed(self, **kwargs):
                 self.completed_events.append(kwargs)
+
+            def on_variant_execution_failed(self, **kwargs):
+                self.failed_events.append(kwargs)
 
             def on_actor_pool_created(self, **kwargs):
                 self.actor_pool_events.append(kwargs)

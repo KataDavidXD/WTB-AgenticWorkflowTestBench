@@ -28,7 +28,7 @@ SDK Usage:
     result = wtb.run(project="my_workflow", initial_state={})
 """
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 # Domain Models
 from wtb.domain.models import (

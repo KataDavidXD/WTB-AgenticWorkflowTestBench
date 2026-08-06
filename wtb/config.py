@@ -368,7 +368,7 @@ class WTBConfig:
         wtb_storage_mode: Storage backend - "inmemory" or "sqlalchemy"
         wtb_db_url: Database URL for sqlalchemy mode
         agentgit_db_path: Path to AgentGit SQLite database
-        state_adapter_mode: State adapter - "inmemory" or "agentgit"
+        state_adapter_mode: State adapter - "inmemory" or "langgraph"
         data_dir: Base directory for data files
         ray_enabled: Enable Ray for batch testing
         ray_config: Ray cluster configuration
@@ -390,8 +390,11 @@ class WTBConfig:
     # AgentGit database path
     agentgit_db_path: str = "data/agentgit.db"
     
-    # State adapter mode: "inmemory" or "agentgit"
+    # State adapter mode: "inmemory" or "langgraph"
     state_adapter_mode: str = "inmemory"
+    # Explicit SQLite path shared by main and batch LangGraph adapters
+    langgraph_checkpoint_path: Optional[str] = None
+
     
     # Base data directory
     data_dir: str = "data"
@@ -446,7 +449,7 @@ class WTBConfig:
             WTB_STORAGE_MODE: "inmemory" or "sqlalchemy" (default: "inmemory")
             WTB_DATABASE_URL: Database URL for sqlalchemy mode
             AGENTGIT_DB_PATH: Path to AgentGit database
-            STATE_ADAPTER_MODE: "inmemory" or "agentgit" (default: "inmemory")
+            STATE_ADAPTER_MODE: "inmemory" or "langgraph" (default: "inmemory")
             WTB_DATA_DIR: Base data directory (default: "data")
             FILETRACKER_ENABLED: Enable FileTracker integration (default: "false")
             FILETRACKER_STORAGE: FileTracker storage path
@@ -469,6 +472,7 @@ class WTBConfig:
             wtb_db_url=os.getenv("WTB_DATABASE_URL"),
             agentgit_db_path=os.getenv("AGENTGIT_DB_PATH", f"{data_dir}/agentgit.db"),
             state_adapter_mode=os.getenv("STATE_ADAPTER_MODE", "inmemory"),
+            langgraph_checkpoint_path=os.getenv("WTB_LANGGRAPH_CHECKPOINT_PATH"),
             data_dir=data_dir,
             filetracker_enabled=os.getenv("FILETRACKER_ENABLED", "false").lower() == "true",
             filetracker_storage_path=os.getenv("FILETRACKER_STORAGE"),
@@ -545,7 +549,7 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=db_url,
             agentgit_db_path=agentgit_db_path,
-            state_adapter_mode="agentgit",
+            state_adapter_mode="langgraph",
             data_dir=data_dir,
             filetracker_enabled=True,
             ide_sync_enabled=True,
@@ -571,7 +575,7 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=f"sqlite:///{data_dir}/wtb.db",
             agentgit_db_path=f"{data_dir}/agentgit.db",
-            state_adapter_mode="agentgit",
+            state_adapter_mode="langgraph",
             data_dir=data_dir,
             filetracker_enabled=False,
             ide_sync_enabled=False,
@@ -616,7 +620,7 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=db_url,
             agentgit_db_path=agentgit_db_path,
-            state_adapter_mode="agentgit",
+            state_adapter_mode="langgraph",
             data_dir=data_dir,
             filetracker_enabled=filetracker_postgres_url is not None,
             ide_sync_enabled=True,
@@ -646,6 +650,7 @@ class WTBConfig:
             "wtb_db_url": self.wtb_db_url,
             "agentgit_db_path": self.agentgit_db_path,
             "state_adapter_mode": self.state_adapter_mode,
+            "langgraph_checkpoint_path": self.langgraph_checkpoint_path,
             "data_dir": self.data_dir,
             "filetracker_enabled": self.filetracker_enabled,
             "filetracker_storage_path": self.filetracker_storage_path,

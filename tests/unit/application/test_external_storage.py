@@ -162,6 +162,7 @@ def test_batch_execution_coordinator_uses_execution_specific_storage(monkeypatch
     execution = _make_execution("exec-1", status=ExecutionStatus.PAUSED)
     execution.metadata = {
         "actor_id": "actor_3",
+        "state_adapter_backend": "langgraph_sqlite",
         "checkpoint_db_path": "/tmp/ray_actors/actor_3/wtb_checkpoints.db",
         "llm_cache_path": "/tmp/ray_actors/actor_3/llm_response_cache.db",
         "cache_storage_scope": "actor_local",

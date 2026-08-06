@@ -10,6 +10,7 @@ from datetime import datetime
 from wtb.domain.models import ExecutionState
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
+from wtb.infrastructure.adapters.sqlite_state_adapter import SqliteStateAdapter
 
 
 class TestInMemoryStateAdapter:
@@ -313,3 +314,167 @@ class TestInMemoryStateAdapter:
         assert adapter.get_session_count() == 0
         assert adapter.get_current_session_id() is None
 
+    def test_sqlite_storage_reopens_history_boundaries_and_rollback(self, tmp_path):
+        """Node-mode checkpoints remain usable after the creating adapter closes."""
+        storage_path = tmp_path / "node-checkpoints.db"
+        initial = ExecutionState(
+            current_node_id="node1",
+            workflow_variables={"value": 1},
+        )
+
+        first = SqliteStateAdapter(storage_path=storage_path)
+        session_id = first.initialize_session("exec-durable", initial)
+        entry_id = first.save_checkpoint(
+            initial,
+            "node1",
+            CheckpointTrigger.AUTO,
+            name="before-node1",
+        )
+        first.mark_node_started("node1", entry_id)
+        completed = ExecutionState(
+            current_node_id="node2",
+            workflow_variables={"value": 2},
+            execution_path=["node1"],
+        )
+        exit_id = first.save_checkpoint(
+            completed,
+            "node1",
+            CheckpointTrigger.AUTO,
+            name="after-node1",
+        )
+        first.mark_node_completed("node1", exit_id)
+        first.close()
+
+        reopened = SqliteStateAdapter(storage_path=storage_path)
+        assert reopened.state_adapter_backend == "node_sqlite"
+        assert reopened.storage_path == storage_path.resolve()
+        assert reopened.set_current_session(session_id, execution_id="exec-durable") is True
+
+        history = reopened.get_checkpoint_history()
+        assert [item["checkpoint_id"] for item in history] == [exit_id, entry_id]
+        restored = reopened.rollback(entry_id)
+        assert restored.current_node_id == "node1"
+        assert restored.workflow_variables == {"value": 1}
+        boundary = reopened.get_node_boundary(session_id, "node1")
+        assert boundary is not None
+        assert boundary.exit_checkpoint_id == exit_id
+
+        later_id = reopened.save_checkpoint(
+            completed,
+            "node2",
+            CheckpointTrigger.AUTO,
+        )
+        assert reopened.get_checkpoints(session_id)[-1].id == later_id
+        assert reopened.get_checkpoints(session_id)[-1].step == 3
+        reopened.close()
+
+
+def _seed_sqlite_started_boundary(storage_path):
+    initial = ExecutionState(
+        current_node_id="node1",
+        workflow_variables={"value": 1},
+    )
+    seed = SqliteStateAdapter(storage_path=storage_path)
+    try:
+        session_id = seed.initialize_session("exec-boundary-race", initial)
+        entry_id = seed.save_checkpoint(
+            initial,
+            "node1",
+            CheckpointTrigger.AUTO,
+            name="before-node1",
+        )
+        seed.mark_node_started("node1", entry_id)
+        completed = ExecutionState(
+            current_node_id="node2",
+            workflow_variables={"value": 2},
+            execution_path=["node1"],
+        )
+        exit_id = seed.save_checkpoint(
+            completed,
+            "node1",
+            CheckpointTrigger.AUTO,
+            name="after-node1",
+        )
+        return session_id, exit_id
+    finally:
+        seed.close()
+
+
+def test_sqlite_completed_boundary_cannot_be_overwritten_by_stale_failure(
+    tmp_path,
+):
+    storage_path = tmp_path / "boundary-completed-wins.db"
+    session_id, exit_id = _seed_sqlite_started_boundary(storage_path)
+    winner = SqliteStateAdapter(storage_path=storage_path)
+    loser = SqliteStateAdapter(storage_path=storage_path)
+    try:
+        assert winner.set_current_session(
+            session_id,
+            execution_id="exec-boundary-race",
+        )
+        assert loser.set_current_session(
+            session_id,
+            execution_id="exec-boundary-race",
+        )
+        assert winner.mark_node_completed("node1", exit_id) is True
+        assert loser.mark_node_failed("node1", "late failure") is False
+        observed = loser.get_node_boundary(session_id, "node1")
+        assert observed is not None
+        assert observed.node_status == "completed"
+        assert observed.exit_checkpoint_id == exit_id
+    finally:
+        winner.close()
+        loser.close()
+
+    reopened = SqliteStateAdapter(storage_path=storage_path)
+    try:
+        assert reopened.set_current_session(
+            session_id,
+            execution_id="exec-boundary-race",
+        )
+        boundary = reopened.get_node_boundary(session_id, "node1")
+        assert boundary is not None
+        assert boundary.node_status == "completed"
+        assert boundary.exit_checkpoint_id == exit_id
+    finally:
+        reopened.close()
+
+
+def test_sqlite_failed_boundary_cannot_be_overwritten_by_stale_completion(
+    tmp_path,
+):
+    storage_path = tmp_path / "boundary-failed-wins.db"
+    session_id, exit_id = _seed_sqlite_started_boundary(storage_path)
+    winner = SqliteStateAdapter(storage_path=storage_path)
+    loser = SqliteStateAdapter(storage_path=storage_path)
+    try:
+        assert winner.set_current_session(
+            session_id,
+            execution_id="exec-boundary-race",
+        )
+        assert loser.set_current_session(
+            session_id,
+            execution_id="exec-boundary-race",
+        )
+        assert winner.mark_node_failed("node1", "first failure") is True
+        assert loser.mark_node_completed("node1", exit_id) is False
+        observed = loser.get_node_boundary(session_id, "node1")
+        assert observed is not None
+        assert observed.node_status == "failed"
+        assert observed.exit_checkpoint_id is None
+    finally:
+        winner.close()
+        loser.close()
+
+    reopened = SqliteStateAdapter(storage_path=storage_path)
+    try:
+        assert reopened.set_current_session(
+            session_id,
+            execution_id="exec-boundary-race",
+        )
+        boundary = reopened.get_node_boundary(session_id, "node1")
+        assert boundary is not None
+        assert boundary.node_status == "failed"
+        assert boundary.exit_checkpoint_id is None
+    finally:
+        reopened.close()

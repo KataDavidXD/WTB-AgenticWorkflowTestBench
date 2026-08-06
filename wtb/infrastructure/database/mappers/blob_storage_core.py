@@ -314,7 +314,7 @@ class CheckpointFileLinkMapper:
         from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
         
         return CheckpointFileLink(
-            checkpoint_id=orm.checkpoint_id,
+            checkpoint_id=str(orm.checkpoint_id),
             commit_id=CommitId(orm.commit_id),
             linked_at=orm.linked_at,
             file_count=orm.file_count,

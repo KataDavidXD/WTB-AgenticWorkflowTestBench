@@ -20,6 +20,7 @@ from wtb.domain.models.workflow import (
 )
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
+from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
 from wtb.application.services.execution_controller import (
     ExecutionController,
     DefaultNodeExecutor,
@@ -88,7 +89,10 @@ def langgraph_decorated_setup():
     )
 
     decorated = OutboxExecutionControllerDecorator(
-        inner_controller, uow.outbox, commit_fn=uow.commit,
+        inner_controller,
+        uow.outbox,
+        commit_fn=uow.commit,
+        rollback_fn=uow.rollback,
     )
 
     return decorated, adapter, uow
@@ -112,7 +116,10 @@ def node_executor_decorated_setup():
     )
 
     decorated = OutboxExecutionControllerDecorator(
-        inner_controller, uow.outbox, commit_fn=uow.commit,
+        inner_controller,
+        uow.outbox,
+        commit_fn=uow.commit,
+        rollback_fn=uow.rollback,
     )
 
     return decorated, adapter, uow
@@ -219,6 +226,72 @@ class TestOutboxRollback:
 
 class TestDecoratorResilience:
 
+    def test_invalid_atomic_construction_preserves_sqlite_inner_durability(
+        self,
+        tmp_path,
+    ):
+        db_url = f"sqlite:///{(tmp_path / 'outbox-construction.db').as_posix()}"
+        with SQLAlchemyUnitOfWork(
+            db_url=db_url,
+            blob_storage_path=str(tmp_path / "blobs-construction"),
+        ) as writer:
+            workflow = _make_workflow()
+            writer.workflows.add(workflow)
+            writer.commit()
+            adapter = MagicMock()
+            adapter.initialize_session.return_value = "construction-session"
+            inner = ExecutionController(
+                execution_repository=writer.executions,
+                workflow_repository=writer.workflows,
+                state_adapter=adapter,
+                node_executor=DefaultNodeExecutor(),
+                unit_of_work=writer,
+            )
+
+            with pytest.raises(ValueError, match="atomic outbox"):
+                OutboxExecutionControllerDecorator(inner, writer.outbox)
+
+            assert inner._deferred_commit is False
+            execution = inner.create_execution(workflow)
+
+            with SQLAlchemyUnitOfWork(
+                db_url=db_url,
+                blob_storage_path=str(tmp_path / "reader-blobs-construction"),
+            ) as reader:
+                assert reader.executions.get(execution.id) is not None
+
+    def test_no_outbox_passthrough_preserves_sqlite_second_session_durability(
+        self,
+        tmp_path,
+    ):
+        db_url = f"sqlite:///{(tmp_path / 'no-outbox-passthrough.db').as_posix()}"
+        with SQLAlchemyUnitOfWork(
+            db_url=db_url,
+            blob_storage_path=str(tmp_path / "blobs-no-outbox"),
+        ) as writer:
+            workflow = _make_workflow()
+            writer.workflows.add(workflow)
+            writer.commit()
+            adapter = MagicMock()
+            adapter.initialize_session.return_value = "no-outbox-session"
+            inner = ExecutionController(
+                execution_repository=writer.executions,
+                workflow_repository=writer.workflows,
+                state_adapter=adapter,
+                node_executor=DefaultNodeExecutor(),
+                unit_of_work=writer,
+            )
+            transparent = OutboxExecutionControllerDecorator(inner, None)
+
+            execution = transparent.create_execution(workflow)
+
+            assert inner._deferred_commit is False
+            with SQLAlchemyUnitOfWork(
+                db_url=db_url,
+                blob_storage_path=str(tmp_path / "reader-blobs-no-outbox"),
+            ) as reader:
+                assert reader.executions.get(execution.id) is not None
+
     def test_decorator_with_none_repo_no_crash(self, langgraph_decorated_setup):
         """OutboxExecutionControllerDecorator(inner, None) should not crash."""
         _, adapter, uow = langgraph_decorated_setup
@@ -244,12 +317,9 @@ class TestDecoratorResilience:
         execution = no_outbox.run(execution.id, graph=graph)
         assert execution.status == ExecutionStatus.COMPLETED
 
-    def test_outbox_error_non_fatal(self, langgraph_decorated_setup):
-        """If outbox.add() raises, run still completes successfully."""
+    def test_outbox_add_error_rolls_back_shared_uow(self, langgraph_decorated_setup):
+        """An outbox insert error aborts the pending business transaction."""
         _, adapter, uow = langgraph_decorated_setup
-        create_minimal_graph = _try_import_fixtures()
-        graph = create_minimal_graph()
-
         inner_controller = ExecutionController(
             execution_repository=uow.executions,
             workflow_repository=uow.workflows,
@@ -260,20 +330,212 @@ class TestDecoratorResilience:
 
         broken_outbox = MagicMock()
         broken_outbox.add.side_effect = RuntimeError("DB write failed")
+        rollback_fn = MagicMock(wraps=uow.rollback)
 
         decorated = OutboxExecutionControllerDecorator(
-            inner_controller, broken_outbox, commit_fn=uow.commit,
+            inner_controller,
+            broken_outbox,
+            commit_fn=uow.commit,
+            rollback_fn=rollback_fn,
         )
 
         workflow = _make_workflow()
         uow.workflows.add(workflow)
         uow.commit()
 
-        execution = decorated.create_execution(
-            workflow, initial_state={"value": 0, "messages": [], "route": None},
-        )
-        execution = decorated.run(execution.id, graph=graph)
-        assert execution.status == ExecutionStatus.COMPLETED
+        with pytest.raises(RuntimeError, match="DB write failed"):
+            decorated.create_execution(
+                workflow,
+                initial_state={"value": 0, "messages": [], "route": None},
+            )
+
+        rollback_fn.assert_called_once_with()
+
+    def test_sqlalchemy_outbox_add_error_removes_pending_business_row(self, tmp_path):
+        db_url = f"sqlite:///{(tmp_path / 'outbox-add.db').as_posix()}"
+        with SQLAlchemyUnitOfWork(
+            db_url=db_url,
+            blob_storage_path=str(tmp_path / "blobs-add"),
+        ) as uow:
+            workflow = _make_workflow()
+            uow.workflows.add(workflow)
+            uow.commit()
+            adapter = MagicMock()
+            adapter.initialize_session.return_value = "session-add-failure"
+            inner_controller = ExecutionController(
+                execution_repository=uow.executions,
+                workflow_repository=uow.workflows,
+                state_adapter=adapter,
+                node_executor=DefaultNodeExecutor(),
+                unit_of_work=uow,
+            )
+            broken_outbox = MagicMock()
+            broken_outbox.add.side_effect = RuntimeError("DB write failed")
+            decorated = OutboxExecutionControllerDecorator(
+                inner_controller,
+                broken_outbox,
+                commit_fn=uow.commit,
+                rollback_fn=uow.rollback,
+            )
+
+            with pytest.raises(RuntimeError, match="DB write failed"):
+                decorated.create_execution(workflow)
+
+            assert uow.executions.list() == []
+            assert uow.outbox.get_pending() == []
+
+    def test_sqlalchemy_commit_error_removes_business_and_outbox_rows(self, tmp_path):
+        db_url = f"sqlite:///{(tmp_path / 'outbox-commit.db').as_posix()}"
+        with SQLAlchemyUnitOfWork(
+            db_url=db_url,
+            blob_storage_path=str(tmp_path / "blobs-commit"),
+        ) as uow:
+            workflow = _make_workflow()
+            uow.workflows.add(workflow)
+            uow.commit()
+            adapter = MagicMock()
+            adapter.initialize_session.return_value = "session-commit-failure"
+            inner_controller = ExecutionController(
+                execution_repository=uow.executions,
+                workflow_repository=uow.workflows,
+                state_adapter=adapter,
+                node_executor=DefaultNodeExecutor(),
+                unit_of_work=uow,
+            )
+
+            def fail_commit():
+                raise RuntimeError("commit failed")
+
+            decorated = OutboxExecutionControllerDecorator(
+                inner_controller,
+                uow.outbox,
+                commit_fn=fail_commit,
+                rollback_fn=uow.rollback,
+            )
+
+            with pytest.raises(RuntimeError, match="commit failed"):
+                decorated.create_execution(workflow)
+
+            assert uow.executions.list() == []
+            assert uow.outbox.get_pending() == []
+
+    def test_sqlalchemy_inner_error_rolls_back_pending_business_row(self, tmp_path):
+        db_url = f"sqlite:///{(tmp_path / 'outbox-inner.db').as_posix()}"
+        with SQLAlchemyUnitOfWork(
+            db_url=db_url,
+            blob_storage_path=str(tmp_path / "blobs-inner"),
+        ) as uow:
+            workflow = _make_workflow()
+            uow.workflows.add(workflow)
+            uow.commit()
+            primary_error = RuntimeError("inner failed after write")
+
+            class PartiallyWritingController:
+                def set_deferred_commit(self, enabled):
+                    self.deferred_commit = enabled
+
+                def create_execution(self, workflow, initial_state, breakpoints):
+                    execution = Execution(
+                        workflow_id=workflow.id,
+                        status=ExecutionStatus.PENDING,
+                        state=ExecutionState(
+                            current_node_id=workflow.entry_point,
+                            workflow_variables=initial_state or {},
+                        ),
+                    )
+                    uow.executions.add(execution)
+                    raise primary_error
+
+            decorated = OutboxExecutionControllerDecorator(
+                PartiallyWritingController(),
+                uow.outbox,
+                commit_fn=uow.commit,
+                rollback_fn=uow.rollback,
+            )
+
+            with pytest.raises(RuntimeError) as exc_info:
+                decorated.create_execution(workflow)
+
+            assert exc_info.value is primary_error
+            assert uow.executions.list() == []
+            assert uow.outbox.get_pending() == []
+
+    @pytest.mark.parametrize(
+        ("method_name", "event_type"),
+        [
+            ("rollback_to_node", OutboxEventType.ROLLBACK_PERFORMED),
+            ("update_execution_state", OutboxEventType.STATE_MODIFIED),
+        ],
+    )
+    def test_extended_mutation_commit_is_visible_to_second_session(
+        self,
+        tmp_path,
+        method_name,
+        event_type,
+    ):
+        db_url = f"sqlite:///{(tmp_path / f'outbox-{method_name}.db').as_posix()}"
+        with SQLAlchemyUnitOfWork(
+            db_url=db_url,
+            blob_storage_path=str(tmp_path / f"blobs-{method_name}"),
+        ) as writer:
+            workflow = _make_workflow()
+            writer.workflows.add(workflow)
+            execution = Execution(
+                workflow_id=workflow.id,
+                status=ExecutionStatus.PENDING,
+                state=ExecutionState(
+                    current_node_id="start",
+                    workflow_variables={"updated": False},
+                ),
+            )
+            writer.executions.add(execution)
+            writer.commit()
+
+            class PersistingExtendedController:
+                def set_deferred_commit(self, enabled):
+                    self.deferred_commit = enabled
+
+                def update_execution_state(self, execution_id, values):
+                    current = writer.executions.get(execution_id)
+                    current.state.workflow_variables.update(values)
+                    writer.executions.update(current)
+                    return True
+
+                def rollback_to_node(self, execution_id, node_id):
+                    current = writer.executions.get(execution_id)
+                    current.state.current_node_id = node_id
+                    current.status = ExecutionStatus.PAUSED
+                    writer.executions.update(current)
+                    return current
+
+            decorated = OutboxExecutionControllerDecorator(
+                PersistingExtendedController(),
+                writer.outbox,
+                commit_fn=writer.commit,
+                rollback_fn=writer.rollback,
+            )
+
+            if method_name == "update_execution_state":
+                assert decorated.update_execution_state(
+                    execution.id,
+                    {"updated": True},
+                ) is True
+            else:
+                decorated.rollback_to_node(execution.id, "end")
+
+            with SQLAlchemyUnitOfWork(
+                db_url=db_url,
+                blob_storage_path=str(tmp_path / f"reader-blobs-{method_name}"),
+            ) as reader:
+                stored = reader.executions.get(execution.id)
+                events = reader.outbox.get_pending()
+
+                if method_name == "update_execution_state":
+                    assert stored.state.workflow_variables["updated"] is True
+                else:
+                    assert stored.state.current_node_id == "end"
+                    assert stored.status == ExecutionStatus.PAUSED
+                assert [event.event_type for event in events] == [event_type]
 
 
 # ═══════════════════════════════════════════════════════════════

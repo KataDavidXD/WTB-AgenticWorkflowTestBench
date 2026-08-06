@@ -27,8 +27,10 @@ Architecture:
 
 from typing import Any, Optional, List, Dict
 from dataclasses import dataclass, field
+from threading import RLock
 from datetime import datetime
 from enum import Enum
+import sys
 import logging
 import uuid
 
@@ -127,6 +129,37 @@ class _NodeBoundaryTracker:
     error_message: Optional[str] = None
 
 
+class _SyncCheckpointerResource:
+    """Reference-counted lifetime for a saver shared by adapter forks."""
+
+    def __init__(self, checkpointer: Any, context: Optional[Any]):
+        self.checkpointer = checkpointer
+        self.context = context
+        self._references = 1
+        self._closed = False
+        self._lock = RLock()
+
+    def acquire(self) -> None:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Checkpointer resource is closed")
+            self._references += 1
+
+    def release(self):
+        with self._lock:
+            if self._references <= 0:
+                return None
+            self._references -= 1
+            if self._references > 0 or self._closed:
+                return None
+            self._closed = True
+            payload = (self.checkpointer, self.context)
+            self.checkpointer = None
+            self.context = None
+            return payload
+
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # LangGraph State Adapter
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -171,8 +204,16 @@ class LangGraphStateAdapter(IStateAdapter):
             )
         
         self._config = config
-        self._checkpointer = self._create_checkpointer()
+        self._checkpointer_context = None
+        self._checkpointer_resource = None
+        self._checkpointer = None
         self._owns_checkpointer = True
+        self._closed = False
+        self._checkpointer = self._create_checkpointer()
+        self._checkpointer_resource = _SyncCheckpointerResource(
+            self._checkpointer,
+            self._checkpointer_context,
+        )
         self._compiled_graph: Optional[CompiledStateGraph] = None
         self._graph_builder: Optional[StateGraph] = None
         
@@ -185,6 +226,20 @@ class LangGraphStateAdapter(IStateAdapter):
         self._node_boundaries: Dict[str, Dict[str, _NodeBoundaryTracker]] = {}
         
         logger.info(f"LangGraphStateAdapter initialized with {config.checkpointer_type.value} checkpointer")
+
+    @property
+    def state_adapter_backend(self) -> Optional[str]:
+        """Advertise the durable SDK rehydration protocol when using SQLite."""
+        if self._config.checkpointer_type == CheckpointerType.SQLITE:
+            return "langgraph_sqlite"
+        return None
+
+    @property
+    def storage_path(self) -> Optional[str]:
+        """Return the SQLite path used for exact adapter reuse checks."""
+        if self._config.checkpointer_type == CheckpointerType.SQLITE:
+            return self._config.connection_string
+        return None
     
     def _create_checkpointer(self) -> "BaseCheckpointSaver":
         """Create checkpointer based on configuration."""
@@ -220,17 +275,33 @@ class LangGraphStateAdapter(IStateAdapter):
         elif self._config.checkpointer_type == CheckpointerType.POSTGRES:
             try:
                 from langgraph.checkpoint.postgres import PostgresSaver
-                
-                saver = PostgresSaver.from_conn_string(
-                    self._config.connection_string
-                )
-                saver.setup()
-                return saver
             except ImportError:
                 raise ImportError(
                     "langgraph-checkpoint-postgres not installed. "
                     "Install with: pip install langgraph-checkpoint-postgres"
                 )
+
+            context = PostgresSaver.from_conn_string(
+                self._config.connection_string
+            )
+            enter_context = getattr(context, "__enter__", None)
+            if not callable(enter_context):
+                raise TypeError(
+                    "PostgresSaver.from_conn_string() must return a context manager"
+                )
+
+            entered = False
+            try:
+                saver = enter_context()
+                entered = True
+                saver.setup()
+            except BaseException:
+                if entered:
+                    context.__exit__(*sys.exc_info())
+                raise
+
+            self._checkpointer_context = context
+            return saver
         
         raise ValueError(f"Unknown checkpointer type: {self._config.checkpointer_type}")
     
@@ -260,19 +331,21 @@ class LangGraphStateAdapter(IStateAdapter):
 
         # Check if already compiled (CompiledStateGraph)
         if hasattr(graph, 'invoke') and hasattr(graph, 'get_state'):
-            self._graph_builder = getattr(graph, 'builder', None)
-            
-            if force_recompile and self._graph_builder is not None:
-                self._compiled_graph = self._graph_builder.compile(checkpointer=self._checkpointer)
+            graph_builder = getattr(graph, 'builder', None)
+
+            if force_recompile and graph_builder is not None:
+                compiled_graph = graph_builder.compile(checkpointer=self._checkpointer)
+                self._graph_builder = graph_builder
+                self._compiled_graph = compiled_graph
                 logger.info("Graph recompiled with adapter's checkpointer")
             elif self._has_valid_checkpointer(graph):
+                self._graph_builder = graph_builder
                 self._compiled_graph = graph
                 logger.info("Using pre-compiled graph with existing checkpointer")
             else:
-                self._compiled_graph = graph
-                logger.warning(
-                    "Using pre-compiled graph without checkpointer. "
-                    "Checkpoints will NOT be persisted!"
+                raise ValueError(
+                    "Compiled workflow graph is not bound to a valid checkpointer "
+                    "and cannot be safely rebound to this adapter."
                 )
         else:
             # Uncompiled StateGraph - compile with our checkpointer
@@ -281,21 +354,31 @@ class LangGraphStateAdapter(IStateAdapter):
             logger.info("Graph compiled with checkpointer (recommended path)")
     
     def _has_valid_checkpointer(self, compiled_graph: Any) -> bool:
-        """Check if a compiled graph has a valid checkpointer configured."""
+        """Check that a compiled graph uses this adapter's concrete saver."""
         try:
+            saver = None
             if hasattr(compiled_graph, 'checkpointer'):
-                return compiled_graph.checkpointer is not None
-            if hasattr(compiled_graph, '_checkpointer'):
-                return compiled_graph._checkpointer is not None
-            return False
+                saver = compiled_graph.checkpointer
+            elif hasattr(compiled_graph, '_checkpointer'):
+                saver = compiled_graph._checkpointer
+            return (
+                self._checkpointer is not None
+                and saver is self._checkpointer
+            )
         except Exception:
             return False
     
     def get_compiled_graph(self) -> "CompiledStateGraph":
         """Get compiled graph."""
+        self._ensure_open()
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
         return self._compiled_graph
+
+    def _ensure_open(self) -> None:
+        """Reject state operations after this adapter releases its lease."""
+        if getattr(self, "_closed", False):
+            raise RuntimeError("State adapter is closed")
     
     def supports_graph_execution(self) -> bool:
         """LangGraphStateAdapter always supports graph execution."""
@@ -310,26 +393,47 @@ class LangGraphStateAdapter(IStateAdapter):
         return self._checkpointer
 
     def close(self) -> None:
-        """Release checkpointer resources (only if this adapter owns them)."""
-        if self._checkpointer is None or not self._owns_checkpointer:
+        """Release this adapter's checkpointer lease."""
+        if getattr(self, "_closed", False):
             return
-        try:
-            # Finalize WAL so the DB file is self-contained and no stale
-            # .wal/.shm files are left behind for the next process.
-            if hasattr(self._checkpointer, "conn") and self._checkpointer.conn:
-                try:
-                    self._checkpointer.conn.execute(
-                        "PRAGMA wal_checkpoint(TRUNCATE)"
-                    )
-                except Exception:
-                    pass
-                self._checkpointer.conn.close()
-            elif hasattr(self._checkpointer, "close"):
-                self._checkpointer.close()
-            elif callable(getattr(self._checkpointer, "__exit__", None)):
-                self._checkpointer.__exit__(None, None, None)
-        except Exception:
-            pass
+        if not getattr(self, "_owns_checkpointer", True):
+            return
+
+        self._closed = True
+        resource = getattr(self, "_checkpointer_resource", None)
+        checkpointer = getattr(self, "_checkpointer", None)
+        context = getattr(self, "_checkpointer_context", None)
+        self._checkpointer_resource = None
+        self._checkpointer = None
+        self._checkpointer_context = None
+
+        if resource is not None:
+            payload = resource.release()
+            if payload is None:
+                return
+            checkpointer, context = payload
+
+        self._close_checkpointer(checkpointer, context)
+
+    @staticmethod
+    def _close_checkpointer(checkpointer: Any, context: Optional[Any]) -> None:
+        """Close the saver held by the final lease, surfacing close failures."""
+        if context is not None:
+            context.__exit__(None, None, None)
+        elif checkpointer is None:
+            return
+        # Finalize WAL so the DB file is self-contained and no stale
+        # .wal/.shm files are left behind for the next process.
+        elif hasattr(checkpointer, "conn") and checkpointer.conn:
+            try:
+                checkpointer.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            checkpointer.conn.close()
+        elif hasattr(checkpointer, "close"):
+            checkpointer.close()
+        elif callable(getattr(checkpointer, "__exit__", None)):
+            checkpointer.__exit__(None, None, None)
 
     def __del__(self) -> None:
         try:
@@ -397,6 +501,7 @@ class LangGraphStateAdapter(IStateAdapter):
     
     def get_config(self, checkpoint_id: Optional[str] = None) -> Dict[str, Any]:
         """Get LangGraph config for current thread."""
+        self._ensure_open()
         if not self._current_thread_id:
             raise RuntimeError("No active session. Call initialize_session() first.")
         
@@ -778,10 +883,11 @@ class LangGraphStateAdapter(IStateAdapter):
         """
         if not self._current_thread_id:
             return []
-        
+
         config = self.get_config()
         history = []
-        
+        graph_error: Optional[Exception] = None
+
         # Try compiled graph first (gives full state)
         if self._compiled_graph:
             try:
@@ -796,9 +902,14 @@ class LangGraphStateAdapter(IStateAdapter):
                         "created_at": snapshot.metadata.get("created_at"),
                     })
                 return history
-            except Exception as e:
-                logger.warning(f"Failed to get history from graph, trying checkpointer: {e}")
-        
+            except Exception as error:
+                graph_error = error
+                history.clear()
+                logger.warning(
+                    "Failed to get history from graph, trying checkpointer: "
+                    f"{error}"
+                )
+
         # Fall back to direct checkpointer query (v1.6: for reconnection scenarios)
         if self._checkpointer:
             try:
@@ -806,7 +917,7 @@ class LangGraphStateAdapter(IStateAdapter):
                 for checkpoint_tuple in self._checkpointer.list(config):
                     checkpoint_config = checkpoint_tuple.config
                     metadata = checkpoint_tuple.metadata or {}
-                    
+
                     history.append({
                         "checkpoint_id": checkpoint_config.get("configurable", {}).get("checkpoint_id", ""),
                         "step": metadata.get("step", 0),
@@ -816,9 +927,17 @@ class LangGraphStateAdapter(IStateAdapter):
                         "values": {},  # Not available without graph - would need get()
                         "created_at": metadata.get("created_at"),
                     })
-            except Exception as e:
-                logger.error(f"Failed to get history from checkpointer: {e}")
-        
+            except Exception as error:
+                if graph_error is not None:
+                    error.add_note(
+                        "Compiled graph history retrieval also failed: "
+                        f"{graph_error}"
+                    )
+                logger.error(f"Failed to get history from checkpointer: {error}")
+                raise
+        elif graph_error is not None:
+            raise graph_error
+
         return history
     
     def create_fork(
@@ -828,32 +947,52 @@ class LangGraphStateAdapter(IStateAdapter):
     ) -> "LangGraphStateAdapter":
         """
         Create a fork adapter for variant execution.
-        
+
         Uses ``object.__new__`` to avoid the ``__init__`` path which would
         open a **new** checkpointer connection that is immediately discarded.
-        The fork shares the parent's checkpointer and graph; it does NOT
-        own the checkpointer, so ``close()`` is a no-op on this instance.
+        The fork shares the parent's checkpointer and graph through a lease.
+        The final adapter to close releases the underlying saver.
         """
-        fork_adapter = object.__new__(LangGraphStateAdapter)
-        fork_adapter._config = self._config
-        fork_adapter._checkpointer = self._checkpointer
-        fork_adapter._owns_checkpointer = False
-        fork_adapter._compiled_graph = self._compiled_graph
-        fork_adapter._graph_builder = self._graph_builder
-        fork_adapter._current_thread_id = fork_thread_id
-        fork_adapter._current_execution_id = None
-        fork_adapter._node_boundaries = {fork_thread_id: {}}
-        
-        # If forking from specific checkpoint, copy state
-        if from_checkpoint_id:
-            source_config = self.get_config(checkpoint_id=from_checkpoint_id)
-            source_state = self._compiled_graph.get_state(source_config)
-            
-            if source_state:
-                fork_config = {"configurable": {"thread_id": fork_thread_id}}
-                self._compiled_graph.update_state(fork_config, source_state.values)
-        
-        return fork_adapter
+        if getattr(self, "_closed", False):
+            raise RuntimeError("Cannot fork a closed state adapter")
+
+        resource = getattr(self, "_checkpointer_resource", None)
+        if resource is not None:
+            resource.acquire()
+
+        try:
+            fork_adapter = object.__new__(LangGraphStateAdapter)
+            fork_adapter._config = self._config
+            fork_adapter._checkpointer_context = self._checkpointer_context
+            fork_adapter._checkpointer_resource = resource
+            fork_adapter._checkpointer = self._checkpointer
+            fork_adapter._owns_checkpointer = resource is not None
+            fork_adapter._closed = False
+            fork_adapter._compiled_graph = self._compiled_graph
+            fork_adapter._graph_builder = self._graph_builder
+            fork_adapter._current_thread_id = fork_thread_id
+            fork_adapter._current_execution_id = None
+            fork_adapter._resume_checkpoint_id = None
+            fork_adapter._node_boundaries = {fork_thread_id: {}}
+
+            # If forking from specific checkpoint, copy state
+            if from_checkpoint_id:
+                source_config = self.get_config(checkpoint_id=from_checkpoint_id)
+                source_state = self._compiled_graph.get_state(source_config)
+
+                if source_state:
+                    fork_config = {"configurable": {"thread_id": fork_thread_id}}
+                    self._compiled_graph.update_state(
+                        fork_config, source_state.values
+                    )
+
+            return fork_adapter
+        except BaseException:
+            if resource is not None:
+                payload = resource.release()
+                if payload is not None:
+                    self._close_checkpointer(*payload)
+            raise
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

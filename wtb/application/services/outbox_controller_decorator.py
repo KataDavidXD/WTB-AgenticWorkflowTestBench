@@ -61,12 +61,30 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         inner: IExecutionController,
         outbox_repo: Optional["IOutboxRepository"] = None,
         commit_fn: Optional[Callable[[], None]] = None,
+        rollback_fn: Optional[Callable[[], None]] = None,
     ):
         self._inner = inner
         self._outbox = outbox_repo
+        self._commit_fn: Optional[Callable[[], None]] = None
+        self._rollback_fn: Optional[Callable[[], None]] = None
+
+        if outbox_repo is None:
+            return
+
+        if not callable(commit_fn) or not callable(rollback_fn):
+            raise ValueError(
+                "atomic outbox mode requires callable commit_fn and rollback_fn"
+            )
+
+        set_deferred_commit = getattr(inner, "set_deferred_commit", None)
+        if not callable(set_deferred_commit):
+            raise ValueError(
+                "atomic outbox mode requires callable inner.set_deferred_commit"
+            )
+
         self._commit_fn = commit_fn
-        if hasattr(inner, "set_deferred_commit"):
-            inner.set_deferred_commit(True)
+        self._rollback_fn = rollback_fn
+        set_deferred_commit(True)
 
     def _emit(
         self,
@@ -74,7 +92,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         aggregate_id: str,
         payload: Dict[str, Any],
     ) -> None:
-        if not self._outbox:
+        if self._outbox is None:
             return
         try:
             event = OutboxEvent.create(
@@ -84,9 +102,23 @@ class OutboxExecutionControllerDecorator(IExecutionController):
                 payload=payload,
             )
             self._outbox.add(event)
-        except Exception as e:
+        except Exception as error:
             logger.error(
-                f"Outbox event emission failed for {event_type.value}: {e}",
+                f"Outbox event emission failed for {event_type.value}: {error}",
+                exc_info=True,
+            )
+            self._rollback_after_failure()
+            raise
+
+    def _rollback_after_failure(self) -> None:
+        """Best-effort rollback that never masks the active primary error."""
+        if not self._rollback_fn:
+            return
+        try:
+            self._rollback_fn()
+        except Exception as rollback_error:
+            logger.error(
+                f"Outbox rollback failed while preserving primary error: {rollback_error}",
                 exc_info=True,
             )
 
@@ -95,9 +127,23 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         if self._commit_fn:
             try:
                 self._commit_fn()
-            except Exception as e:
-                logger.error(f"Outbox commit failed: {e}", exc_info=True)
+            except Exception as error:
+                logger.error(f"Outbox commit failed: {error}", exc_info=True)
+                self._rollback_after_failure()
                 raise
+
+    def _invoke_inner_mutation(
+        self,
+        mutation: Callable[..., Execution],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Execution:
+        """Run one deferred inner mutation and rollback if it raises."""
+        try:
+            return mutation(*args, **kwargs)
+        except Exception:
+            self._rollback_after_failure()
+            raise
 
     # -- Delegated IExecutionController methods with outbox events --
 
@@ -106,8 +152,20 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         workflow: TestWorkflow,
         initial_state: Optional[Dict[str, Any]] = None,
         breakpoints: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        execution_id: Optional[str] = None,
     ) -> Execution:
-        result = self._inner.create_execution(workflow, initial_state, breakpoints)
+        create_args = (workflow, initial_state, breakpoints)
+        create_kwargs: Dict[str, Any] = {}
+        if metadata is not None:
+            create_kwargs["metadata"] = metadata
+        if execution_id is not None:
+            create_kwargs["execution_id"] = execution_id
+        result = self._invoke_inner_mutation(
+            self._inner.create_execution,
+            *create_args,
+            **create_kwargs,
+        )
         self._emit(
             OutboxEventType.EXECUTION_CREATED,
             result.id,
@@ -121,7 +179,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         return result
 
     def run(self, execution_id: str, graph: Any = None) -> Execution:
-        result = self._inner.run(execution_id, graph)
+        result = self._invoke_inner_mutation(self._inner.run, execution_id, graph)
         if result.status == ExecutionStatus.COMPLETED:
             self._emit(
                 OutboxEventType.EXECUTION_STARTED,
@@ -148,7 +206,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         return result
 
     def pause(self, execution_id: str) -> Execution:
-        result = self._inner.pause(execution_id)
+        result = self._invoke_inner_mutation(self._inner.pause, execution_id)
         self._emit(
             OutboxEventType.EXECUTION_PAUSED,
             execution_id,
@@ -165,7 +223,11 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         execution_id: str,
         modified_state: Optional[Dict[str, Any]] = None,
     ) -> Execution:
-        result = self._inner.resume(execution_id, modified_state)
+        result = self._invoke_inner_mutation(
+            self._inner.resume,
+            execution_id,
+            modified_state,
+        )
         self._emit(
             OutboxEventType.EXECUTION_RESUMED,
             execution_id,
@@ -178,7 +240,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         return result
 
     def stop(self, execution_id: str) -> Execution:
-        result = self._inner.stop(execution_id)
+        result = self._invoke_inner_mutation(self._inner.stop, execution_id)
         self._emit(
             OutboxEventType.EXECUTION_STOPPED,
             execution_id,
@@ -188,7 +250,11 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         return result
 
     def rollback(self, execution_id: str, checkpoint_id: str) -> Execution:
-        result = self._inner.rollback(execution_id, checkpoint_id)
+        result = self._invoke_inner_mutation(
+            self._inner.rollback,
+            execution_id,
+            checkpoint_id,
+        )
         self._emit(
             OutboxEventType.ROLLBACK_PERFORMED,
             execution_id,
@@ -206,7 +272,12 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         checkpoint_id: str,
         new_initial_state: Optional[Dict[str, Any]] = None,
     ) -> Execution:
-        result = self._inner.fork(execution_id, checkpoint_id, new_initial_state)
+        result = self._invoke_inner_mutation(
+            self._inner.fork,
+            execution_id,
+            checkpoint_id,
+            new_initial_state,
+        )
         self._emit(
             OutboxEventType.EXECUTION_FORKED,
             result.id,
@@ -216,6 +287,45 @@ class OutboxExecutionControllerDecorator(IExecutionController):
                 "checkpoint_id": checkpoint_id,
             },
         )
+        self._commit_outbox()
+        return result
+
+    def rollback_to_node(self, execution_id: str, node_id: str) -> Execution:
+        result = self._invoke_inner_mutation(
+            self._inner.rollback_to_node,
+            execution_id,
+            node_id,
+        )
+        self._emit(
+            OutboxEventType.ROLLBACK_PERFORMED,
+            execution_id,
+            {
+                "execution_id": execution_id,
+                "node_id": node_id,
+            },
+        )
+        self._commit_outbox()
+        return result
+
+    def update_execution_state(
+        self,
+        execution_id: str,
+        values: Dict[str, Any],
+    ) -> bool:
+        result = self._invoke_inner_mutation(
+            self._inner.update_execution_state,
+            execution_id,
+            values,
+        )
+        if result:
+            self._emit(
+                OutboxEventType.STATE_MODIFIED,
+                execution_id,
+                {
+                    "execution_id": execution_id,
+                    "updated_fields": list(values),
+                },
+            )
         self._commit_outbox()
         return result
 

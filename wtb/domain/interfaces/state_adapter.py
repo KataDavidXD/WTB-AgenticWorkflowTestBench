@@ -23,7 +23,7 @@ REMOVED (v1.6):
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal, Union
 from enum import Enum
 from dataclasses import dataclass
 
@@ -215,7 +215,11 @@ class IStateAdapter(ABC):
     # ═══════════════════════════════════════════════════════════════════════════
     
     @abstractmethod
-    def mark_node_started(self, node_id: str, entry_checkpoint_id: str) -> str:
+    def mark_node_started(
+        self,
+        node_id: str,
+        entry_checkpoint_id: str,
+    ) -> Union[str, Literal[False]]:
         """
         Mark that a node has started executing.
         
@@ -224,7 +228,8 @@ class IStateAdapter(ABC):
             entry_checkpoint_id: First checkpoint created in this node
             
         Returns:
-            Node boundary ID
+            Node boundary ID when this caller owns the open boundary, or
+            ``False`` when another executor already owns it.
         """
         pass
     
