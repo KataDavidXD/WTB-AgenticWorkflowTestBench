@@ -35,7 +35,7 @@ Usage:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable, Type
+from typing import List, Dict, Any, Optional, Callable, Type, TYPE_CHECKING
 from enum import Enum
 
 from wtb.domain.events import (
@@ -50,6 +50,9 @@ from wtb.domain.events import (
     RayActorFailedEvent, RayVariantExecutionStartedEvent, RayVariantExecutionCompletedEvent,
     RayVariantExecutionFailedEvent, RayVariantFilesTrackedEvent, RayBackpressureAppliedEvent,
 )
+
+if TYPE_CHECKING:
+    from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 
 
 class WTBAuditEventType(Enum):

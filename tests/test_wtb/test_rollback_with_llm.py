@@ -329,7 +329,11 @@ def session_manager(db_config):
 
 @pytest.fixture
 def llm_client():
-    """Create LLM client."""
+    """Create a real LLM client when its external prerequisites exist."""
+    if not HAS_OPENAI:
+        pytest.skip("openai package is required for real LLM rollback tests")
+    if not (os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")):
+        pytest.skip("LLM_API_KEY or OPENAI_API_KEY is required for real LLM tests")
     return LLMClientHelper()
 
 
@@ -671,7 +675,7 @@ if __name__ == "__main__":
     print("="*70)
     
     # Setup databases
-    config = setup_databases()
+    setup_all_databases()
     
     # Run tests
     pytest.main([__file__, "-v", "-s", "--tb=short"])

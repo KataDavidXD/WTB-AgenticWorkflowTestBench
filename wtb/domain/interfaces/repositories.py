@@ -10,7 +10,12 @@ from datetime import datetime
 from typing import TypeVar, Generic, Optional, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from wtb.domain.models.workflow import TestWorkflow, Execution, NodeVariant
+    from wtb.domain.models.workflow import (
+        Execution,
+        ExecutionStatus,
+        NodeVariant,
+        TestWorkflow,
+    )
     from wtb.domain.models.batch_test import BatchTest, EvaluationResult
     from wtb.domain.models.node_boundary import NodeBoundary
     # CheckpointFile REMOVED (2026-01-27) - Use CheckpointFileLink from file_processing
