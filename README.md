@@ -232,6 +232,31 @@ When `uv_venv_manager` is running via Docker compose, use the strict E2E checker
 The script builds/starts compose, waits for REST and gRPC, runs the strict Ray
 pytest, then runs `install_checker.py --grpc-url localhost:50051`.
 
+### Opt-in PostgreSQL and external Ray Client E2E
+
+The live PostgreSQL tests use PostgreSQL for both WTB core metadata and
+LangGraph checkpoints. They cover synchronous rollback/resume/fork plus the
+async saver lifecycle:
+
+```powershell
+$env:WTB_TEST_POSTGRES_URL = "postgresql://user:password@host:5432/wtb"
+python -m pytest tests/integration/test_live_postgres_control_flow.py -v
+```
+
+To test a Ray Client endpoint together with the live gRPC venv manager and the
+SQLite/CAS file flow, start the Ray head and venv manager independently, then
+run:
+
+```powershell
+$env:WTB_TEST_RAY_ADDRESS = "ray://127.0.0.1:10001"
+$env:UV_VENV_GRPC_ADDRESS = "localhost:50051"
+python -m pytest tests/integration/test_external_ray_client_file_flow.py -v
+```
+
+Using an independently started local head validates the Ray Client transport
+and worker boundary. It is not evidence for a multi-host remote deployment;
+run the same opt-in test against the actual cluster address for that claim.
+
 ### 1. Batch Testing with Ray (Recommended)
 
 `bench.run_batch_test()` internally delegates to `RayBatchTestRunner`, which distributes variant combinations across a Ray ActorPool. Configure Ray through `ExecutionConfig` on your `WorkflowProject`.
@@ -338,12 +363,15 @@ for cp in checkpoints:
 if checkpoints:
     result = bench.rollback(execution.id, checkpoint_id=str(checkpoints[0].id))
     print(f"Rollback success: {result.success}")
+    if result.success:
+        execution = bench.resume(execution.id)
 
 # 6. Fork for A/B comparison
 if checkpoints:
     fork = bench.fork(execution.id, checkpoint_id=str(checkpoints[0].id),
                       new_initial_state={"query": "Alternative input", "result": ""})
     print(f"Fork ID: {fork.fork_execution_id}")
+    forked_execution = bench.resume(fork.fork_execution_id)
 ```
 
 ## Core Operations
@@ -358,13 +386,65 @@ for cp in checkpoints:
     print(f"Step {cp.step}: next={cp.next_nodes}, keys={list(cp.state_values.keys())}")
 ```
 
+### Resume vs. Rollback vs. Fork
+
+These operations control related but different lifecycle transitions:
+
+| Operation | What it does | Execution ID | Selects a checkpoint? | Runs immediately? |
+|---|---|---|---|---|
+| `resume(execution_id, modified_state=...)` | Continues a paused or rolled-back execution from its current recovery head and may overlay state | Same | No | Yes |
+| `rollback(execution_id, checkpoint_id)` | Moves the existing execution to a selected checkpoint and leaves it paused | Same | Yes | No; call `resume` |
+| `fork(execution_id, checkpoint_id, new_initial_state=...)` | Creates an isolated paused branch from a checkpoint without changing the source execution | New | Yes | No; resume the returned fork ID |
+
+`rollback` and `fork` select historical state; `resume` continues whichever
+state is already selected. Neither rollback nor fork executes subsequent nodes
+automatically.
+
+```python
+rollback = bench.rollback(execution.id, checkpoint_id=str(cp.id))
+if not rollback.success:
+    raise RuntimeError(rollback.error)
+
+# Continue the same execution from the rolled-back checkpoint.
+resumed = bench.resume(execution.id, modified_state={"query": "revised"})
+
+# Keep the source execution unchanged and create an independent branch.
+fork = bench.fork(
+    execution.id,
+    checkpoint_id=str(cp.id),
+    new_initial_state={"query": "alternative"},
+)
+forked_execution = bench.resume(fork.fork_execution_id)
+```
+
+With file tracking enabled, synchronous rollback restores checkpoint-linked
+files before committing the rewound state. A synchronous fork validates any
+required CAS link and restores linked files when the fork is resumed. Missing
+or partial required restores fail closed. Without file tracking, these control
+operations affect workflow state only. File restoration and database updates
+are not one distributed transaction; a later state or database failure cannot
+automatically undo physical file writes that already succeeded.
+
+The async controller has a narrower contract: calling
+`arollback_to_checkpoint()` without `restore_output_dir` is state-only; pass a
+destination directory to request file restoration. Missing or partial restores
+abort before the adapter state is moved, but later adapter or database failures
+do not compensate already-restored files. `afork()` currently forks state and
+thread history, and does not provide the synchronous file-level fork/resume
+contract. The async controller also does not currently expose an `aresume()`
+operation equivalent to the synchronous SDK.
+
 ### Rollback
 
 ```python
-result = bench.rollback(execution_id=execution.id, checkpoint_id=str(cp.id))
+rollback = bench.rollback(execution_id=execution.id, checkpoint_id=str(cp.id))
+if rollback.success:
+    resumed = bench.resume(execution.id)
 
-# Rollback to after a specific node
-result = bench.rollback_to_node(execution_id=execution.id, node_id="retriever")
+# Alternative: select the checkpoint after a specific node, then resume.
+node_rollback = bench.rollback_to_node(execution_id=execution.id, node_id="retriever")
+if node_rollback.success:
+    resumed = bench.resume(execution.id)
 ```
 
 ### Forking (A/B Testing)

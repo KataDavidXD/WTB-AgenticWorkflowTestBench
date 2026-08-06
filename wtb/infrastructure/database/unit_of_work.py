@@ -109,14 +109,17 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
     
     def dispose(self):
         """
-        Close the session and drop references.
+        Close the session and release this UoW's current engine pool.
         
-        Engines are shared via get_engine(); do not dispose them here or other
-        UoW instances using the same URL would break. To fully release the DB
-        file, clear the process-wide engine cache (see engine_cache).
+        Engines are shared via ``get_engine()``, but SQLAlchemy's
+        ``Engine.dispose()`` replaces the pool without invalidating the Engine
+        object held by other UoWs. This releases idle SQLite file handles while
+        allowing later users of the cached Engine to reconnect normally.
         """
         if self._session:
             self._session.close()
             self._session = None
+        if self._engine is not None:
+            self._engine.dispose()
         self._engine = None
 

@@ -351,17 +351,22 @@ class WTBTestBench:
         execution controller's state adapter (checkpointer),
         and the underlying UoW session.  Safe to call multiple times.
 
-        A batch-runner shutdown failure is propagated and leaves the bench
-        open so actor termination and resource cleanup can be retried.
+        Every owned close is attempted. Failures are propagated and leave the
+        bench open so cleanup can be retried; multiple failures are grouped.
         """
         with self._lifecycle_lock:
             if self._closed:
                 return
 
+            close_errors = []
+
             if self._owns_batch_runner and self._batch_runner is not None:
                 shutdown = getattr(self._batch_runner, "shutdown", None)
                 if callable(shutdown):
-                    shutdown()
+                    try:
+                        shutdown()
+                    except Exception as error:
+                        close_errors.append(error)
 
             coordinator = getattr(self, "_batch_coordinator", None)
             if coordinator is not None:
@@ -369,9 +374,12 @@ class WTBTestBench:
                 if callable(close_coordinator):
                     try:
                         close_coordinator()
-                    except Exception:
-                        pass
-                self._batch_coordinator = None
+                    except Exception as error:
+                        close_errors.append(error)
+                    else:
+                        self._batch_coordinator = None
+                else:
+                    self._batch_coordinator = None
 
             if self._owns_execution_resources:
                 inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
@@ -388,14 +396,28 @@ class WTBTestBench:
                     if callable(close_resource):
                         try:
                             close_resource()
-                        except Exception:
-                            pass
+                        except Exception as error:
+                            close_errors.append(error)
 
                 if uow is not None and id(uow) not in seen_resources:
                     try:
                         uow.__exit__(None, None, None)
-                    except Exception:
-                        pass
+                    except Exception as error:
+                        close_errors.append(error)
+                    dispose_uow = getattr(uow, "dispose", None)
+                    if callable(dispose_uow):
+                        try:
+                            dispose_uow()
+                        except Exception as error:
+                            close_errors.append(error)
+
+            if close_errors:
+                if len(close_errors) == 1:
+                    raise close_errors[0]
+                raise ExceptionGroup(
+                    "Failed to close WTBTestBench resources",
+                    close_errors,
+                )
 
             self._closed = True
 
@@ -457,6 +479,12 @@ class WTBTestBench:
                         uow.__exit__(None, None, None)
                     except Exception:
                         pass
+                    dispose_uow = getattr(uow, "dispose", None)
+                    if callable(dispose_uow):
+                        try:
+                            dispose_uow()
+                        except Exception:
+                            pass
 
             self._exec_ctrl = execution_controller
             self._owns_execution_resources = bool(owns_execution_resources)
@@ -596,8 +624,15 @@ class WTBTestBench:
         if execution_metadata:
             create_kwargs["metadata"] = execution_metadata
         execution = self._exec_ctrl.create_execution(**create_kwargs)
-        
-        return self._exec_ctrl.run(execution.id, graph=graph)
+
+        try:
+            return self._exec_ctrl.run(execution.id, graph=graph)
+        except BaseException as error:
+            # The execution is already durable at this point.  Surface its ID
+            # so callers can account for an orphaned physical attempt even if
+            # the controller fails while running or persisting the result.
+            error.wtb_execution_id = str(execution.id)
+            raise
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Execution Control - Delegates to IExecutionController
@@ -1329,14 +1364,31 @@ class WTBTestBench:
                 main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
                 if main_spec and main_spec.name:
                     gf_module = main_spec.name
-                else:
-                    try:
-                        import cloudpickle
-                        gf_pickled = base64.b64encode(
-                            cloudpickle.dumps(gf)
-                        ).decode("ascii")
-                    except Exception:
-                        pass
+            # An importable module on the driver may not be installed on a
+            # remote Ray worker.  Always carry a cloudpickle fallback so the
+            # actor can still reconstruct the registered graph factory.
+            try:
+                import sys
+
+                import cloudpickle
+
+                factory_module = sys.modules.get(getattr(gf, "__module__", ""))
+                pickle_by_value = bool(
+                    factory_module is not None
+                    and getattr(gf, "__module__", None) != "__main__"
+                    and hasattr(cloudpickle, "register_pickle_by_value")
+                )
+                if pickle_by_value:
+                    cloudpickle.register_pickle_by_value(factory_module)
+                try:
+                    gf_pickled = base64.b64encode(
+                        cloudpickle.dumps(gf)
+                    ).decode("ascii")
+                finally:
+                    if pickle_by_value:
+                        cloudpickle.unregister_pickle_by_value(factory_module)
+            except Exception:
+                pass
         
         # Create domain BatchTest with workflow cache for batch runner
         batch_test = BatchTest(workflow_id=workflow.id, _workflow=workflow)

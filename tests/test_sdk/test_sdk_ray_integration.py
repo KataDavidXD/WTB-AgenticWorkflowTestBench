@@ -1029,6 +1029,79 @@ class TestSDKBatchTesting:
         )
         assert case_batches[0].variant_combinations is not case_batches[1].variant_combinations
 
+    def test_importable_graph_factory_also_carries_remote_fallback(
+        self,
+        wtb_inmemory,
+        simple_graph_factory,
+    ):
+        """Remote workers may not have the driver's otherwise importable module."""
+        from unittest.mock import MagicMock
+
+        from wtb.sdk import ExecutionConfig
+
+        project = WorkflowProject(
+            name=f"remote_fallback_{uuid.uuid4().hex[:8]}",
+            graph_factory=simple_graph_factory,
+            execution=ExecutionConfig(batch_executor="threadpool"),
+        )
+        wtb_inmemory.register_project(project)
+
+        runner = MagicMock()
+        runner.run_batch_test.side_effect = lambda batch: batch
+        wtb_inmemory._batch_runner = runner
+        wtb_inmemory.run_batch_test(
+            project=project.name,
+            variant_matrix=[{}],
+            test_cases=[{"messages": [], "count": 0}],
+        )
+
+        batch = runner.run_batch_test.call_args.args[0]
+        payload = batch.metadata.get("_graph_factory_pickled")
+        assert payload
+        assert callable(__import__("cloudpickle").loads(base64.b64decode(payload)))
+
+    def test_remote_fallback_deserializes_without_driver_module(self, wtb_inmemory):
+        """The fallback must contain code, not another import-by-name reference."""
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        from wtb.sdk import ExecutionConfig
+
+        module_name = f"driver_only_graph_{uuid.uuid4().hex}"
+        module = types.ModuleType(module_name)
+
+        def create_graph():
+            return "remote-graph"
+
+        create_graph.__module__ = module_name
+        module.create_graph = create_graph
+        sys.modules[module_name] = module
+        try:
+            project = WorkflowProject(
+                name=f"remote_by_value_{uuid.uuid4().hex[:8]}",
+                graph_factory=module.create_graph,
+                execution=ExecutionConfig(batch_executor="threadpool"),
+            )
+            wtb_inmemory.register_project(project)
+            runner = MagicMock()
+            runner.run_batch_test.side_effect = lambda batch: batch
+            wtb_inmemory._batch_runner = runner
+
+            wtb_inmemory.run_batch_test(
+                project=project.name,
+                variant_matrix=[{}],
+                test_cases=[{}],
+            )
+            payload = runner.run_batch_test.call_args.args[0].metadata[
+                "_graph_factory_pickled"
+            ]
+        finally:
+            sys.modules.pop(module_name, None)
+
+        restored = __import__("cloudpickle").loads(base64.b64decode(payload))
+        assert restored() == "remote-graph"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Ray Batch Runner Unit Tests (Mocked)

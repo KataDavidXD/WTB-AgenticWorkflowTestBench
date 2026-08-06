@@ -1290,6 +1290,7 @@ class ExecutionController(IExecutionController):
         fork_execution_id = str(uuid.uuid4())
         forked_execution: Execution | None = None
         operation_error: Exception | None = None
+        persistence_attempted = False
 
         try:
             forked_execution = self._fork_impl(
@@ -1298,6 +1299,9 @@ class ExecutionController(IExecutionController):
                 new_initial_state,
                 fork_execution_id=fork_execution_id,
             )
+            persistence_attempted = True
+            self._exec_repo.add(forked_execution)
+            self._commit()
         except Exception as exc:
             operation_error = exc
             rollback = getattr(self._uow, "rollback", None)
@@ -1307,11 +1311,14 @@ class ExecutionController(IExecutionController):
                 except Exception as rollback_error:
                     logger.warning(f"Could not roll back failed fork: {rollback_error}")
 
-            try:
-                self._exec_repo.delete(fork_execution_id)
-                self._commit()
-            except Exception as cleanup_error:
-                logger.warning(f"Could not remove failed fork record: {cleanup_error}")
+            if persistence_attempted:
+                try:
+                    self._exec_repo.delete(fork_execution_id)
+                    self._commit()
+                except Exception as cleanup_error:
+                    logger.warning(
+                        f"Could not remove failed fork record: {cleanup_error}"
+                    )
             raise
         finally:
             if source_session_id:
@@ -1345,6 +1352,10 @@ class ExecutionController(IExecutionController):
 
         if forked_execution is None:
             raise RuntimeError("Fork did not produce an execution")
+        logger.info(
+            f"Forked execution {fork_execution_id} from {execution_id} "
+            f"at checkpoint {checkpoint_id[:8]}..."
+        )
         return forked_execution
 
     def _fork_impl(
@@ -1359,7 +1370,8 @@ class ExecutionController(IExecutionController):
         Fork an execution to create a new independent execution.
         
         Creates a new Execution record starting from the checkpoint state,
-        with an isolated session. The new execution is persisted.
+        with an isolated session. The public ``fork`` method persists it only
+        after every checkpoint/thread setup step succeeds.
         
         Args:
             execution_id: Source execution ID
@@ -1528,6 +1540,18 @@ class ExecutionController(IExecutionController):
             metadata=copy.deepcopy(source_execution.metadata or {}),
         )
         forked_execution.metadata.pop("requested_execution_id", None)
+        # Graph selection is persisted in execution metadata and takes
+        # precedence over state during SDK resume. Only the two explicit
+        # control fields may cross this state-to-metadata boundary.
+        if new_initial_state:
+            for graph_identity_key in (
+                "_variant_config",
+                "_workflow_variant",
+            ):
+                if graph_identity_key in new_initial_state:
+                    forked_execution.metadata[graph_identity_key] = copy.deepcopy(
+                        new_initial_state[graph_identity_key]
+                    )
         
         # Initialize session for new execution
         session_id = self._state_adapter.initialize_session(
@@ -1570,12 +1594,6 @@ class ExecutionController(IExecutionController):
         )
         self._prepare_node_resume_claim_token(forked_execution, refresh=True)
         self._sync_external_cache_metadata(forked_execution)
-        
-        # Persist forked execution
-        self._exec_repo.add(forked_execution)
-        self._commit()
-        
-        logger.info(f"Forked execution {fork_execution_id} from {execution_id} at checkpoint {checkpoint_id[:8]}...")
         
         return forked_execution
     

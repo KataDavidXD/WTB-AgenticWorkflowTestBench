@@ -71,6 +71,21 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
+def _grpc_service_available(address: str) -> bool:
+    """Return whether the external venv-manager service is reachable."""
+    try:
+        import grpc
+
+        channel = grpc.insecure_channel(address)
+        try:
+            grpc.channel_ready_future(channel).result(timeout=2)
+            return True
+        finally:
+            channel.close()
+    except Exception:
+        return False
+
+
 def _checkpoint_with_result(
     bench: WTBTestBench,
     execution_id: str,
@@ -216,7 +231,22 @@ def test_batch_mode_real_file_rollback_resume_fork(tmp_path):
         bench.close()
 
 
-@pytest.mark.parametrize("grpc_url", [None, "localhost:50051"])
+_GRPC_URL = os.environ.get("UV_VENV_GRPC_ADDRESS", "localhost:50051")
+
+
+@pytest.mark.parametrize(
+    "grpc_url",
+    [
+        None,
+        pytest.param(
+            _GRPC_URL,
+            marks=pytest.mark.skipif(
+                not _grpc_service_available(_GRPC_URL),
+                reason=f"uv_venv_manager gRPC service not available at {_GRPC_URL}",
+            ),
+        ),
+    ],
+)
 def test_ray_modes_real_file_rollback_resume_fork(tmp_path, grpc_url: str | None):
     if grpc_url is not None:
         pytest.importorskip("grpc")

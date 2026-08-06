@@ -348,11 +348,6 @@ class ExecutionControllerFactory:
         construction-thread transaction lock for the controller lifetime.
         """
         if not isinstance(uow, InMemoryUnitOfWork):
-            warnings.warn(
-                "ExecutionControllerFactory.create() leaks UoW. Use create_isolated() instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
             uow.__enter__()
         return ExecutionController(
             execution_repository=uow.executions,

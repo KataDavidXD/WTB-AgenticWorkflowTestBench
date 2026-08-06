@@ -36,6 +36,12 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
+# psycopg's async implementation uses Windows readiness APIs that are not
+# available on ProactorEventLoop.  Select the compatible policy before an
+# application or pytest creates its first event loop.
+if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from wtb.domain.interfaces.async_state_adapter import IAsyncStateAdapter
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
 from wtb.domain.models.workflow import ExecutionState
