@@ -64,6 +64,9 @@ from wtb.domain.interfaces.unit_of_work import IUnitOfWork
 
 if TYPE_CHECKING:
     from wtb.application.factories import ManagedController
+    from wtb.application.services.batch_execution_coordinator import (
+        BatchExecutionCoordinator,
+    )
 
 logger = logging.getLogger(__name__)
 
