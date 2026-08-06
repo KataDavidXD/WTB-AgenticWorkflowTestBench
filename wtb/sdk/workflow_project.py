@@ -23,9 +23,14 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Type, TYPE_CHECKING
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+)
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -48,11 +53,11 @@ class EnvSpec:
         env_vars: Environment variables to set
     """
     python_version: str = "3.12"
-    dependencies: List[str] = field(default_factory=list)
-    requirements_file: Optional[str] = None
-    env_vars: Dict[str, str] = field(default_factory=dict)
+    dependencies: list[str] = field(default_factory=list)
+    requirements_file: str | None = None
+    env_vars: dict[str, str] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "python_version": self.python_version,
@@ -84,27 +89,27 @@ class EnvironmentConfig:
     """
     granularity: Literal["workflow", "node", "variant"] = "workflow"
     use_current_env: bool = False
-    default_env: Optional[EnvSpec] = None
-    node_environments: Dict[str, EnvSpec] = field(default_factory=dict)
-    variant_environments: Dict[str, EnvSpec] = field(default_factory=dict)
+    default_env: EnvSpec | None = None
+    node_environments: dict[str, EnvSpec] = field(default_factory=dict)
+    variant_environments: dict[str, EnvSpec] = field(default_factory=dict)
     reuse_existing: bool = True
     cleanup_on_exit: bool = False
-    uv_manager_url: Optional[str] = None
+    uv_manager_url: str | None = None
     
-    def get_env_for_node(self, node_id: str) -> Optional[EnvSpec]:
+    def get_env_for_node(self, node_id: str) -> EnvSpec | None:
         """Get environment spec for a specific node."""
         if self.granularity == "workflow":
             return self.default_env
         return self.node_environments.get(node_id, self.default_env)
     
-    def get_env_for_variant(self, node_id: str, variant_name: str) -> Optional[EnvSpec]:
+    def get_env_for_variant(self, node_id: str, variant_name: str) -> EnvSpec | None:
         """Get environment spec for a specific variant."""
         key = f"{node_id}:{variant_name}"
         if self.granularity == "variant" and key in self.variant_environments:
             return self.variant_environments[key]
         return self.get_env_for_node(node_id)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "granularity": self.granularity,
@@ -142,17 +147,17 @@ class FileTrackingConfig:
         max_snapshots: Maximum number of snapshots to retain
     """
     enabled: bool = False
-    tracked_paths: List[str] = field(default_factory=list)
-    ignore_patterns: List[str] = field(default_factory=lambda: [
+    tracked_paths: list[str] = field(default_factory=list)
+    ignore_patterns: list[str] = field(default_factory=lambda: [
         "*.pyc", "__pycache__/", "*.log", ".git/", "*.tmp"
     ])
     auto_commit: bool = True
     commit_on: Literal["checkpoint", "node_complete", "manual"] = "checkpoint"
-    repository_path: Optional[str] = None
+    repository_path: str | None = None
     snapshot_strategy: Literal["full", "incremental"] = "incremental"
     max_snapshots: int = 100
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "enabled": self.enabled,
@@ -185,9 +190,9 @@ class NodeResourceConfig:
     num_cpus: float = 1.0
     num_gpus: float = 0.0
     memory: str = "1GB"
-    custom_resources: Dict[str, float] = field(default_factory=dict)
+    custom_resources: dict[str, float] = field(default_factory=dict)
     
-    def _parse_memory(self, memory_str: str) -> Optional[int]:
+    def _parse_memory(self, memory_str: str) -> int | None:
         """
         Parse memory string to bytes.
         
@@ -215,7 +220,7 @@ class NodeResourceConfig:
         
         return int(value * multipliers[unit])
     
-    def to_ray_options(self) -> Dict[str, Any]:
+    def to_ray_options(self) -> dict[str, Any]:
         """
         Convert to Ray resource options.
         
@@ -236,7 +241,7 @@ class NodeResourceConfig:
         
         return options
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "num_cpus": self.num_cpus,
@@ -260,11 +265,11 @@ class RayConfig:
     """
     address: str = "auto"
     max_concurrent_workflows: int = 10
-    object_store_memory: Optional[int] = None
+    object_store_memory: int | None = None
     max_retries: int = 3
     retry_delay: float = 1.0
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "address": self.address,
@@ -291,7 +296,7 @@ class ExecutionConfig:
     """
     batch_executor: Literal["ray", "threadpool", "sequential"] = "threadpool"
     ray_config: RayConfig = field(default_factory=RayConfig)
-    node_resources: Dict[str, NodeResourceConfig] = field(default_factory=dict)
+    node_resources: dict[str, NodeResourceConfig] = field(default_factory=dict)
     default_node_resources: NodeResourceConfig = field(default_factory=NodeResourceConfig)
     checkpoint_strategy: Literal["per_node", "per_step", "manual"] = "per_node"
     checkpoint_storage: Literal["memory", "sqlite", "postgres"] = "sqlite"
@@ -301,7 +306,7 @@ class ExecutionConfig:
         """Get resource config for a node."""
         return self.node_resources.get(node_id, self.default_node_resources)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "batch_executor": self.batch_executor,
@@ -329,10 +334,10 @@ class WorkspaceIsolationConfig:
     """
     enabled: bool = False
     mode: Literal["copy", "symlink", "overlay"] = "copy"
-    base_path: Optional[str] = None
+    base_path: str | None = None
     cleanup_on_complete: bool = True
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "enabled": self.enabled,
@@ -353,10 +358,10 @@ class PauseStrategyConfig:
         auto_resume: Automatically resume after timeout
     """
     mode: Literal["before_node", "after_node", "on_condition"] = "before_node"
-    timeout: Optional[int] = None
+    timeout: int | None = None
     auto_resume: bool = False
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "mode": self.mode,
@@ -391,11 +396,11 @@ class NodeVariant:
     name: str
     implementation: Callable
     description: str = ""
-    environment: Optional[EnvSpec] = None
-    resources: Optional[NodeResourceConfig] = None
+    environment: EnvSpec | None = None
+    resources: NodeResourceConfig | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary (excluding callable)."""
         return {
             "node_id": self.node_id,
@@ -424,10 +429,10 @@ class WorkflowVariant:
     name: str
     graph_factory: Callable
     description: str = ""
-    state_schema: Optional[Type["BaseModel"]] = None
+    state_schema: type["BaseModel"] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary (excluding callables)."""
         return {
             "name": self.name,
@@ -477,7 +482,7 @@ class WorkflowProject:
     name: str
     graph_factory: Callable
     description: str = ""
-    state_schema: Optional[Type["BaseModel"]] = None
+    state_schema: type["BaseModel"] | None = None
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     version: int = 1
     file_tracking: FileTrackingConfig = field(default_factory=FileTrackingConfig)
@@ -489,15 +494,15 @@ class WorkflowProject:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # Private variant storage
-    _node_variants: Dict[str, Dict[str, NodeVariant]] = field(default_factory=dict, repr=False)
-    _workflow_variants: Dict[str, WorkflowVariant] = field(default_factory=dict, repr=False)
-    _graph_cache: Dict[Tuple[Any, ...], Any] = field(default_factory=dict, repr=False)
+    _node_variants: dict[str, dict[str, NodeVariant]] = field(default_factory=dict, repr=False)
+    _workflow_variants: dict[str, WorkflowVariant] = field(default_factory=dict, repr=False)
+    _graph_cache: dict[tuple[Any, ...], Any] = field(default_factory=dict, repr=False)
 
     def _graph_cache_key(
         self,
-        variant_config: Optional[Dict[str, str]],
-        workflow_variant: Optional[str],
-    ) -> Tuple[Any, ...]:
+        variant_config: dict[str, str] | None,
+        workflow_variant: str | None,
+    ) -> tuple[Any, ...]:
         """Build a stable cache key for repeated graph construction."""
         normalized_variant_config = tuple(sorted((variant_config or {}).items()))
         return (
@@ -519,8 +524,8 @@ class WorkflowProject:
         name: str,
         implementation: Callable,
         description: str = "",
-        environment: Optional[EnvSpec] = None,
-        resources: Optional[NodeResourceConfig] = None,
+        environment: EnvSpec | None = None,
+        resources: NodeResourceConfig | None = None,
     ) -> None:
         """
         Register a node-level variant for A/B testing.
@@ -560,7 +565,7 @@ class WorkflowProject:
         self._clear_graph_cache()
         self.updated_at = datetime.now(timezone.utc)
     
-    def list_variants(self, node: Optional[str] = None) -> Dict[str, List[str]]:
+    def list_variants(self, node: str | None = None) -> dict[str, list[str]]:
         """
         List all registered node variants.
         
@@ -576,7 +581,7 @@ class WorkflowProject:
             return {}
         return {n: list(variants.keys()) for n, variants in self._node_variants.items()}
     
-    def get_variant(self, node: str, name: str) -> Optional[NodeVariant]:
+    def get_variant(self, node: str, name: str) -> NodeVariant | None:
         """
         Get a specific node variant.
         
@@ -589,7 +594,7 @@ class WorkflowProject:
         """
         return self._node_variants.get(node, {}).get(name)
     
-    def get_variant_implementation(self, node: str, name: str) -> Optional[Callable]:
+    def get_variant_implementation(self, node: str, name: str) -> Callable | None:
         """
         Get the implementation callable for a variant.
         
@@ -632,7 +637,7 @@ class WorkflowProject:
         name: str,
         graph_factory: Callable,
         description: str = "",
-        state_schema: Optional[Type["BaseModel"]] = None,
+        state_schema: type["BaseModel"] | None = None,
     ) -> None:
         """
         Register a workflow-level variant for architecture comparison.
@@ -659,7 +664,7 @@ class WorkflowProject:
         self._clear_graph_cache()
         self.updated_at = datetime.now(timezone.utc)
     
-    def list_workflow_variants(self) -> List[str]:
+    def list_workflow_variants(self) -> list[str]:
         """
         List all registered workflow variants.
         
@@ -668,7 +673,7 @@ class WorkflowProject:
         """
         return list(self._workflow_variants.keys())
     
-    def get_workflow_variant(self, name: str) -> Optional[WorkflowVariant]:
+    def get_workflow_variant(self, name: str) -> WorkflowVariant | None:
         """
         Get a specific workflow variant.
         
@@ -763,8 +768,8 @@ class WorkflowProject:
     
     def build_graph(
         self,
-        variant_config: Optional[Dict[str, str]] = None,
-        workflow_variant: Optional[str] = None,
+        variant_config: dict[str, str] | None = None,
+        workflow_variant: str | None = None,
     ) -> Any:
         """
         Build the workflow graph with optional variant configuration.
@@ -814,7 +819,7 @@ class WorkflowProject:
     def _apply_node_variants(
         self,
         graph: Any,
-        variant_config: Dict[str, str],
+        variant_config: dict[str, str],
     ) -> Any:
         """
         Apply node variants to a graph.
@@ -855,7 +860,7 @@ class WorkflowProject:
     # Serialization
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize project to dictionary.
         
