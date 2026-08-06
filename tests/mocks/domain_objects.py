@@ -22,28 +22,28 @@ Usage:
 Updated: 2026-01-28
 """
 
-import uuid
 import hashlib
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional, Tuple
+import uuid
+from datetime import datetime
+from typing import Any
 
 # Import REAL domain types
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 from wtb.domain.models.workflow import (
-    TestWorkflow, 
-    Execution, 
+    Execution,
     ExecutionStatus,
-    WorkflowNode,
+    TestWorkflow,
     WorkflowEdge,
+    WorkflowNode,
 )
 
 
 def create_test_outbox_event(
     event_type: OutboxEventType = OutboxEventType.CHECKPOINT_CREATE,
-    aggregate_id: Optional[str] = None,
+    aggregate_id: str | None = None,
     aggregate_type: str = "Execution",
-    payload: Optional[Dict[str, Any]] = None,
-    event_id: Optional[str] = None,
+    payload: dict[str, Any] | None = None,
+    event_id: str | None = None,
     status: OutboxStatus = OutboxStatus.PENDING,
 ) -> OutboxEvent:
     """
@@ -78,12 +78,12 @@ def create_test_outbox_event(
 
 
 def create_test_checkpoint(
-    checkpoint_id: Optional[int] = None,
-    thread_id: Optional[str] = None,
+    checkpoint_id: int | None = None,
+    thread_id: str | None = None,
     step: int = 1,
-    state: Optional[Dict[str, Any]] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    state: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Create test checkpoint data.
     
@@ -111,10 +111,10 @@ def create_test_checkpoint(
 
 
 def create_test_memento(
-    file_path: Optional[str] = None,
-    file_hash: Optional[str] = None,
+    file_path: str | None = None,
+    file_hash: str | None = None,
     file_size: int = 1024,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create test file memento data.
     
@@ -134,11 +134,11 @@ def create_test_memento(
 
 
 def create_test_commit(
-    commit_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
+    commit_id: str | None = None,
+    execution_id: str | None = None,
     file_count: int = 1,
     message: str = "test commit",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create test file commit data.
     
@@ -164,11 +164,11 @@ def create_test_commit(
 
 
 def create_test_execution(
-    execution_id: Optional[str] = None,
-    workflow_id: Optional[str] = None,
+    execution_id: str | None = None,
+    workflow_id: str | None = None,
     status: ExecutionStatus = ExecutionStatus.PENDING,
-    thread_id: Optional[str] = None,
-    initial_state: Optional[Dict[str, Any]] = None,
+    thread_id: str | None = None,
+    initial_state: dict[str, Any] | None = None,
 ) -> Execution:
     """
     Create a REAL Execution for testing.
@@ -194,7 +194,7 @@ def create_test_execution(
 
 
 def create_test_workflow(
-    workflow_id: Optional[str] = None,
+    workflow_id: str | None = None,
     name: str = "test_workflow",
     node_count: int = 3,
     description: str = "Test workflow for unit tests",
@@ -256,7 +256,7 @@ def create_test_workflow(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def generate_test_files(count: int = 3) -> List[Tuple[str, bytes]]:
+def generate_test_files(count: int = 3) -> list[tuple[str, bytes]]:
     """
     Generate test file data.
     
@@ -277,8 +277,8 @@ def generate_test_files(count: int = 3) -> List[Tuple[str, bytes]]:
 def generate_test_commits(
     count: int = 3,
     files_per_commit: int = 2,
-    execution_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    execution_id: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Generate test commits with mementos.
     
@@ -304,8 +304,8 @@ def generate_test_commits(
 
 def generate_batch_test_variants(
     count: int = 5,
-    base_config: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    base_config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """
     Generate batch test variant configurations.
     
@@ -336,7 +336,7 @@ def generate_batch_test_variants(
 def generate_outbox_events_for_execution(
     execution_id: str,
     event_count: int = 5,
-) -> List[OutboxEvent]:
+) -> list[OutboxEvent]:
     """
     Generate a sequence of outbox events for an execution.
     

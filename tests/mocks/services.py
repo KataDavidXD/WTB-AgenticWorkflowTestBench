@@ -16,10 +16,10 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any
 
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 from wtb.domain.interfaces.repositories import IOutboxRepository
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 
 
 @dataclass
@@ -34,7 +34,7 @@ class MockActor:
     workspace_id: str
     state: str = "active"  # active, paused, killed
     created_at: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -46,7 +46,7 @@ class MockVenv:
     """
     venv_id: str
     venv_path: str
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     status: str = "created"  # created, ready, error
     python_version: str = "3.12"
     created_at: datetime = field(default_factory=datetime.now)
@@ -71,7 +71,7 @@ class MockActorPool:
     """
     
     def __init__(self, pool_size: int = 4):
-        self._actors: Dict[str, MockActor] = {}
+        self._actors: dict[str, MockActor] = {}
         self._pool_size = pool_size
         self._lock = threading.Lock()
     
@@ -80,7 +80,7 @@ class MockActorPool:
         actor_id: str, 
         execution_id: str, 
         workspace_id: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MockActor:
         """Create a new actor in the pool."""
         with self._lock:
@@ -93,7 +93,7 @@ class MockActorPool:
             self._actors[actor_id] = actor
             return actor
     
-    def get_actor(self, actor_id: str) -> Optional[MockActor]:
+    def get_actor(self, actor_id: str) -> MockActor | None:
         """Get an actor by ID."""
         return self._actors.get(actor_id)
     
@@ -121,11 +121,11 @@ class MockActorPool:
                 return True
             return False
     
-    def list_active(self) -> List[MockActor]:
+    def list_active(self) -> list[MockActor]:
         """List all active actors."""
         return [a for a in self._actors.values() if a.state == "active"]
     
-    def list_all(self) -> List[MockActor]:
+    def list_all(self) -> list[MockActor]:
         """List all actors."""
         return list(self._actors.values())
     
@@ -163,7 +163,7 @@ class MockVenvManager:
     """
     
     def __init__(self):
-        self._venvs: Dict[str, MockVenv] = {}
+        self._venvs: dict[str, MockVenv] = {}
         self._lock = threading.Lock()
     
     def create_venv(
@@ -182,7 +182,7 @@ class MockVenvManager:
             self._venvs[venv_id] = venv
             return venv
     
-    def install_packages(self, venv_id: str, packages: List[str]) -> bool:
+    def install_packages(self, venv_id: str, packages: list[str]) -> bool:
         """Install packages in a virtual environment."""
         venv = self._venvs.get(venv_id)
         if venv:
@@ -191,7 +191,7 @@ class MockVenvManager:
             return True
         return False
     
-    def get_venv(self, venv_id: str) -> Optional[MockVenv]:
+    def get_venv(self, venv_id: str) -> MockVenv | None:
         """Get a virtual environment by ID."""
         return self._venvs.get(venv_id)
     
@@ -203,7 +203,7 @@ class MockVenvManager:
                 return True
             return False
     
-    def list_all(self) -> List[MockVenv]:
+    def list_all(self) -> list[MockVenv]:
         """List all virtual environments."""
         return list(self._venvs.values())
     
@@ -222,7 +222,7 @@ class MockVenvManager:
         """Alias for create_venv."""
         return self.create_venv(venv_id, venv_path, python_version)
     
-    def get_status(self, venv_id: str) -> Optional[str]:
+    def get_status(self, venv_id: str) -> str | None:
         """Get status of a virtual environment."""
         venv = self.get_venv(venv_id)
         return venv.status if venv else None
@@ -259,14 +259,14 @@ class MockRayEventBridge:
     
     def __init__(self, outbox_repository: IOutboxRepository):
         self._outbox = outbox_repository
-        self._subscriptions: Dict[str, List[callable]] = {}
+        self._subscriptions: dict[str, list[callable]] = {}
         self._lock = threading.Lock()
     
     def publish_actor_event(
         self, 
         event_type: OutboxEventType,
         actor_id: str,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
         aggregate_type: str = "Actor",
     ) -> OutboxEvent:
         """
@@ -294,7 +294,7 @@ class MockRayEventBridge:
         self, 
         event_type: OutboxEventType,
         aggregate_id: str,
-        payload: Optional[Dict[str, Any]] = None,
+        payload: dict[str, Any] | None = None,
         aggregate_type: str = "Execution",
     ) -> OutboxEvent:
         """
@@ -338,9 +338,9 @@ class MockRayEventBridge:
     
     def get_events(
         self, 
-        event_type: Optional[OutboxEventType] = None,
+        event_type: OutboxEventType | None = None,
         limit: int = 100,
-    ) -> List[OutboxEvent]:
+    ) -> list[OutboxEvent]:
         """
         Get events from the outbox.
         
@@ -372,7 +372,7 @@ class VerificationResult:
     """Result of a verification check."""
     success: bool
     message: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -417,7 +417,7 @@ def verify_outbox_consistency(
 
 
 def verify_transaction_atomicity(
-    operations: List[tuple],
+    operations: list[tuple],
 ) -> VerificationResult:
     """
     Verify all operations succeeded or all failed (atomicity).
