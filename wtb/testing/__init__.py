@@ -8,10 +8,10 @@ Usage:
 """
 
 from wtb.testing.fixtures import (
-    create_minimal_graph,
-    create_conditional_graph,
     MinimalState,
     StateAdapterTestMixin,
+    create_conditional_graph,
+    create_minimal_graph,
 )
 
 __all__ = [
