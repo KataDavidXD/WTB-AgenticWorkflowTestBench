@@ -14,24 +14,18 @@ Design Principles:
 - Type-Safe: Full type annotations
 """
 
-import operator
-import uuid
 import hashlib
+import operator
 import threading
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import (
-    TypedDict, 
-    Annotated, 
-    Dict, 
-    Any, 
-    List, 
-    Optional, 
-    Callable,
-    Tuple,
+    Annotated,
+    Any,
+    TypedDict,
 )
-from enum import Enum
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # State Definitions
@@ -68,10 +62,10 @@ class PauseResumeState(TypedDict):
     messages: Annotated[list, operator.add]
     count: int
     execution_id: str
-    pause_checkpoint_id: Optional[int]
-    resume_checkpoint_id: Optional[int]
-    paused_at: Optional[str]
-    resumed_at: Optional[str]
+    pause_checkpoint_id: int | None
+    resume_checkpoint_id: int | None
+    paused_at: str | None
+    resumed_at: str | None
     pause_strategy: str
 
 
@@ -81,8 +75,8 @@ class BranchState(TypedDict):
     count: int
     path: Annotated[list, operator.add]
     switch: bool
-    branch_id: Optional[str]
-    parent_checkpoint_id: Optional[int]
+    branch_id: str | None
+    parent_checkpoint_id: int | None
 
 
 class RollbackState(TypedDict):
@@ -91,7 +85,7 @@ class RollbackState(TypedDict):
     count: int
     execution_id: str
     checkpoint_ids: Annotated[list, operator.add]
-    rollback_target_id: Optional[int]
+    rollback_target_id: int | None
     rollback_completed: bool
     files_restored: Annotated[list, operator.add]
 
@@ -102,8 +96,8 @@ class BatchTestState(TypedDict):
     count: int
     batch_test_id: str
     variant_name: str
-    variant_config: Dict[str, Any]
-    execution_result: Optional[str]
+    variant_config: dict[str, Any]
+    execution_result: str | None
 
 
 class ParallelExecutionState(TypedDict):
@@ -130,17 +124,17 @@ class FullIntegrationState(TypedDict):
     messages: Annotated[list, operator.add]
     count: int
     execution_id: str
-    batch_test_id: Optional[str]
+    batch_test_id: str | None
     # LangGraph checkpoints
     checkpoint_ids: Annotated[list, operator.add]
     # FileTracker
     commit_ids: Annotated[list, operator.add]
     files_tracked: Annotated[list, operator.add]
     # Ray
-    actor_id: Optional[str]
-    worker_id: Optional[str]
+    actor_id: str | None
+    worker_id: str | None
     # Venv
-    venv_id: Optional[str]
+    venv_id: str | None
     venv_status: str
     # Transaction tracking
     outbox_events: Annotated[list, operator.add]
@@ -157,7 +151,7 @@ def create_simple_state() -> SimpleState:
     return {"messages": [], "count": 0}
 
 
-def create_transaction_state(execution_id: Optional[str] = None) -> TransactionState:
+def create_transaction_state(execution_id: str | None = None) -> TransactionState:
     """Create initial transaction state."""
     return {
         "messages": [],
@@ -181,7 +175,7 @@ def create_file_tracking_state() -> FileTrackingState:
 
 
 def create_pause_resume_state(
-    execution_id: Optional[str] = None,
+    execution_id: str | None = None,
     pause_strategy: str = "WARM",
 ) -> PauseResumeState:
     """Create initial pause/resume state."""
@@ -209,7 +203,7 @@ def create_branch_state(switch: bool = False) -> BranchState:
     }
 
 
-def create_rollback_state(execution_id: Optional[str] = None) -> RollbackState:
+def create_rollback_state(execution_id: str | None = None) -> RollbackState:
     """Create initial rollback state."""
     return {
         "messages": [],
@@ -223,9 +217,9 @@ def create_rollback_state(execution_id: Optional[str] = None) -> RollbackState:
 
 
 def create_batch_test_state(
-    batch_test_id: Optional[str] = None,
+    batch_test_id: str | None = None,
     variant_name: str = "default",
-    variant_config: Optional[Dict[str, Any]] = None,
+    variant_config: dict[str, Any] | None = None,
 ) -> BatchTestState:
     """Create initial batch test state."""
     return {
@@ -238,7 +232,7 @@ def create_batch_test_state(
     }
 
 
-def create_parallel_state(worker_id: Optional[str] = None) -> ParallelExecutionState:
+def create_parallel_state(worker_id: str | None = None) -> ParallelExecutionState:
     """Create initial parallel execution state."""
     return {
         "results": [],
@@ -250,7 +244,7 @@ def create_parallel_state(worker_id: Optional[str] = None) -> ParallelExecutionS
 
 
 def create_venv_state(
-    venv_id: Optional[str] = None,
+    venv_id: str | None = None,
     venv_path: str = "",
 ) -> VenvState:
     """Create initial venv state."""
@@ -265,8 +259,8 @@ def create_venv_state(
 
 
 def create_full_integration_state(
-    execution_id: Optional[str] = None,
-    batch_test_id: Optional[str] = None,
+    execution_id: str | None = None,
+    batch_test_id: str | None = None,
 ) -> FullIntegrationState:
     """Create initial full integration state."""
     return {
@@ -291,32 +285,32 @@ def create_full_integration_state(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def node_a(state: SimpleState) -> Dict[str, Any]:
+def node_a(state: SimpleState) -> dict[str, Any]:
     """Simple node A."""
     return {"messages": ["A"], "count": state["count"] + 1}
 
 
-def node_b(state: SimpleState) -> Dict[str, Any]:
+def node_b(state: SimpleState) -> dict[str, Any]:
     """Simple node B."""
     return {"messages": ["B"], "count": state["count"] + 1}
 
 
-def node_c(state: SimpleState) -> Dict[str, Any]:
+def node_c(state: SimpleState) -> dict[str, Any]:
     """Simple node C."""
     return {"messages": ["C"], "count": state["count"] + 1}
 
 
-def node_d(state: SimpleState) -> Dict[str, Any]:
+def node_d(state: SimpleState) -> dict[str, Any]:
     """Simple node D (alternate branch)."""
     return {"messages": ["D"], "count": state["count"] + 1}
 
 
-def failing_node(state: SimpleState) -> Dict[str, Any]:
+def failing_node(state: SimpleState) -> dict[str, Any]:
     """Node that always fails."""
     raise ValueError("Intentional failure for testing")
 
 
-def transaction_node(state: TransactionState) -> Dict[str, Any]:
+def transaction_node(state: TransactionState) -> dict[str, Any]:
     """Node that tracks transaction info."""
     import uuid
     event_id = str(uuid.uuid4())[:8]
@@ -328,7 +322,7 @@ def transaction_node(state: TransactionState) -> Dict[str, Any]:
     }
 
 
-def file_processing_node(state: FileTrackingState) -> Dict[str, Any]:
+def file_processing_node(state: FileTrackingState) -> dict[str, Any]:
     """Node that processes files and creates commits."""
     file_id = uuid.uuid4().hex[:8]
     blob_hash = hashlib.sha256(f"content-{file_id}".encode()).hexdigest()
@@ -343,7 +337,7 @@ def file_processing_node(state: FileTrackingState) -> Dict[str, Any]:
     }
 
 
-def pauseable_node(state: PauseResumeState, pause_condition: bool = False) -> Dict[str, Any]:
+def pauseable_node(state: PauseResumeState, pause_condition: bool = False) -> dict[str, Any]:
     """Node that can be paused."""
     if pause_condition:
         return {
@@ -357,7 +351,7 @@ def pauseable_node(state: PauseResumeState, pause_condition: bool = False) -> Di
     }
 
 
-def branch_node_a(state: BranchState) -> Dict[str, Any]:
+def branch_node_a(state: BranchState) -> dict[str, Any]:
     """Branching node A."""
     return {
         "messages": ["A"],
@@ -366,7 +360,7 @@ def branch_node_a(state: BranchState) -> Dict[str, Any]:
     }
 
 
-def branch_node_b(state: BranchState) -> Dict[str, Any]:
+def branch_node_b(state: BranchState) -> dict[str, Any]:
     """Branching node B."""
     return {
         "messages": ["B"],
@@ -375,7 +369,7 @@ def branch_node_b(state: BranchState) -> Dict[str, Any]:
     }
 
 
-def branch_node_c(state: BranchState) -> Dict[str, Any]:
+def branch_node_c(state: BranchState) -> dict[str, Any]:
     """Branching node C."""
     return {
         "messages": ["C"],
@@ -384,7 +378,7 @@ def branch_node_c(state: BranchState) -> Dict[str, Any]:
     }
 
 
-def branch_node_d(state: BranchState) -> Dict[str, Any]:
+def branch_node_d(state: BranchState) -> dict[str, Any]:
     """Branching node D (alternate path)."""
     return {
         "messages": ["D"],
@@ -393,7 +387,7 @@ def branch_node_d(state: BranchState) -> Dict[str, Any]:
     }
 
 
-def venv_setup_node(state: VenvState) -> Dict[str, Any]:
+def venv_setup_node(state: VenvState) -> dict[str, Any]:
     """Node that simulates venv setup."""
     return {
         "messages": ["venv_setup"],
@@ -402,7 +396,7 @@ def venv_setup_node(state: VenvState) -> Dict[str, Any]:
     }
 
 
-def venv_install_node(state: VenvState) -> Dict[str, Any]:
+def venv_install_node(state: VenvState) -> dict[str, Any]:
     """Node that simulates package installation."""
     return {
         "messages": ["packages_installed"],
@@ -412,7 +406,7 @@ def venv_install_node(state: VenvState) -> Dict[str, Any]:
     }
 
 
-def parallel_worker_node(state: ParallelExecutionState) -> Dict[str, Any]:
+def parallel_worker_node(state: ParallelExecutionState) -> dict[str, Any]:
     """Node for parallel execution."""
     import time
     start = time.time()
@@ -427,7 +421,7 @@ def parallel_worker_node(state: ParallelExecutionState) -> Dict[str, Any]:
     }
 
 
-def aggregator_node(state: ParallelExecutionState) -> Dict[str, Any]:
+def aggregator_node(state: ParallelExecutionState) -> dict[str, Any]:
     """Node that aggregates parallel results."""
     total = sum(r.get("value", 0) for r in state["results"])
     return {
@@ -443,13 +437,12 @@ def aggregator_node(state: ParallelExecutionState) -> Dict[str, Any]:
 
 def route_by_switch(state: BranchState) -> str:
     """Route based on switch flag."""
-    from langgraph.graph import END
     if state.get("switch", False):
         return "node_d"
     return "node_c"
 
 
-def route_by_count(state: Dict[str, Any]) -> str:
+def route_by_count(state: dict[str, Any]) -> str:
     """Route based on count value."""
     from langgraph.graph import END
     if state["count"] >= 3:
@@ -494,13 +487,13 @@ class MockMemento:
 class MockCommit:
     """Mock file commit."""
     commit_id: str
-    mementos: List[MockMemento] = field(default_factory=list)
-    execution_id: Optional[str] = None
+    mementos: list[MockMemento] = field(default_factory=list)
+    execution_id: str | None = None
     message: str = "test commit"
     created_at: datetime = field(default_factory=datetime.now)
     
     @property
-    def _mementos(self) -> List[MockMemento]:
+    def _mementos(self) -> list[MockMemento]:
         return self.mementos
     
     @property
@@ -514,8 +507,8 @@ class MockCheckpoint:
     checkpoint_id: int
     thread_id: str
     step: int
-    state: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    state: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
 
@@ -526,10 +519,10 @@ class MockOutboxEvent:
     event_type: str
     aggregate_type: str
     aggregate_id: str
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
     created_at: datetime = field(default_factory=datetime.now)
-    processed_at: Optional[datetime] = None
+    processed_at: datetime | None = None
     
     def mark_processed(self):
         self.status = "processed"
@@ -554,7 +547,7 @@ class MockVenv:
     """Mock virtual environment."""
     venv_id: str
     venv_path: str
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     status: str = "created"
     python_version: str = "3.12"
 
@@ -563,14 +556,14 @@ class MockCommitRepository:
     """Mock FileTracker commit repository."""
     
     def __init__(self):
-        self._commits: Dict[str, MockCommit] = {}
+        self._commits: dict[str, MockCommit] = {}
         self._lock = threading.Lock()
     
     def add_commit(
         self, 
         commit_id: str, 
-        mementos: Optional[List[MockMemento]] = None,
-        execution_id: Optional[str] = None,
+        mementos: list[MockMemento] | None = None,
+        execution_id: str | None = None,
     ) -> MockCommit:
         with self._lock:
             commit = MockCommit(
@@ -581,13 +574,13 @@ class MockCommitRepository:
             self._commits[commit_id] = commit
             return commit
     
-    def get_by_id(self, commit_id: str) -> Optional[MockCommit]:
+    def get_by_id(self, commit_id: str) -> MockCommit | None:
         return self._commits.get(commit_id)
     
-    def find_by_id(self, commit_id: str) -> Optional[MockCommit]:
+    def find_by_id(self, commit_id: str) -> MockCommit | None:
         return self.get_by_id(commit_id)
     
-    def list_by_execution(self, execution_id: str) -> List[MockCommit]:
+    def list_by_execution(self, execution_id: str) -> list[MockCommit]:
         return [c for c in self._commits.values() if c.execution_id == execution_id]
     
     def save(self, commit: MockCommit) -> MockCommit:
@@ -607,7 +600,7 @@ class MockBlobRepository:
     """Mock FileTracker blob repository."""
     
     def __init__(self):
-        self._blobs: Dict[str, bytes] = {}
+        self._blobs: dict[str, bytes] = {}
         self._lock = threading.Lock()
     
     def add_blob(self, content_hash: str, content: bytes = b"test") -> str:
@@ -624,7 +617,7 @@ class MockBlobRepository:
             content_hash = content_hash.value
         return content_hash in self._blobs
     
-    def get(self, content_hash: str) -> Optional[bytes]:
+    def get(self, content_hash: str) -> bytes | None:
         if hasattr(content_hash, 'value'):
             content_hash = content_hash.value
         return self._blobs.get(content_hash)
@@ -634,7 +627,7 @@ class MockCheckpointRepository:
     """Mock checkpoint repository."""
     
     def __init__(self):
-        self._checkpoints: Dict[int, MockCheckpoint] = {}
+        self._checkpoints: dict[int, MockCheckpoint] = {}
         self._lock = threading.Lock()
     
     def add_checkpoint(
@@ -642,7 +635,7 @@ class MockCheckpointRepository:
         checkpoint_id: int, 
         thread_id: str = "test",
         step: int = 0,
-        state: Optional[Dict[str, Any]] = None,
+        state: dict[str, Any] | None = None,
     ) -> MockCheckpoint:
         with self._lock:
             checkpoint = MockCheckpoint(
@@ -654,10 +647,10 @@ class MockCheckpointRepository:
             self._checkpoints[checkpoint_id] = checkpoint
             return checkpoint
     
-    def get_by_id(self, checkpoint_id: int) -> Optional[MockCheckpoint]:
+    def get_by_id(self, checkpoint_id: int) -> MockCheckpoint | None:
         return self._checkpoints.get(checkpoint_id)
     
-    def list_by_thread(self, thread_id: str) -> List[MockCheckpoint]:
+    def list_by_thread(self, thread_id: str) -> list[MockCheckpoint]:
         return sorted(
             [c for c in self._checkpoints.values() if c.thread_id == thread_id],
             key=lambda c: c.step,
@@ -668,7 +661,7 @@ class MockOutboxRepository:
     """Mock outbox repository."""
     
     def __init__(self):
-        self._events: Dict[str, MockOutboxEvent] = {}
+        self._events: dict[str, MockOutboxEvent] = {}
         self._lock = threading.Lock()
         self._id_counter = 0
     
@@ -680,16 +673,16 @@ class MockOutboxRepository:
             self._events[event.event_id] = event
             return event
     
-    def get_by_id(self, event_id: str) -> Optional[MockOutboxEvent]:
+    def get_by_id(self, event_id: str) -> MockOutboxEvent | None:
         return self._events.get(event_id)
     
-    def get_pending(self) -> List[MockOutboxEvent]:
+    def get_pending(self) -> list[MockOutboxEvent]:
         return [e for e in self._events.values() if e.status == "pending"]
     
-    def get_processed(self) -> List[MockOutboxEvent]:
+    def get_processed(self) -> list[MockOutboxEvent]:
         return [e for e in self._events.values() if e.status == "processed"]
     
-    def get_failed(self) -> List[MockOutboxEvent]:
+    def get_failed(self) -> list[MockOutboxEvent]:
         return [e for e in self._events.values() if e.status == "failed"]
     
     def update(self, event: MockOutboxEvent) -> MockOutboxEvent:
@@ -697,7 +690,7 @@ class MockOutboxRepository:
             self._events[event.event_id] = event
             return event
     
-    def list_all(self) -> List[MockOutboxEvent]:
+    def list_all(self) -> list[MockOutboxEvent]:
         return list(self._events.values())
 
 
@@ -705,7 +698,7 @@ class MockActorPool:
     """Mock Ray actor pool."""
     
     def __init__(self, pool_size: int = 4):
-        self._actors: Dict[str, MockActor] = {}
+        self._actors: dict[str, MockActor] = {}
         self._pool_size = pool_size
         self._lock = threading.Lock()
     
@@ -724,7 +717,7 @@ class MockActorPool:
             self._actors[actor_id] = actor
             return actor
     
-    def get_actor(self, actor_id: str) -> Optional[MockActor]:
+    def get_actor(self, actor_id: str) -> MockActor | None:
         return self._actors.get(actor_id)
     
     def pause_actor(self, actor_id: str) -> bool:
@@ -748,7 +741,7 @@ class MockActorPool:
                 return True
             return False
     
-    def list_active(self) -> List[MockActor]:
+    def list_active(self) -> list[MockActor]:
         return [a for a in self._actors.values() if a.state == "active"]
 
 
@@ -756,7 +749,7 @@ class MockVenvManager:
     """Mock virtual environment manager."""
     
     def __init__(self):
-        self._venvs: Dict[str, MockVenv] = {}
+        self._venvs: dict[str, MockVenv] = {}
         self._lock = threading.Lock()
     
     def create_venv(
@@ -774,7 +767,7 @@ class MockVenvManager:
             self._venvs[venv_id] = venv
             return venv
     
-    def install_packages(self, venv_id: str, packages: List[str]) -> bool:
+    def install_packages(self, venv_id: str, packages: list[str]) -> bool:
         venv = self._venvs.get(venv_id)
         if venv:
             venv.packages.extend(packages)
@@ -782,7 +775,7 @@ class MockVenvManager:
             return True
         return False
     
-    def get_venv(self, venv_id: str) -> Optional[MockVenv]:
+    def get_venv(self, venv_id: str) -> MockVenv | None:
         return self._venvs.get(venv_id)
     
     def delete_venv(self, venv_id: str) -> bool:
@@ -803,7 +796,7 @@ class VerificationResult:
     """Result of a verification check."""
     success: bool
     message: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.now)
 
 
@@ -867,7 +860,7 @@ def verify_checkpoint_file_link(
 
 
 def verify_transaction_atomicity(
-    operations: List[Tuple[str, bool]],
+    operations: list[tuple[str, bool]],
 ) -> VerificationResult:
     """Verify all operations succeeded or all failed (atomicity)."""
     successes = [op for op in operations if op[1]]
@@ -888,8 +881,8 @@ def verify_transaction_atomicity(
 
 
 def verify_state_consistency(
-    states: List[Dict[str, Any]],
-    invariant: Callable[[Dict[str, Any]], bool],
+    states: list[dict[str, Any]],
+    invariant: Callable[[dict[str, Any]], bool],
 ) -> VerificationResult:
     """Verify state invariant holds for all states."""
     violations = []
@@ -915,7 +908,7 @@ def verify_state_consistency(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def generate_test_files(count: int = 3) -> List[Tuple[str, bytes]]:
+def generate_test_files(count: int = 3) -> list[tuple[str, bytes]]:
     """Generate test file data."""
     files = []
     for i in range(count):
@@ -929,8 +922,8 @@ def generate_test_commits(
     commit_repo: MockCommitRepository,
     count: int = 3,
     files_per_commit: int = 2,
-    execution_id: Optional[str] = None,
-) -> List[MockCommit]:
+    execution_id: str | None = None,
+) -> list[MockCommit]:
     """Generate test commits with mementos."""
     commits = []
     for i in range(count):
@@ -953,8 +946,8 @@ def generate_test_commits(
 
 def generate_batch_test_variants(
     count: int = 5,
-    base_config: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
+    base_config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Generate batch test variant configurations."""
     base = base_config or {"learning_rate": 0.01}
     variants = []

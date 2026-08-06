@@ -15,83 +15,57 @@ Design Principles:
 Run with: pytest tests/test_outbox_transaction_consistency/ -v
 """
 
-import pytest
-import tempfile
 import uuid
-import shutil
-from typing import List, Dict, Any, Optional, Generator
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from langgraph.graph import StateGraph, END
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
-
-# WTB SDK imports
-from wtb.sdk import (
-    WTBTestBench,
-    WorkflowProject,
-    FileTrackingConfig,
-    EnvironmentConfig,
-    ExecutionConfig,
-    EnvSpec,
-)
-from wtb.application.factories import WTBTestBenchFactory
-
-# WTB Infrastructure imports
-from wtb.infrastructure.outbox import (
-    OutboxProcessor,
-    OutboxLifecycleManager,
-    create_managed_processor,
-)
-from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
-from wtb.infrastructure.events import WTBEventBus, WTBAuditTrail
+from langgraph.graph import END, StateGraph
 
 # Import helpers
 from tests.test_outbox_transaction_consistency.helpers import (
+    BatchTestState,
+    BranchState,
+    FileTrackingState,
+    PauseResumeState,
     # States
     SimpleState,
     TransactionState,
-    FileTrackingState,
-    PauseResumeState,
-    BranchState,
-    RollbackState,
-    BatchTestState,
-    ParallelExecutionState,
     VenvState,
-    FullIntegrationState,
-    # State factories
-    create_simple_state,
-    create_transaction_state,
-    create_file_tracking_state,
-    create_pause_resume_state,
-    create_branch_state,
-    create_rollback_state,
-    create_batch_test_state,
-    create_parallel_state,
-    create_venv_state,
-    create_full_integration_state,
-    # Node functions
-    node_a,
-    node_b,
-    node_c,
-    node_d,
-    failing_node,
-    transaction_node,
-    file_processing_node,
     branch_node_a,
     branch_node_b,
     branch_node_c,
     branch_node_d,
-    venv_setup_node,
-    venv_install_node,
-    parallel_worker_node,
-    aggregator_node,
-    # Routing
+    failing_node,
+    file_processing_node,
+    node_a,
+    node_b,
+    node_c,
     route_by_switch,
-    route_by_count,
+    transaction_node,
+    venv_install_node,
+    venv_setup_node,
+)
+from wtb.application.factories import WTBTestBenchFactory
+from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+from wtb.infrastructure.events import WTBAuditTrail, WTBEventBus
+
+# WTB Infrastructure imports
+from wtb.infrastructure.outbox import (
+    OutboxLifecycleManager,
+    OutboxProcessor,
 )
 
+# WTB SDK imports
+from wtb.sdk import (
+    FileTrackingConfig,
+    WorkflowProject,
+    WTBTestBench,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Real Database Fixtures
@@ -872,7 +846,7 @@ def execution_context():
 
 
 @pytest.fixture
-def test_files(tmp_path) -> Dict[str, Dict[str, Any]]:
+def test_files(tmp_path) -> dict[str, dict[str, Any]]:
     """Create temporary test files."""
     files = {}
     test_data = [

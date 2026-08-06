@@ -23,33 +23,26 @@ REFACTORED (2026-01-28):
 Run with: pytest tests/test_outbox_transaction_consistency/test_batch_parallel.py -v
 """
 
-import pytest
+import queue
 import threading
 import time
-import queue
 from datetime import datetime
-from typing import Dict, Any, List
-from unittest.mock import Mock, MagicMock
-
-# Import real domain types
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
-
-# Import test helpers
-from tests.test_outbox_transaction_consistency.helpers import (
-    BatchTestState,
-    ParallelExecutionState,
-    create_batch_test_state,
-    create_parallel_state,
-)
+from typing import Any
 
 # Import centralized mocks and utilities
 from tests.mocks import (
     MockMemento,
     create_test_outbox_event,
-    generate_batch_test_variants,
 )
-from tests.mocks.services import verify_outbox_consistency, verify_transaction_atomicity
+from tests.mocks.services import verify_transaction_atomicity
 
+# Import test helpers
+from tests.test_outbox_transaction_consistency.helpers import (
+    create_batch_test_state,
+)
+
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper Function for Creating Test Events
@@ -61,7 +54,7 @@ def create_batch_outbox_event(
     event_type_name: str,
     aggregate_type: str,
     aggregate_id: str,
-    payload: Dict[str, Any] = None,
+    payload: dict[str, Any] = None,
 ) -> OutboxEvent:
     """
     Create an OutboxEvent for batch testing.

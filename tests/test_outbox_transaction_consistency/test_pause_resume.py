@@ -23,27 +23,18 @@ ACID Compliance Focus:
 Run with: pytest tests/test_outbox_transaction_consistency/test_pause_resume.py -v
 """
 
-import pytest
 import threading
 import time
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
-
-from wtb.sdk import (
-    WTBTestBench,
-    WorkflowProject,
-    ExecutionStatus,
-    Checkpoint,
-)
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
-from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+from datetime import datetime
 
 from tests.test_outbox_transaction_consistency.helpers import (
     create_pause_resume_state,
-    create_full_integration_state,
-    verify_transaction_atomicity,
 )
-
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+from wtb.sdk import (
+    ExecutionStatus,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pause/Resume with Real WTB TestBench

@@ -22,31 +22,20 @@ ACID Focus:
 Run with: pytest tests/test_outbox_transaction_consistency/test_cross_system_acid.py -v
 """
 
-import pytest
 import threading
-import time
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
-from unittest.mock import Mock, MagicMock
-
-# Import real domain types
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+from typing import Any
 
 # Import test helpers
-from tests.test_outbox_transaction_consistency.helpers import (
-    FullIntegrationState,
-    create_full_integration_state,
-)
-
 # Import centralized mocks and utilities
 from tests.mocks import MockMemento
 from tests.mocks.services import (
-    verify_outbox_consistency,
-    verify_transaction_atomicity,
     VerificationResult,
+    verify_transaction_atomicity,
 )
 
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper Functions for Test Events
@@ -58,7 +47,7 @@ def create_cross_system_event(
     event_type_name: str,
     aggregate_type: str,
     aggregate_id: str,
-    payload: Dict[str, Any] = None,
+    payload: dict[str, Any] = None,
 ) -> OutboxEvent:
     """
     Create an OutboxEvent for cross-system testing.
@@ -125,7 +114,7 @@ def verify_checkpoint_file_link(
 
 
 def verify_state_consistency(
-    states: List[Dict[str, Any]],
+    states: list[dict[str, Any]],
     invariant,
 ) -> VerificationResult:
     """Verify state invariant holds for all states."""
@@ -162,7 +151,9 @@ class TestFullStackIntegration:
         execution_context,
     ):
         """Complete execution should create records in all systems."""
-        from tests.test_outbox_transaction_consistency.helpers import create_simple_state
+        from tests.test_outbox_transaction_consistency.helpers import (
+            create_simple_state,
+        )
         
         setup = full_integration_setup
         exec_id = execution_context["execution_id"]
@@ -223,7 +214,9 @@ class TestFullStackIntegration:
         full_integration_setup,
     ):
         """Execution with file tracking should maintain consistency."""
-        from tests.test_outbox_transaction_consistency.helpers import create_file_tracking_state
+        from tests.test_outbox_transaction_consistency.helpers import (
+            create_file_tracking_state,
+        )
         
         setup = full_integration_setup
         exec_id = f"exec-file-{uuid.uuid4().hex[:8]}"
@@ -263,7 +256,9 @@ class TestFullStackIntegration:
         batch_test_variants,
     ):
         """Batch test should create consistent records across all systems."""
-        from tests.test_outbox_transaction_consistency.helpers import create_batch_test_state
+        from tests.test_outbox_transaction_consistency.helpers import (
+            create_batch_test_state,
+        )
         
         setup = full_integration_setup
         batch_test_id = f"bt-full-{uuid.uuid4().hex[:8]}"
@@ -453,7 +448,7 @@ class TestCrossDBConsistency:
             ))
             operations.append(("outbox_event", True))
             
-        except Exception as e:
+        except Exception:
             operations.append(("error", False))
         
         result = verify_transaction_atomicity(operations)

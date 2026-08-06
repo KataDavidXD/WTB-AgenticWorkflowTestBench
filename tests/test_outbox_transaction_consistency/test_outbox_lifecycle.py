@@ -13,15 +13,15 @@ Reference: CONSOLIDATED_ISSUES.md - ISSUE-OB-001
 Run with: pytest tests/test_outbox_transaction_consistency/test_outbox_lifecycle.py -v
 """
 
-import pytest
-import time
 import threading
-from datetime import datetime, timedelta
-from typing import List
+import time
+from datetime import datetime
+
+import pytest
 
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
-from wtb.infrastructure.outbox import OutboxProcessor, OutboxLifecycleManager
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+from wtb.infrastructure.outbox import OutboxProcessor
 
 
 class TestOutboxProcessorLifecycle:
