@@ -2,23 +2,24 @@
 Pytest fixtures for WTB tests.
 """
 
-import pytest
-from typing import Optional, List, Dict, Any
 
-from wtb.domain.models import (
-    Execution,
-    TestWorkflow,
-    WorkflowNode,
-    WorkflowEdge,
-    NodeVariant,
-)
+import builtins
+
+import pytest
+
 from wtb.domain.interfaces.repositories import (
     IExecutionRepository,
-    IWorkflowRepository,
     INodeVariantRepository,
+    IWorkflowRepository,
+)
+from wtb.domain.models import (
+    Execution,
+    NodeVariant,
+    TestWorkflow,
+    WorkflowEdge,
+    WorkflowNode,
 )
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Shared Mock Repositories
@@ -28,12 +29,12 @@ class MockExecutionRepository(IExecutionRepository):
     """Shared mock execution repository."""
     
     def __init__(self):
-        self._storage: Dict[str, Execution] = {}
+        self._storage: dict[str, Execution] = {}
     
-    def get(self, id: str) -> Optional[Execution]:
+    def get(self, id: str) -> Execution | None:
         return self._storage.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[Execution]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[Execution]:
         return list(self._storage.values())[offset:offset + limit]
     
     def add(self, entity: Execution) -> Execution:
@@ -53,22 +54,22 @@ class MockExecutionRepository(IExecutionRepository):
     def exists(self, id: str) -> bool:
         return id in self._storage
     
-    def find_by_workflow(self, workflow_id: str, status: Optional[str] = None) -> List[Execution]:
+    def find_by_workflow(self, workflow_id: str, status: str | None = None) -> builtins.list[Execution]:
         results = [e for e in self._storage.values() if e.workflow_id == workflow_id]
         if status:
             results = [e for e in results if e.status.value == status]
         return results
     
-    def find_by_status(self, status: str) -> List[Execution]:
+    def find_by_status(self, status: str) -> builtins.list[Execution]:
         return [e for e in self._storage.values() if e.status.value == status]
     
-    def count_by_status(self) -> Dict[str, int]:
+    def count_by_status(self) -> dict[str, int]:
         counts = {}
         for e in self._storage.values():
             counts[e.status.value] = counts.get(e.status.value, 0) + 1
         return counts
     
-    def find_running(self) -> List[Execution]:
+    def find_running(self) -> builtins.list[Execution]:
         from wtb.domain.models import ExecutionStatus
         return [e for e in self._storage.values() if e.status == ExecutionStatus.RUNNING]
     
@@ -80,12 +81,12 @@ class MockWorkflowRepository(IWorkflowRepository):
     """Shared mock workflow repository."""
     
     def __init__(self):
-        self._storage: Dict[str, TestWorkflow] = {}
+        self._storage: dict[str, TestWorkflow] = {}
     
-    def get(self, id: str) -> Optional[TestWorkflow]:
+    def get(self, id: str) -> TestWorkflow | None:
         return self._storage.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[TestWorkflow]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[TestWorkflow]:
         return list(self._storage.values())[offset:offset + limit]
     
     def add(self, entity: TestWorkflow) -> TestWorkflow:
@@ -105,13 +106,13 @@ class MockWorkflowRepository(IWorkflowRepository):
     def exists(self, id: str) -> bool:
         return id in self._storage
     
-    def find_by_name(self, name: str) -> Optional[TestWorkflow]:
+    def find_by_name(self, name: str) -> TestWorkflow | None:
         for w in self._storage.values():
             if w.name == name:
                 return w
         return None
     
-    def find_by_version(self, name: str, version: str) -> Optional[TestWorkflow]:
+    def find_by_version(self, name: str, version: str) -> TestWorkflow | None:
         for w in self._storage.values():
             if w.name == name and w.version == version:
                 return w
@@ -125,12 +126,12 @@ class MockNodeVariantRepository(INodeVariantRepository):
     """Shared mock node variant repository."""
     
     def __init__(self):
-        self._storage: Dict[str, NodeVariant] = {}
+        self._storage: dict[str, NodeVariant] = {}
     
-    def get(self, id: str) -> Optional[NodeVariant]:
+    def get(self, id: str) -> NodeVariant | None:
         return self._storage.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[NodeVariant]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[NodeVariant]:
         return list(self._storage.values())[offset:offset + limit]
     
     def add(self, entity: NodeVariant) -> NodeVariant:
@@ -150,16 +151,16 @@ class MockNodeVariantRepository(INodeVariantRepository):
     def exists(self, id: str) -> bool:
         return id in self._storage
     
-    def find_by_workflow(self, workflow_id: str) -> List[NodeVariant]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[NodeVariant]:
         return [v for v in self._storage.values() if v.workflow_id == workflow_id]
     
-    def find_by_node(self, workflow_id: str, node_id: str) -> List[NodeVariant]:
+    def find_by_node(self, workflow_id: str, node_id: str) -> builtins.list[NodeVariant]:
         return [
             v for v in self._storage.values()
             if v.workflow_id == workflow_id and v.original_node_id == node_id
         ]
     
-    def find_active(self, workflow_id: str) -> List[NodeVariant]:
+    def find_active(self, workflow_id: str) -> builtins.list[NodeVariant]:
         return [
             v for v in self._storage.values()
             if v.workflow_id == workflow_id and v.is_active

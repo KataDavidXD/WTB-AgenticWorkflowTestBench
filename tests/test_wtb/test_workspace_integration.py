@@ -13,37 +13,26 @@ Design Reference: docs/issues/WORKSPACE_ISOLATION_DESIGN.md
 import json
 import os
 import shutil
-import sys
 import tempfile
 import threading
-import time
-from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
+from wtb.domain.events.workspace_events import (
+    WorkspaceCleanedUpEvent,
+    WorkspaceCreatedEvent,
+)
 from wtb.domain.models.workspace import (
     Workspace,
     WorkspaceConfig,
     WorkspaceStrategy,
     compute_venv_spec_hash,
 )
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceActivatedEvent,
-    WorkspaceDeactivatedEvent,
-    WorkspaceCleanedUpEvent,
-    ForkRequestedEvent,
-    ForkCompletedEvent,
-)
+from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 from wtb.infrastructure.workspace.manager import (
     WorkspaceManager,
-    create_file_link,
 )
-from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

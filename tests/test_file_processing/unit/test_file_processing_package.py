@@ -14,29 +14,26 @@ Coverage:
 - Serialization/deserialization
 """
 
-import pytest
-from datetime import datetime
-from pathlib import Path
-import tempfile
 import uuid
+
+import pytest
 
 from wtb.domain.models.file_processing import (
     # Value Objects
     BlobId,
+    CheckpointFileLink,
+    CommitAlreadyFinalized,
     CommitId,
+    CommitStatus,
+    DuplicateFileError,
+    FileCommit,
     # Entities
     FileMemento,
-    FileCommit,
-    CommitStatus,
-    CheckpointFileLink,
     # Exceptions
     FileProcessingError,
-    DuplicateFileError,
     InvalidBlobIdError,
     InvalidCommitIdError,
-    CommitAlreadyFinalized,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BlobId Tests
@@ -493,18 +490,14 @@ class TestPackageImports:
         from wtb.domain.models.file_processing import (
             # Value Objects
             BlobId,
+            CheckpointFileLink,
             CommitId,
-            FileMemento,
+            CommitStatus,
             # Entities
             FileCommit,
-            CheckpointFileLink,
-            CommitStatus,
+            FileMemento,
             # Errors
             FileProcessingError,
-            DuplicateFileError,
-            InvalidBlobIdError,
-            InvalidCommitIdError,
-            CommitAlreadyFinalized,
         )
         
         # All imports succeeded
@@ -519,10 +512,8 @@ class TestPackageImports:
     def test_import_from_domain_models(self):
         """Test imports work through domain models __init__."""
         from wtb.domain.models import (
-            FileCommit,
-            FileMemento,
             BlobId,
-            CommitId,
+            FileCommit,
         )
         
         assert FileCommit is not None

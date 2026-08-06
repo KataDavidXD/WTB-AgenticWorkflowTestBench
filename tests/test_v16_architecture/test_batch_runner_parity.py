@@ -10,23 +10,20 @@ Test Coverage:
 - Metrics extraction from execution
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
-from typing import Dict, Any
+from unittest.mock import MagicMock
 
 from wtb.application.factories import (
-    ExecutionControllerFactory,
     BatchTestRunnerFactory,
+    ExecutionControllerFactory,
 )
 from wtb.application.services.batch_test_runner import ThreadPoolBatchTestRunner
+from wtb.domain.models import Execution, ExecutionStatus, TestWorkflow, WorkflowNode
 from wtb.domain.models.batch_test import (
     BatchTest,
-    BatchTestResult,
     VariantCombination,
 )
-from wtb.domain.models import TestWorkflow, WorkflowNode, Execution, ExecutionStatus
-from wtb.infrastructure.database import InMemoryUnitOfWork
 from wtb.infrastructure.adapters import InMemoryStateAdapter
+from wtb.infrastructure.database import InMemoryUnitOfWork
 
 
 class TestThreadPoolBatchTestRunnerExecution:

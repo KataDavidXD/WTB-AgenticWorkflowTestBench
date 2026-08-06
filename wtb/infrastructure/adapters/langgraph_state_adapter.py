@@ -25,19 +25,19 @@ Architecture:
     BaseCheckpointSaver (InMemory | SQLite | PostgreSQL)
 """
 
-from typing import Any, Optional, List, Dict
+import logging
+import sys
+import uuid
 from dataclasses import dataclass, field
-from threading import RLock
 from datetime import datetime
 from enum import Enum
-import sys
-import logging
-import uuid
+from threading import RLock
+from typing import Any
 
 from wtb.domain.interfaces.state_adapter import (
-    IStateAdapter,
-    CheckpointTrigger,
     CheckpointInfo,
+    CheckpointTrigger,
+    IStateAdapter,
     NodeBoundaryInfo,
 )
 from wtb.domain.models.workflow import ExecutionState
@@ -53,9 +53,9 @@ _langgraph = None
 
 try:
     import langgraph as _lg
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph import StateGraph
     from langgraph.graph.state import CompiledStateGraph
-    from langgraph.checkpoint.base import BaseCheckpointSaver
     
     _langgraph = _lg
     LANGGRAPH_AVAILABLE = True
@@ -86,7 +86,7 @@ class LangGraphConfig:
         pool_size: Connection pool size for postgres
     """
     checkpointer_type: CheckpointerType = CheckpointerType.MEMORY
-    connection_string: Optional[str] = None
+    connection_string: str | None = None
     pool_size: int = 5
     
     @classmethod
@@ -122,17 +122,17 @@ class _NodeBoundaryTracker:
     """Internal tracker for node boundaries within a session."""
     node_id: str
     entry_checkpoint_id: str
-    exit_checkpoint_id: Optional[str] = None
+    exit_checkpoint_id: str | None = None
     status: str = "started"
     started_at: datetime = field(default_factory=datetime.now)
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
 
 
 class _SyncCheckpointerResource:
     """Reference-counted lifetime for a saver shared by adapter forks."""
 
-    def __init__(self, checkpointer: Any, context: Optional[Any]):
+    def __init__(self, checkpointer: Any, context: Any | None):
         self.checkpointer = checkpointer
         self.context = context
         self._references = 1
@@ -214,28 +214,28 @@ class LangGraphStateAdapter(IStateAdapter):
             self._checkpointer,
             self._checkpointer_context,
         )
-        self._compiled_graph: Optional[CompiledStateGraph] = None
-        self._graph_builder: Optional[StateGraph] = None
+        self._compiled_graph: CompiledStateGraph | None = None
+        self._graph_builder: StateGraph | None = None
         
         # Session tracking (v1.6: string IDs)
-        self._current_thread_id: Optional[str] = None
-        self._current_execution_id: Optional[str] = None
-        self._resume_checkpoint_id: Optional[str] = None
+        self._current_thread_id: str | None = None
+        self._current_execution_id: str | None = None
+        self._resume_checkpoint_id: str | None = None
         
         # Node boundary tracking (per thread_id)
-        self._node_boundaries: Dict[str, Dict[str, _NodeBoundaryTracker]] = {}
+        self._node_boundaries: dict[str, dict[str, _NodeBoundaryTracker]] = {}
         
         logger.info(f"LangGraphStateAdapter initialized with {config.checkpointer_type.value} checkpointer")
 
     @property
-    def state_adapter_backend(self) -> Optional[str]:
+    def state_adapter_backend(self) -> str | None:
         """Advertise the durable SDK rehydration protocol when using SQLite."""
         if self._config.checkpointer_type == CheckpointerType.SQLITE:
             return "langgraph_sqlite"
         return None
 
     @property
-    def storage_path(self) -> Optional[str]:
+    def storage_path(self) -> str | None:
         """Return the SQLite path used for exact adapter reuse checks."""
         if self._config.checkpointer_type == CheckpointerType.SQLITE:
             return self._config.connection_string
@@ -249,9 +249,10 @@ class LangGraphStateAdapter(IStateAdapter):
         
         elif self._config.checkpointer_type == CheckpointerType.SQLITE:
             try:
-                from langgraph.checkpoint.sqlite import SqliteSaver
-                import sqlite3
                 import os
+                import sqlite3
+
+                from langgraph.checkpoint.sqlite import SqliteSaver
                 
                 # Ensure parent directory exists
                 db_path = self._config.connection_string
@@ -416,7 +417,7 @@ class LangGraphStateAdapter(IStateAdapter):
         self._close_checkpointer(checkpointer, context)
 
     @staticmethod
-    def _close_checkpointer(checkpointer: Any, context: Optional[Any]) -> None:
+    def _close_checkpointer(checkpointer: Any, context: Any | None) -> None:
         """Close the saver held by the final lease, surfacing close failures."""
         if context is not None:
             context.__exit__(None, None, None)
@@ -455,7 +456,7 @@ class LangGraphStateAdapter(IStateAdapter):
         self,
         execution_id: str,
         initial_state: ExecutionState
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Initialize session using LangGraph thread.
         
@@ -472,14 +473,14 @@ class LangGraphStateAdapter(IStateAdapter):
         logger.info(f"Session initialized: thread_id={self._current_thread_id}")
         return self._current_thread_id
     
-    def get_current_session_id(self) -> Optional[str]:
+    def get_current_session_id(self) -> str | None:
         """Get current session ID (thread_id)."""
         return self._current_thread_id
     
     def set_current_session(
         self, 
         session_id: str,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
     ) -> bool:
         """
         Set current session for checkpoint retrieval.
@@ -499,13 +500,13 @@ class LangGraphStateAdapter(IStateAdapter):
             self._node_boundaries[session_id] = {}
         return True
     
-    def get_config(self, checkpoint_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_config(self, checkpoint_id: str | None = None) -> dict[str, Any]:
         """Get LangGraph config for current thread."""
         self._ensure_open()
         if not self._current_thread_id:
             raise RuntimeError("No active session. Call initialize_session() first.")
         
-        config: Dict[str, Any] = {
+        config: dict[str, Any] = {
             "configurable": {
                 "thread_id": self._current_thread_id
             }
@@ -525,8 +526,8 @@ class LangGraphStateAdapter(IStateAdapter):
         state: ExecutionState,
         node_id: str,
         trigger: CheckpointTrigger,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None
     ) -> str:
         """
         Save checkpoint via LangGraph update_state.
@@ -689,7 +690,7 @@ class LangGraphStateAdapter(IStateAdapter):
         
         return True
     
-    def get_node_boundaries(self, session_id: str) -> List[NodeBoundaryInfo]:
+    def get_node_boundaries(self, session_id: str) -> list[NodeBoundaryInfo]:
         """Get all node boundaries for session."""
         boundaries = []
         for node_id, tracker in self._node_boundaries.get(session_id, {}).items():
@@ -705,7 +706,7 @@ class LangGraphStateAdapter(IStateAdapter):
         
         return boundaries
     
-    def get_node_boundary(self, session_id: str, node_id: str) -> Optional[NodeBoundaryInfo]:
+    def get_node_boundary(self, session_id: str, node_id: str) -> NodeBoundaryInfo | None:
         """Get specific node boundary."""
         tracker = self._node_boundaries.get(session_id, {}).get(node_id)
         if not tracker:
@@ -728,8 +729,8 @@ class LangGraphStateAdapter(IStateAdapter):
     def get_checkpoints(
         self,
         session_id: str,
-        node_id: Optional[str] = None
-    ) -> List[CheckpointInfo]:
+        node_id: str | None = None
+    ) -> list[CheckpointInfo]:
         """Get checkpoints for session."""
         if not self._compiled_graph:
             return []
@@ -767,7 +768,7 @@ class LangGraphStateAdapter(IStateAdapter):
         
         return checkpoints
     
-    def get_node_rollback_targets(self, session_id: str) -> List[CheckpointInfo]:
+    def get_node_rollback_targets(self, session_id: str) -> list[CheckpointInfo]:
         """Get rollback targets (exit checkpoints of completed nodes)."""
         targets = []
         
@@ -794,7 +795,7 @@ class LangGraphStateAdapter(IStateAdapter):
     # LangGraph-Specific Operations
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def execute(self, initial_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def execute(self, initial_state: dict[str, Any] | None) -> dict[str, Any]:
         """
         Execute workflow with automatic checkpointing.
         
@@ -820,7 +821,7 @@ class LangGraphStateAdapter(IStateAdapter):
         
         return result
     
-    async def aexecute(self, initial_state: Dict[str, Any]) -> Dict[str, Any]:
+    async def aexecute(self, initial_state: dict[str, Any]) -> dict[str, Any]:
         """Async execution."""
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
@@ -828,7 +829,7 @@ class LangGraphStateAdapter(IStateAdapter):
         config = self.get_config()
         return await self._compiled_graph.ainvoke(initial_state, config)
     
-    def stream(self, initial_state: Dict[str, Any], stream_mode: str = "updates"):
+    def stream(self, initial_state: dict[str, Any], stream_mode: str = "updates"):
         """Stream execution events."""
         if not self._compiled_graph:
             raise RuntimeError("Graph not set. Call set_workflow_graph() first.")
@@ -836,7 +837,7 @@ class LangGraphStateAdapter(IStateAdapter):
         config = self.get_config()
         return self._compiled_graph.stream(initial_state, config, stream_mode=stream_mode)
     
-    def get_current_state(self) -> Dict[str, Any]:
+    def get_current_state(self) -> dict[str, Any]:
         """Get current state values."""
         if not self._compiled_graph:
             return {}
@@ -845,7 +846,7 @@ class LangGraphStateAdapter(IStateAdapter):
         snapshot = self._compiled_graph.get_state(config)
         return snapshot.values if snapshot else {}
     
-    def get_next_nodes(self) -> List[str]:
+    def get_next_nodes(self) -> list[str]:
         """Get next nodes to execute."""
         if not self._compiled_graph:
             return []
@@ -862,7 +863,7 @@ class LangGraphStateAdapter(IStateAdapter):
         """LangGraph supports time-travel via get_state_history."""
         return True
     
-    def update_state(self, values: Dict[str, Any], as_node: Optional[str] = None) -> bool:
+    def update_state(self, values: dict[str, Any], as_node: str | None = None) -> bool:
         """Update state mid-execution (human-in-the-loop)."""
         if not self._compiled_graph:
             return False
@@ -875,7 +876,7 @@ class LangGraphStateAdapter(IStateAdapter):
             logger.warning(f"Failed to update state: {e}")
             return False
     
-    def get_checkpoint_history(self) -> List[Dict[str, Any]]:
+    def get_checkpoint_history(self) -> list[dict[str, Any]]:
         """Get full checkpoint history for time travel.
         
         v1.6: Falls back to direct checkpointer query when no compiled graph.
@@ -886,7 +887,7 @@ class LangGraphStateAdapter(IStateAdapter):
 
         config = self.get_config()
         history = []
-        graph_error: Optional[Exception] = None
+        graph_error: Exception | None = None
 
         # Try compiled graph first (gives full state)
         if self._compiled_graph:
@@ -943,7 +944,7 @@ class LangGraphStateAdapter(IStateAdapter):
     def create_fork(
         self,
         fork_thread_id: str,
-        from_checkpoint_id: Optional[str] = None
+        from_checkpoint_id: str | None = None
     ) -> "LangGraphStateAdapter":
         """
         Create a fork adapter for variant execution.

@@ -52,27 +52,27 @@ Usage:
 import logging
 import os
 import threading
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from collections.abc import Mapping
-from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
+from wtb.application.services.external_storage import resolve_execution_storage_paths
 from wtb.domain.interfaces.batch_coordinator import (
+    BatchOperationRequest,
+    BatchOperationResult,
     IBatchExecutionCoordinator,
     IExecutionControllerFactory,
     OperationType,
-    BatchOperationRequest,
-    BatchOperationResult,
 )
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
-from wtb.application.services.external_storage import resolve_execution_storage_paths
 
 if TYPE_CHECKING:
-    from wtb.domain.interfaces.execution_controller import IExecutionController
-    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
-    from wtb.domain.interfaces.state_adapter import IStateAdapter
-    from wtb.domain.interfaces.file_tracking import IFileTrackingService
-    from wtb.domain.models.workflow import Execution
     from wtb.config import WTBConfig
+    from wtb.domain.interfaces.execution_controller import IExecutionController
+    from wtb.domain.interfaces.file_tracking import IFileTrackingService
+    from wtb.domain.interfaces.state_adapter import IStateAdapter
+    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+    from wtb.domain.models.workflow import Execution
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +96,12 @@ class DefaultExecutionControllerFactory(IExecutionControllerFactory):
         file_tracking_service: Optional["IFileTrackingService"] = None,
     ) -> "IExecutionController":
         """Create ExecutionController with injected dependencies."""
-        from wtb.application.services.execution_controller import (
-            ExecutionController,
-            DefaultNodeExecutor,
-        )
         import os
+
+        from wtb.application.services.execution_controller import (
+            DefaultNodeExecutor,
+            ExecutionController,
+        )
 
         output_dir = None
         workspace = getattr(file_tracking_service, "_workspace", None)
@@ -157,11 +158,11 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
     def __init__(
         self,
         uow_factory: Callable[[], "IUnitOfWork"],
-        controller_factory: Optional[IExecutionControllerFactory] = None,
+        controller_factory: IExecutionControllerFactory | None = None,
         state_adapter: Optional["IStateAdapter"] = None,
         file_tracking: Optional["IFileTrackingService"] = None,
         config: Optional["WTBConfig"] = None,
-        environment_provider: Optional[Any] = None,
+        environment_provider: Any | None = None,
         owns_state_adapter: bool = False,
         owns_file_tracking: bool = False,
     ):
@@ -212,8 +213,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
     def get_checkpoints(
         self,
         execution_id: str,
-        graph: Optional[Any] = None,
-    ) -> List[Dict[str, Any]]:
+        graph: Any | None = None,
+    ) -> list[dict[str, Any]]:
         """Retrieve checkpoint history using execution-specific storage.
 
         Opens a UoW, resolves the execution's storage metadata, builds an
@@ -244,7 +245,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self,
         execution_id: str,
         checkpoint_id: str,
-        graph: Optional[Any] = None,
+        graph: Any | None = None,
     ) -> "Execution":
         """
         Rollback execution to checkpoint (destructive).
@@ -271,8 +272,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             ValueError: If execution or checkpoint not found
             RuntimeError: If rollback fails
         """
-        file_commit_id: Optional[str] = None
-        execution: Optional["Execution"] = None
+        file_commit_id: str | None = None
+        execution: "Execution" | None = None
         uow = self._uow_factory()
         try:
             uow.__enter__()
@@ -364,8 +365,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self,
         execution_id: str,
         checkpoint_id: str,
-        new_state: Optional[Dict[str, Any]] = None,
-        graph: Optional[Any] = None,
+        new_state: dict[str, Any] | None = None,
+        graph: Any | None = None,
     ) -> "Execution":
         """
         Fork execution from checkpoint (non-destructive).
@@ -390,7 +391,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             ValueError: If execution or checkpoint not found
             RuntimeError: If fork fails
         """
-        forked: Optional["Execution"] = None
+        forked: "Execution" | None = None
 
         uow = self._uow_factory()
         try:
@@ -455,8 +456,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         if graph is None:
             raise ValueError("Graph is required for rollback_and_run operation")
 
-        file_commit_id: Optional[str] = None
-        execution: Optional["Execution"] = None
+        file_commit_id: str | None = None
+        execution: "Execution" | None = None
 
         uow = self._uow_factory()
         try:
@@ -509,7 +510,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         execution_id: str,
         checkpoint_id: str,
         graph: Any,
-        new_state: Optional[Dict[str, Any]] = None,
+        new_state: dict[str, Any] | None = None,
     ) -> "Execution":
         """
         Fork and run new execution (atomic).
@@ -532,8 +533,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         if graph is None:
             raise ValueError("Graph is required for fork_and_run operation")
 
-        forked: Optional["Execution"] = None
-        result: Optional["Execution"] = None
+        forked: "Execution" | None = None
+        result: "Execution" | None = None
 
         uow = self._uow_factory()
         try:
@@ -583,10 +584,10 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
 
     def batch_operate(
         self,
-        requests: List[BatchOperationRequest],
+        requests: list[BatchOperationRequest],
         stop_on_error: bool = False,
-        graph: Optional[Any] = None,
-    ) -> List[BatchOperationResult]:
+        graph: Any | None = None,
+    ) -> list[BatchOperationResult]:
         """
         Execute batch operations.
 
@@ -602,7 +603,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         Returns:
             List of results (same order as requests)
         """
-        results: List[BatchOperationResult] = []
+        results: list[BatchOperationResult] = []
 
         for req in requests:
             try:
@@ -680,8 +681,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
 
     def batch_rollback(
         self,
-        items: List[tuple],  # [(exec_id, checkpoint_id), ...]
-    ) -> List[BatchOperationResult]:
+        items: list[tuple],  # [(exec_id, checkpoint_id), ...]
+    ) -> list[BatchOperationResult]:
         """
         Convenience: batch rollback multiple executions.
 
@@ -703,8 +704,8 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
 
     def batch_fork(
         self,
-        items: List[tuple],  # [(exec_id, checkpoint_id, new_state?), ...]
-    ) -> List[BatchOperationResult]:
+        items: list[tuple],  # [(exec_id, checkpoint_id, new_state?), ...]
+    ) -> list[BatchOperationResult]:
         """
         Convenience: batch fork multiple executions.
 
@@ -867,7 +868,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
                 f"'{execution.id}': {error}"
             ) from error
 
-        def normalized_path(value: Any) -> Optional[str]:
+        def normalized_path(value: Any) -> str | None:
             if value is None:
                 return None
             try:
@@ -928,7 +929,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
         self,
         uow: "IUnitOfWork",
         execution_id: str,
-        graph: Optional[Any] = None,
+        graph: Any | None = None,
     ):
         """Yield a controller wired to execution-specific storage when available."""
         execution = self._get_execution_from_uow(uow, execution_id)
@@ -997,7 +998,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
             except Exception as e:
                 logger.debug(f"Could not emit VenvMismatchWarningEvent: {e}")
 
-    def _extract_file_commit_id(self, execution: "Execution") -> Optional[str]:
+    def _extract_file_commit_id(self, execution: "Execution") -> str | None:
         """Extract file_commit_id from execution state if available."""
         if not execution or not execution.state:
             return None
@@ -1016,7 +1017,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
 
         return None
 
-    def _get_file_commit_for_checkpoint(self, checkpoint_id: str) -> Optional[str]:
+    def _get_file_commit_for_checkpoint(self, checkpoint_id: str) -> str | None:
         """Resolve checkpoint_id -> file_commit_id through file tracking."""
         if not checkpoint_id or not self._file_tracking:
             return None
@@ -1027,7 +1028,7 @@ class BatchExecutionCoordinator(IBatchExecutionCoordinator):
 
     def _restore_files_post_commit(
         self,
-        file_commit_id: Optional[str],
+        file_commit_id: str | None,
         execution_id: str,
         checkpoint_id: str,
         operation: str,

@@ -39,46 +39,42 @@ Idempotency (ISSUE-OB-002):
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, AsyncIterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from wtb.application.validators import (
+    validate_checkpoint_id,
+    validate_execution_id,
+    validate_idempotency_key,
+    validate_node_id,
+    validate_reason,
+    validate_state_changes,
+)
+from wtb.domain.interfaces import IExecutionController, IUnitOfWork
 from wtb.domain.interfaces.api_services import (
-    IExecutionAPIService,
-    IAuditAPIService,
-    IBatchTestAPIService,
-    IWorkflowAPIService,
-    ExecutionDTO,
-    ControlResultDTO,
-    RollbackResultDTO,
-    CheckpointDTO,
-    PaginatedResultDTO,
     AuditEventDTO,
     AuditSummaryDTO,
     BatchTestDTO,
     BatchTestProgressDTO,
+    CheckpointDTO,
+    ControlResultDTO,
+    ExecutionDTO,
+    IAuditAPIService,
+    IBatchTestAPIService,
+    IExecutionAPIService,
+    IWorkflowAPIService,
+    PaginatedResultDTO,
+    RollbackResultDTO,
     WorkflowDTO,
 )
-import threading
-
-from wtb.domain.interfaces import IExecutionController, IUnitOfWork
-from wtb.domain.models.workflow import ExecutionStatus
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
-from wtb.application.validators import (
-    validate_execution_id,
-    validate_checkpoint_id,
-    validate_workflow_id,
-    validate_batch_test_id,
-    validate_limit,
-    validate_offset,
-    validate_state_changes,
-    validate_reason,
-    validate_node_id,
-    validate_idempotency_key,
-)
+from wtb.domain.models.workflow import ExecutionStatus
 
 if TYPE_CHECKING:
-    from wtb.infrastructure.events import WTBEventBus, WTBAuditTrail
+    from wtb.infrastructure.events import WTBAuditTrail, WTBEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +119,8 @@ class ExecutionAPIService(IExecutionAPIService):
         self,
         uow: IUnitOfWork,
         controller: IExecutionController,
-        event_bus: Optional["WTBEventBus"] = None,
-        audit_trail: Optional["WTBAuditTrail"] = None,
+        event_bus: "WTBEventBus" | None = None,
+        audit_trail: "WTBAuditTrail" | None = None,
     ):
         """
         Initialize with dependencies.
@@ -142,8 +138,8 @@ class ExecutionAPIService(IExecutionAPIService):
     
     async def list_executions(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
+        workflow_id: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> PaginatedResultDTO:
@@ -218,7 +214,7 @@ class ExecutionAPIService(IExecutionAPIService):
                 has_more=False,
             )
     
-    async def get_execution(self, execution_id: str) -> Optional[ExecutionDTO]:
+    async def get_execution(self, execution_id: str) -> ExecutionDTO | None:
         """Get execution with ACID read."""
         try:
             execution = self._controller.get_status(execution_id)
@@ -252,9 +248,9 @@ class ExecutionAPIService(IExecutionAPIService):
     async def pause_execution(
         self,
         execution_id: str,
-        reason: Optional[str] = None,
-        at_node: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        reason: str | None = None,
+        at_node: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ControlResultDTO:
         """
         Pause execution with ACID transaction.
@@ -326,9 +322,9 @@ class ExecutionAPIService(IExecutionAPIService):
     async def resume_execution(
         self,
         execution_id: str,
-        modified_state: Optional[Dict[str, Any]] = None,
-        from_node: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        modified_state: dict[str, Any] | None = None,
+        from_node: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ControlResultDTO:
         """
         Resume execution with ACID transaction.
@@ -394,8 +390,8 @@ class ExecutionAPIService(IExecutionAPIService):
     async def stop_execution(
         self,
         execution_id: str,
-        reason: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        reason: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ControlResultDTO:
         """
         Stop execution with ACID transaction.
@@ -449,7 +445,7 @@ class ExecutionAPIService(IExecutionAPIService):
         execution_id: str,
         checkpoint_id: str,
         create_branch: bool = False,
-        idempotency_key: Optional[str] = None,
+        idempotency_key: str | None = None,
     ) -> RollbackResultDTO:
         """
         Rollback with ACID transaction.
@@ -506,8 +502,8 @@ class ExecutionAPIService(IExecutionAPIService):
     async def get_execution_state(
         self,
         execution_id: str,
-        keys: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        keys: list[str] | None = None,
+    ) -> dict[str, Any]:
         """Get execution state (read-only)."""
         try:
             state = self._controller.get_state(execution_id)
@@ -529,9 +525,9 @@ class ExecutionAPIService(IExecutionAPIService):
     async def modify_execution_state(
         self,
         execution_id: str,
-        changes: Dict[str, Any],
-        reason: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
+        changes: dict[str, Any],
+        reason: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ControlResultDTO:
         """
         Modify state with ACID transaction.
@@ -595,7 +591,7 @@ class ExecutionAPIService(IExecutionAPIService):
         self,
         execution_id: str,
         limit: int = 100,
-    ) -> List[CheckpointDTO]:
+    ) -> list[CheckpointDTO]:
         """List checkpoints for execution."""
         try:
             if not self._controller.supports_time_travel():
@@ -629,8 +625,8 @@ class ExecutionAPIService(IExecutionAPIService):
     async def pause(
         self,
         execution_id: str,
-        reason: Optional[str] = None,
-        at_node: Optional[str] = None,
+        reason: str | None = None,
+        at_node: str | None = None,
     ) -> dict:
         """Alias for pause_execution (backward compatibility)."""
         result = await self.pause_execution(execution_id, reason, at_node)
@@ -641,8 +637,8 @@ class ExecutionAPIService(IExecutionAPIService):
     async def resume(
         self,
         execution_id: str,
-        modified_state: Optional[Dict[str, Any]] = None,
-        from_node: Optional[str] = None,
+        modified_state: dict[str, Any] | None = None,
+        from_node: str | None = None,
     ) -> dict:
         """Alias for resume_execution (backward compatibility)."""
         result = await self.resume_execution(execution_id, modified_state, from_node)
@@ -664,7 +660,7 @@ class ExecutionAPIService(IExecutionAPIService):
     async def inspect_state(
         self,
         execution_id: str,
-        keys: Optional[List[str]] = None,
+        keys: list[str] | None = None,
     ) -> dict:
         """Alias for get_execution_state (backward compatibility)."""
         result = await self.get_execution_state(execution_id, keys)
@@ -676,7 +672,7 @@ class ExecutionAPIService(IExecutionAPIService):
     async def modify_state(
         self,
         execution_id: str,
-        changes: Dict[str, Any],
+        changes: dict[str, Any],
     ) -> bool:
         """Alias for modify_execution_state (backward compatibility)."""
         result = await self.modify_execution_state(execution_id, changes)
@@ -698,7 +694,7 @@ class AuditAPIService(IAuditAPIService):
     def __init__(
         self,
         audit_trail: "WTBAuditTrail",
-        uow: Optional[IUnitOfWork] = None,
+        uow: IUnitOfWork | None = None,
     ):
         """
         Initialize with audit trail.
@@ -712,12 +708,12 @@ class AuditAPIService(IAuditAPIService):
     
     async def query_events(
         self,
-        execution_id: Optional[str] = None,
-        event_types: Optional[List[str]] = None,
-        severities: Optional[List[str]] = None,
-        node_id: Optional[str] = None,
-        since: Optional[datetime] = None,
-        until: Optional[datetime] = None,
+        execution_id: str | None = None,
+        event_types: list[str] | None = None,
+        severities: list[str] | None = None,
+        node_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> PaginatedResultDTO:
@@ -764,7 +760,7 @@ class AuditAPIService(IAuditAPIService):
     
     async def get_summary(
         self,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
         time_range: str = "1h",
     ) -> AuditSummaryDTO:
         """Get audit summary."""
@@ -784,7 +780,7 @@ class AuditAPIService(IAuditAPIService):
         self,
         execution_id: str,
         include_debug: bool = False,
-    ) -> List[AuditEventDTO]:
+    ) -> list[AuditEventDTO]:
         """Get execution timeline."""
         entries = self._audit_trail.entries
         entries = [e for e in entries if e.execution_id == execution_id]
@@ -821,8 +817,8 @@ class BatchTestAPIService(IBatchTestAPIService):
     def __init__(
         self,
         uow: IUnitOfWork,
-        event_bus: Optional["WTBEventBus"] = None,
-        batch_runner: Optional[Any] = None,
+        event_bus: "WTBEventBus" | None = None,
+        batch_runner: Any | None = None,
     ):
         """
         Initialize with dependencies.
@@ -837,15 +833,15 @@ class BatchTestAPIService(IBatchTestAPIService):
         self._batch_runner = batch_runner
         # WARNING: in-memory cache only; lost on restart.
         # TODO: Back with repository for durable persistence.
-        self._batch_tests: Dict[str, BatchTestDTO] = {}
+        self._batch_tests: dict[str, BatchTestDTO] = {}
         self._batch_tests_lock = threading.Lock()
     
     async def create_batch_test(
         self,
         workflow_id: str,
-        variants: List[Dict[str, Any]],
-        initial_state: Optional[Dict[str, Any]] = None,
-        parallelism: Optional[int] = None,
+        variants: list[dict[str, Any]],
+        initial_state: dict[str, Any] | None = None,
+        parallelism: int | None = None,
         use_ray: bool = True,
     ) -> BatchTestDTO:
         """Create batch test with ACID transaction."""
@@ -883,14 +879,14 @@ class BatchTestAPIService(IBatchTestAPIService):
             logger.error(f"Failed to create batch test: {e}")
             raise
     
-    async def get_batch_test(self, batch_test_id: str) -> Optional[BatchTestDTO]:
+    async def get_batch_test(self, batch_test_id: str) -> BatchTestDTO | None:
         """Get batch test by ID."""
         return self._batch_tests.get(batch_test_id)
     
     async def list_batch_tests(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
+        workflow_id: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> PaginatedResultDTO:
@@ -932,7 +928,7 @@ class BatchTestAPIService(IBatchTestAPIService):
     async def cancel_batch_test(
         self,
         batch_test_id: str,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> ControlResultDTO:
         """Cancel batch test with ACID transaction."""
         try:
@@ -996,17 +992,17 @@ class WorkflowAPIService(IWorkflowAPIService):
         self._uow = uow
         # WARNING: in-memory cache only; lost on restart.
         # TODO: Back with repository for durable persistence.
-        self._workflows: Dict[str, WorkflowDTO] = {}
+        self._workflows: dict[str, WorkflowDTO] = {}
         self._workflows_lock = threading.Lock()
     
     async def create_workflow(
         self,
         name: str,
-        nodes: List[Dict[str, Any]],
+        nodes: list[dict[str, Any]],
         entry_point: str,
-        description: Optional[str] = None,
-        edges: Optional[List[Dict[str, Any]]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        description: str | None = None,
+        edges: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> WorkflowDTO:
         """Create workflow with ACID transaction."""
         try:
@@ -1046,7 +1042,7 @@ class WorkflowAPIService(IWorkflowAPIService):
             logger.error(f"Failed to create workflow: {e}")
             raise
     
-    async def get_workflow(self, workflow_id: str) -> Optional[WorkflowDTO]:
+    async def get_workflow(self, workflow_id: str) -> WorkflowDTO | None:
         """Get workflow by ID."""
         return self._workflows.get(workflow_id)
     
@@ -1139,8 +1135,8 @@ class APIServiceFactory:
     def create_execution_service(
         uow: IUnitOfWork,
         controller: IExecutionController,
-        event_bus: Optional["WTBEventBus"] = None,
-        audit_trail: Optional["WTBAuditTrail"] = None,
+        event_bus: "WTBEventBus" | None = None,
+        audit_trail: "WTBAuditTrail" | None = None,
     ) -> IExecutionAPIService:
         """
         Create execution API service.
@@ -1160,7 +1156,7 @@ class APIServiceFactory:
     @staticmethod
     def create_audit_service(
         audit_trail: "WTBAuditTrail",
-        uow: Optional[IUnitOfWork] = None,
+        uow: IUnitOfWork | None = None,
     ) -> IAuditAPIService:
         """
         Create audit API service.
@@ -1176,8 +1172,8 @@ class APIServiceFactory:
     @staticmethod
     def create_batch_test_service(
         uow: IUnitOfWork,
-        event_bus: Optional["WTBEventBus"] = None,
-        batch_runner: Optional[Any] = None,
+        event_bus: "WTBEventBus" | None = None,
+        batch_runner: Any | None = None,
     ) -> IBatchTestAPIService:
         """
         Create batch test API service.

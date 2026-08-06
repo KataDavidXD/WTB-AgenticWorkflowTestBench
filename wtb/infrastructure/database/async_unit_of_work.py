@@ -1,23 +1,28 @@
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from typing import Optional, ClassVar, Dict
-from sqlalchemy.ext.asyncio import AsyncEngine
+from typing import ClassVar
+
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from wtb.domain.interfaces.async_unit_of_work import IAsyncUnitOfWork
-from wtb.infrastructure.database.engine_cache import configure_sqlite_foreign_keys
 from wtb.infrastructure.database.async_repositories import (
-    AsyncWorkflowRepository,
-    AsyncExecutionRepository,
-    AsyncNodeVariantRepository,
+    AsyncAuditLogRepository,
     AsyncBatchTestRepository,
     AsyncEvaluationResultRepository,
+    AsyncExecutionRepository,
     AsyncNodeBoundaryRepository,
-    AsyncAuditLogRepository,
+    AsyncNodeVariantRepository,
     AsyncOutboxRepository,
     AsyncSQLAlchemyBlobRepository,
+    AsyncSQLAlchemyCheckpointFileLinkRepository,
     AsyncSQLAlchemyFileCommitRepository,
-    AsyncSQLAlchemyCheckpointFileLinkRepository
+    AsyncWorkflowRepository,
 )
+from wtb.infrastructure.database.engine_cache import configure_sqlite_foreign_keys
 
 
 class AsyncSQLAlchemyUnitOfWork(IAsyncUnitOfWork):
@@ -36,7 +41,7 @@ class AsyncSQLAlchemyUnitOfWork(IAsyncUnitOfWork):
     """
     
     # Class-level engine cache - shared across all instances
-    _engine_pool: ClassVar[Dict[str, AsyncEngine]] = {}
+    _engine_pool: ClassVar[dict[str, AsyncEngine]] = {}
     
     def __init__(self, db_url: str, blob_storage_path: str = "./data/blobs"):
         # Convert sync URL to async URL if needed
@@ -50,7 +55,7 @@ class AsyncSQLAlchemyUnitOfWork(IAsyncUnitOfWork):
         self._db_url = async_url
         self._blob_storage_path = blob_storage_path
         self._session_factory = None
-        self._session: Optional[AsyncSession] = None
+        self._session: AsyncSession | None = None
     
     @classmethod
     def get_engine(cls, db_url: str) -> AsyncEngine:
@@ -113,8 +118,13 @@ class AsyncSQLAlchemyUnitOfWork(IAsyncUnitOfWork):
         # So I need to pass the ORM classes.
         
         from wtb.infrastructure.database.models import (
-            WorkflowORM, ExecutionORM, NodeVariantORM, BatchTestORM,
-            EvaluationResultORM, NodeBoundaryORM, AuditLogORM
+            AuditLogORM,
+            BatchTestORM,
+            EvaluationResultORM,
+            ExecutionORM,
+            NodeBoundaryORM,
+            NodeVariantORM,
+            WorkflowORM,
         )
         
         self.workflows = AsyncWorkflowRepository(self._session, WorkflowORM)

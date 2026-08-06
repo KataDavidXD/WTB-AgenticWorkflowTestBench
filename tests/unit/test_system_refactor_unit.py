@@ -12,26 +12,24 @@ Tests the following areas:
 8. Invalidate environment (no double-pop)
 """
 
-import pytest
-import os
-import tempfile
 import hashlib
-import json
-from unittest.mock import MagicMock, patch, PropertyMock, call
+import tempfile
+from unittest.mock import MagicMock
 
+import pytest
+
+from wtb.application.services.execution_controller import (
+    DefaultNodeExecutor,
+    ExecutionController,
+)
 from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.application.services.execution_controller import (
-    ExecutionController,
-    DefaultNodeExecutor,
-)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helpers
@@ -418,6 +416,7 @@ class TestFactoryNoDuplication:
 
     def test_create_for_testing_produces_single_batch_runner(self):
         import warnings
+
         from wtb.application.factories import WTBTestBenchFactory
 
         with warnings.catch_warnings():
@@ -430,6 +429,7 @@ class TestFactoryNoDuplication:
 
     def test_create_produces_bench_without_error(self):
         import warnings
+
         from wtb.application.factories import WTBTestBenchFactory
         from wtb.config import WTBConfig
 
@@ -450,9 +450,9 @@ class TestVenvHashConsistency:
     """All three hash entry points must produce the same hash."""
 
     def test_all_hash_functions_produce_same_hash(self):
-        from wtb.infrastructure.environment.venv_cache import VenvSpec
         from wtb.domain.models.workspace import compute_venv_spec_hash
         from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
+        from wtb.infrastructure.environment.venv_cache import VenvSpec
 
         python_version = "3.12"
         packages = ["numpy", "pandas"]
@@ -498,10 +498,11 @@ class TestCASAtomicity:
     """Blob storage uses temp file + os.replace for crash safety."""
 
     def test_store_blob_creates_valid_blob(self):
+        from pathlib import Path
+
         from wtb.infrastructure.file_tracking.sqlite_service import (
             SqliteFileTrackingService,
         )
-        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
@@ -534,10 +535,11 @@ class TestCASAtomicity:
             service.close()
 
     def test_track_and_link_single_transaction(self):
+        from pathlib import Path
+
         from wtb.infrastructure.file_tracking.sqlite_service import (
             SqliteFileTrackingService,
         )
-        from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)

@@ -17,18 +17,16 @@ Scenarios:
 - D: gRPC streaming consistency
 """
 
-import pytest
-import asyncio
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock, patch
-from typing import Dict, Any, List
+from unittest.mock import MagicMock
+
+import pytest
 
 # Skip if dependencies not installed
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -99,11 +97,11 @@ def mock_uow():
 def app_with_services(mock_uow, mock_controller):
     """Create FastAPI app with mock services."""
     from wtb.api.rest.app import create_app
-    from wtb.api.rest.dependencies import AppState, set_app_state, reset_app_state
+    from wtb.api.rest.dependencies import AppState, reset_app_state, set_app_state
     from wtb.application.services.api_services import (
-        ExecutionAPIService,
         AuditAPIService,
         BatchTestAPIService,
+        ExecutionAPIService,
     )
     from wtb.infrastructure.events import WTBAuditTrail
     
@@ -266,7 +264,6 @@ class TestConcurrentOperations:
     @pytest.mark.asyncio
     async def test_concurrent_pauses_isolated(self, app_with_services):
         """Test that concurrent pause operations are isolated."""
-        from wtb.application.services.api_services import ExecutionAPIService
         
         app, state, uow = app_with_services
         
@@ -418,11 +415,10 @@ class TestSOLIDCompliance:
     
     def test_services_depend_on_interfaces(self):
         """Test that services depend on interfaces (DIP)."""
-        from wtb.application.services.api_services import ExecutionAPIService
-        from wtb.domain.interfaces import IUnitOfWork, IExecutionController
-        
         # ExecutionAPIService constructor should accept interfaces
         import inspect
+
+        from wtb.application.services.api_services import ExecutionAPIService
         sig = inspect.signature(ExecutionAPIService.__init__)
         params = sig.parameters
         
@@ -432,9 +428,9 @@ class TestSOLIDCompliance:
     def test_api_service_interface_segregation(self):
         """Test interface segregation (ISP)."""
         from wtb.domain.interfaces.api_services import (
-            IExecutionAPIService,
             IAuditAPIService,
             IBatchTestAPIService,
+            IExecutionAPIService,
         )
         
         # Each interface should have distinct methods

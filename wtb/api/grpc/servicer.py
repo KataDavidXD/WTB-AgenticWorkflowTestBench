@@ -42,15 +42,14 @@ Usage:
 from __future__ import annotations
 
 import logging
-import asyncio
-from typing import Optional, Dict, Any, AsyncIterator, TYPE_CHECKING
-from datetime import datetime, timezone
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces.api_services import (
-        IExecutionAPIService,
         IAuditAPIService,
         IBatchTestAPIService,
+        IExecutionAPIService,
     )
 
 logger = logging.getLogger(__name__)
@@ -93,8 +92,8 @@ class WTBServicer:
     def __init__(
         self,
         execution_service: "IExecutionAPIService",
-        audit_service: Optional["IAuditAPIService"] = None,
-        batch_test_service: Optional["IBatchTestAPIService"] = None,
+        audit_service: "IAuditAPIService" | None = None,
+        batch_test_service: "IBatchTestAPIService" | None = None,
     ):
         """
         Initialize servicer with API services.
@@ -499,7 +498,7 @@ class WTBServicer:
 # Helper Functions for Proto Message Creation
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _struct_to_dict(struct) -> Dict[str, Any]:
+def _struct_to_dict(struct) -> dict[str, Any]:
     """Convert google.protobuf.Struct to dict."""
     if struct is None:
         return {}
@@ -510,11 +509,11 @@ def _struct_to_dict(struct) -> Dict[str, Any]:
         return {}
 
 
-def _dict_to_struct(d: Dict[str, Any]):
+def _dict_to_struct(d: dict[str, Any]):
     """Convert dict to google.protobuf.Struct."""
     try:
-        from google.protobuf.struct_pb2 import Struct
         from google.protobuf.json_format import ParseDict
+        from google.protobuf.struct_pb2 import Struct
         struct = Struct()
         ParseDict(d, struct)
         return struct
@@ -526,7 +525,7 @@ def _create_execution_response(
     execution_id: str,
     status: str,
     thread_id: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create ExecutionResponse message."""
     return {
         "execution_id": execution_id,
@@ -538,9 +537,9 @@ def _create_execution_response(
 def _create_control_response(
     success: bool,
     status: str,
-    checkpoint_id: Optional[str] = None,
-    message: Optional[str] = None,
-) -> Dict[str, Any]:
+    checkpoint_id: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
     """Create ControlResponse message."""
     return {
         "success": success,
@@ -552,10 +551,10 @@ def _create_control_response(
 
 def _create_rollback_response(
     success: bool,
-    new_session_id: Optional[str] = None,
+    new_session_id: str | None = None,
     tools_reversed: int = 0,
     files_restored: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create RollbackResponse message."""
     return {
         "success": success,
@@ -569,7 +568,7 @@ def _create_execution_event(
     event_id: str,
     execution_id: str,
     event_type: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create ExecutionEvent message."""
     return {
         "event_id": event_id,
@@ -580,10 +579,10 @@ def _create_execution_event(
 
 def _create_checkpoint_event(
     checkpoint_id: str,
-    node_id: Optional[str],
+    node_id: str | None,
     trigger_type: str,
     has_file_commit: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create CheckpointEvent message."""
     return {
         "checkpoint_id": checkpoint_id,
@@ -598,8 +597,8 @@ def _create_batch_test_progress(
     total_variants: int,
     completed: int,
     failed: int,
-    eta_seconds: Optional[float] = None,
-) -> Dict[str, Any]:
+    eta_seconds: float | None = None,
+) -> dict[str, Any]:
     """Create BatchTestProgress message."""
     return {
         "batch_test_id": batch_test_id,
@@ -613,8 +612,8 @@ def _create_batch_test_progress(
 def _create_batch_test_results_response(
     batch_test_id: str,
     status: str,
-    comparison_matrix: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    comparison_matrix: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create BatchTestResultsResponse message."""
     return {
         "batch_test_id": batch_test_id,
@@ -629,9 +628,9 @@ def _create_audit_event(
     event_type: str,
     severity: str,
     message: str,
-    execution_id: Optional[str] = None,
-    node_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    execution_id: str | None = None,
+    node_id: str | None = None,
+) -> dict[str, Any]:
     """Create AuditEvent message."""
     return {
         "event_id": event_id,
@@ -646,10 +645,10 @@ def _create_audit_event(
 def _create_interactive_response(
     success: bool,
     message: str,
-    state: Optional[Dict[str, Any]] = None,
-    current_node: Optional[str] = None,
-    status: Optional[str] = None,
-) -> Dict[str, Any]:
+    state: dict[str, Any] | None = None,
+    current_node: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
     """Create InteractiveResponse message."""
     response = {
         "success": success,
@@ -671,7 +670,7 @@ def create_grpc_server(
     servicer: WTBServicer,
     port: int = 50051,
     max_workers: int = 10,
-) -> Optional[Any]:
+) -> Any | None:
     """
     Create and configure a gRPC server.
     
@@ -708,7 +707,7 @@ def create_grpc_server(
 async def create_async_grpc_server(
     servicer: WTBServicer,
     port: int = 50051,
-) -> Optional[Any]:
+) -> Any | None:
     """
     Create an async gRPC server.
     

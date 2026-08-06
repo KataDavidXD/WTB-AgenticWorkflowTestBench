@@ -6,8 +6,29 @@ handling all technical concerns like database access and external integrations.
 """
 
 try:
-    from .database.unit_of_work import SQLAlchemyUnitOfWork
     from .adapters.inmemory_state_adapter import InMemoryStateAdapter
+    from .database.unit_of_work import SQLAlchemyUnitOfWork
+
+    # Environment Providers
+    from .environment.providers import (
+        InProcessEnvironmentProvider,
+        RayEnvironmentProvider,
+    )
+    from .events.wtb_audit_trail import (
+        AuditEventListener,
+        WTBAuditEntry,
+        WTBAuditEventType,
+        WTBAuditSeverity,
+        WTBAuditTrail,
+    )
+
+    # Event Bus and Audit Trail
+    from .events.wtb_event_bus import (
+        WTBEventBus,
+        get_wtb_event_bus,
+        reset_wtb_event_bus,
+        set_wtb_event_bus,
+    )
 
     # Checkpoint Stores (DDD - 2026-01-15)
     from .stores.inmemory_checkpoint_store import (
@@ -15,30 +36,9 @@ try:
         InMemoryCheckpointStoreFactory,
     )
     from .stores.langgraph_checkpoint_store import (
-        LangGraphCheckpointStore,
         LangGraphCheckpointConfig,
+        LangGraphCheckpointStore,
         LangGraphCheckpointStoreFactory,
-    )
-
-    # Event Bus and Audit Trail
-    from .events.wtb_event_bus import (
-        WTBEventBus,
-        get_wtb_event_bus,
-        set_wtb_event_bus,
-        reset_wtb_event_bus,
-    )
-    from .events.wtb_audit_trail import (
-        WTBAuditEventType,
-        WTBAuditSeverity,
-        WTBAuditEntry,
-        WTBAuditTrail,
-        AuditEventListener,
-    )
-
-    # Environment Providers
-    from .environment.providers import (
-        InProcessEnvironmentProvider,
-        RayEnvironmentProvider,
     )
 except ImportError:
     SQLAlchemyUnitOfWork = None
@@ -63,7 +63,11 @@ from .llm import (
     LangChainOpenAIConfig,
     LangChainOpenAIService,
     TextGenerationResult,
+)
+from .llm import (
     get_service as get_langchain_openai_service,
+)
+from .llm import (
     reset_service_cache as reset_langchain_openai_service_cache,
 )
 

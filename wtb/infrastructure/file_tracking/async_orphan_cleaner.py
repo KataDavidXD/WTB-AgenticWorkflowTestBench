@@ -1,9 +1,10 @@
 
-from pathlib import Path
-from typing import List, Callable, Set
-import aiofiles.os
 import logging
 import time
+from collections.abc import Callable
+from pathlib import Path
+
+import aiofiles.os
 
 from wtb.domain.interfaces.async_unit_of_work import IAsyncUnitOfWork
 
@@ -25,7 +26,7 @@ class AsyncBlobOrphanCleaner:
         self._uow_factory = uow_factory
         self._grace_period_minutes = grace_period_minutes
     
-    async def aclean_orphans(self, dry_run: bool = True) -> List[str]:
+    async def aclean_orphans(self, dry_run: bool = True) -> list[str]:
         """
         Find and optionally delete orphaned blob files.
         """
@@ -38,7 +39,7 @@ class AsyncBlobOrphanCleaner:
         # Get all known blobs from DB
         async with self._uow_factory() as uow:
             known_hashes_list = await uow.blobs.alist_all_hashes()
-            known_hashes: Set[str] = set(h.value for h in known_hashes_list)
+            known_hashes: set[str] = set(h.value for h in known_hashes_list)
         logger.info(f"Found {len(known_hashes)} blob hashes in database")
         
         # Find orphans (on filesystem but not in DB)
@@ -61,7 +62,7 @@ class AsyncBlobOrphanCleaner:
         )
         return orphans
     
-    async def _list_blob_files_async(self) -> List[Path]:
+    async def _list_blob_files_async(self) -> list[Path]:
         """List all blob files in storage directory."""
         blobs = []
         if not self._blobs_dir.exists():

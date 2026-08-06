@@ -15,8 +15,7 @@ Design:
 
 import re
 import uuid
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # UUID Validators
@@ -118,7 +117,7 @@ def validate_string(
     min_length: int = 0,
     max_length: int = 10000,
     required: bool = True,
-) -> Optional[str]:
+) -> str | None:
     """
     Validate a string value.
     
@@ -157,12 +156,12 @@ def validate_string(
     return stripped if stripped else None
 
 
-def validate_node_id(node_id: str, required: bool = True) -> Optional[str]:
+def validate_node_id(node_id: str, required: bool = True) -> str | None:
     """Validate node ID."""
     return validate_string(node_id, "node_id", min_length=1, max_length=256, required=required)
 
 
-def validate_reason(reason: str, required: bool = False) -> Optional[str]:
+def validate_reason(reason: str, required: bool = False) -> str | None:
     """Validate reason string."""
     return validate_string(reason, "reason", max_length=1000, required=required)
 
@@ -225,7 +224,7 @@ def validate_offset(offset: int) -> int:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def validate_state_changes(changes: Dict[str, Any]) -> Dict[str, Any]:
+def validate_state_changes(changes: dict[str, Any]) -> dict[str, Any]:
     """
     Validate state changes dictionary.
     
@@ -256,7 +255,7 @@ def validate_state_changes(changes: Dict[str, Any]) -> Dict[str, Any]:
     return changes
 
 
-def validate_status(status: str, allowed_statuses: List[str]) -> str:
+def validate_status(status: str, allowed_statuses: list[str]) -> str:
     """
     Validate status string against allowed values.
     
@@ -305,9 +304,9 @@ class ValidationError(ValueError):
 
 def validate_execution_request(
     execution_id: str,
-    checkpoint_id: Optional[str] = None,
-    reason: Optional[str] = None,
-) -> Dict[str, Any]:
+    checkpoint_id: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
     """
     Validate common execution request parameters.
     
@@ -344,7 +343,7 @@ def validate_execution_request(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def validate_idempotency_key(key: Optional[str]) -> Optional[str]:
+def validate_idempotency_key(key: str | None) -> str | None:
     """
     Validate and normalize idempotency key.
     

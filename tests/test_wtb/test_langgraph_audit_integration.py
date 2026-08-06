@@ -7,34 +7,32 @@ audit persistence, and metrics collection.
 Run with: pytest tests/test_wtb/test_langgraph_audit_integration.py -v
 """
 
-import pytest
-from datetime import datetime
-from typing import Dict, Any, List
-from unittest.mock import MagicMock, patch
 import threading
+from unittest.mock import MagicMock
 
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    StreamModeConfig,
-    LangGraphEventBridge,
-    create_event_bridge_for_testing,
-    InMemoryMetricsCollector,
-    WTBAuditTrail,
-    AuditEventListener,
-)
+import pytest
+
+from wtb.config import LangGraphEventConfig, WTBConfig
 from wtb.domain.events import (
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
-    NodeCompletedEvent,
-    NodeFailedEvent,
+    ExecutionStartedEvent,
     LangGraphAuditEvent,
     LangGraphAuditEventType,
+    NodeCompletedEvent,
+    NodeFailedEvent,
+    NodeStartedEvent,
 )
 from wtb.domain.events.checkpoint_events import CheckpointCreated
-from wtb.config import WTBConfig, LangGraphEventConfig
-
+from wtb.infrastructure.events import (
+    AuditEventListener,
+    InMemoryMetricsCollector,
+    LangGraphEventBridge,
+    StreamModeConfig,
+    WTBAuditTrail,
+    WTBEventBus,
+    create_event_bridge_for_testing,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures

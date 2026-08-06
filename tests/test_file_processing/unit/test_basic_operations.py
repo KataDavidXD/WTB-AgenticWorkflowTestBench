@@ -16,25 +16,21 @@ Design Principles:
 - Isolation: No external dependencies
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime
-from typing import TypedDict, Annotated
-import operator
 import uuid
+
+import pytest
 
 from wtb.domain.models.file_processing import (
     BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
     CheckpointFileLink,
+    CommitAlreadyFinalized,
+    CommitId,
     CommitStatus,
     DuplicateFileError,
-    CommitAlreadyFinalized,
+    FileCommit,
+    FileMemento,
     InvalidBlobIdError,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test: File Memento Creation

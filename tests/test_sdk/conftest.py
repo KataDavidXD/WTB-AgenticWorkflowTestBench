@@ -10,21 +10,19 @@ Provides:
 - Shared test workflows
 """
 
-import pytest
 import os
-import tempfile
 import time
 import uuid
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass
-from unittest.mock import MagicMock, Mock
-from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pytest
 
 # LangGraph imports
 try:
-    from langgraph.graph import StateGraph, END
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import END, StateGraph
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
@@ -37,23 +35,16 @@ except ImportError:
     RAY_AVAILABLE = False
 
 # WTB imports
-from wtb.sdk import WTBTestBench, WorkflowProject
+from wtb.application.factories import WTBTestBenchFactory
+from wtb.config import FileTrackingConfig as WTBFileTrackingConfig
+from wtb.config import RayConfig
+from wtb.domain.models.batch_test import BatchTest, VariantCombination
+from wtb.sdk import WorkflowProject
 from wtb.sdk.workflow_project import (
-    FileTrackingConfig,
     EnvironmentConfig,
-    ExecutionConfig,
     EnvSpec,
-    NodeVariant,
+    FileTrackingConfig,
 )
-from wtb.sdk.test_bench import WTBTestBenchBuilder, RollbackResult, ForkResult
-from wtb.application.factories import WTBTestBenchFactory, BatchTestRunnerFactory
-from wtb.application.services import ProjectService, VariantService
-from wtb.config import WTBConfig, RayConfig, FileTrackingConfig as WTBFileTrackingConfig
-from wtb.domain.models import ExecutionStatus
-from wtb.domain.models.batch_test import BatchTest, BatchTestStatus, VariantCombination
-from wtb.infrastructure.database import InMemoryUnitOfWork
-from wtb.infrastructure.adapters import InMemoryStateAdapter
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LangGraph Test Graph Definitions
@@ -63,9 +54,9 @@ from wtb.infrastructure.adapters import InMemoryStateAdapter
 @dataclass
 class SimpleState:
     """Simple state for testing."""
-    messages: List[str]
+    messages: list[str]
     count: int = 0
-    result: Optional[str] = None
+    result: str | None = None
 
 
 def create_simple_state_schema():
@@ -73,9 +64,9 @@ def create_simple_state_schema():
     from typing_extensions import TypedDict
     
     class SimpleStateDict(TypedDict, total=False):
-        messages: List[str]
+        messages: list[str]
         count: int
-        result: Optional[str]
+        result: str | None
     
     return SimpleStateDict
 
@@ -95,15 +86,15 @@ def simple_graph_factory():
         
         SimpleStateDict = create_simple_state_schema()
         
-        def node_a(state: Dict[str, Any]) -> Dict[str, Any]:
+        def node_a(state: dict[str, Any]) -> dict[str, Any]:
             messages = state.get("messages", [])
             return {"messages": messages + ["A"], "count": state.get("count", 0) + 1}
         
-        def node_b(state: Dict[str, Any]) -> Dict[str, Any]:
+        def node_b(state: dict[str, Any]) -> dict[str, Any]:
             messages = state.get("messages", [])
             return {"messages": messages + ["B"], "count": state.get("count", 0) + 1}
         
-        def node_c(state: Dict[str, Any]) -> Dict[str, Any]:
+        def node_c(state: dict[str, Any]) -> dict[str, Any]:
             messages = state.get("messages", [])
             return {"messages": messages + ["C"], "count": state.get("count", 0) + 1}
         
@@ -132,23 +123,23 @@ def branching_graph_factory():
         from typing_extensions import TypedDict
         
         class BranchingState(TypedDict, total=False):
-            messages: List[str]
+            messages: list[str]
             branch: str
             count: int
         
-        def start_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        def start_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state.get("messages", []) + ["start"], "count": 1}
         
-        def branch_a(state: Dict[str, Any]) -> Dict[str, Any]:
+        def branch_a(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state["messages"] + ["branch_a"], "count": state["count"] + 1}
         
-        def branch_b(state: Dict[str, Any]) -> Dict[str, Any]:
+        def branch_b(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state["messages"] + ["branch_b"], "count": state["count"] + 1}
         
-        def end_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        def end_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state["messages"] + ["end"], "count": state["count"] + 1}
         
-        def decide_branch(state: Dict[str, Any]) -> str:
+        def decide_branch(state: dict[str, Any]) -> str:
             branch = state.get("branch", "a")
             return f"branch_{branch}"
         
@@ -183,19 +174,19 @@ def pausable_graph_factory():
         from typing_extensions import TypedDict
         
         class PausableState(TypedDict, total=False):
-            messages: List[str]
+            messages: list[str]
             paused: bool
-            pause_at: Optional[str]
+            pause_at: str | None
         
-        def node_1(state: Dict[str, Any]) -> Dict[str, Any]:
+        def node_1(state: dict[str, Any]) -> dict[str, Any]:
             time.sleep(0.01)  # Small delay
             return {"messages": state.get("messages", []) + ["node_1"]}
         
-        def node_2(state: Dict[str, Any]) -> Dict[str, Any]:
+        def node_2(state: dict[str, Any]) -> dict[str, Any]:
             time.sleep(0.01)
             return {"messages": state.get("messages", []) + ["node_2"]}
         
-        def node_3(state: Dict[str, Any]) -> Dict[str, Any]:
+        def node_3(state: dict[str, Any]) -> dict[str, Any]:
             time.sleep(0.01)
             return {"messages": state.get("messages", []) + ["node_3"]}
         
@@ -224,11 +215,11 @@ def file_processing_graph_factory(tmp_path):
         from typing_extensions import TypedDict
         
         class FileState(TypedDict, total=False):
-            files_processed: List[str]
+            files_processed: list[str]
             file_count: int
             workspace_path: str
         
-        def create_file_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        def create_file_node(state: dict[str, Any]) -> dict[str, Any]:
             workspace = Path(state.get("workspace_path", str(tmp_path)))
             workspace.mkdir(exist_ok=True)
             
@@ -241,7 +232,7 @@ def file_processing_graph_factory(tmp_path):
                 "file_count": len(files) + 1,
             }
         
-        def modify_file_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        def modify_file_node(state: dict[str, Any]) -> dict[str, Any]:
             files = state.get("files_processed", [])
             for fp in files:
                 path = Path(fp)
@@ -250,7 +241,7 @@ def file_processing_graph_factory(tmp_path):
                     path.write_text(content + "\nModified")
             return {"files_processed": files}
         
-        def finalize_node(state: Dict[str, Any]) -> Dict[str, Any]:
+        def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             return {"file_count": state.get("file_count", 0)}
         
         builder = StateGraph(FileState)
@@ -294,14 +285,17 @@ def wtb_langgraph():
         pytest.skip("LangGraph not installed")
     
     # Create fresh instance each time to ensure test isolation
+    from wtb.application.factories import (
+        ExecutionControllerFactory,
+        NodeReplacerFactory,
+    )
+    from wtb.application.services import ProjectService, VariantService
     from wtb.infrastructure.adapters.langgraph_state_adapter import (
-        LangGraphStateAdapter,
-        LangGraphConfig,
         CheckpointerType,
+        LangGraphConfig,
+        LangGraphStateAdapter,
     )
     from wtb.infrastructure.database import InMemoryUnitOfWork
-    from wtb.application.factories import ExecutionControllerFactory, NodeReplacerFactory
-    from wtb.application.services import ProjectService, VariantService
     from wtb.sdk.test_bench import WTBTestBench
     
     # Create all dependencies fresh
@@ -385,10 +379,10 @@ def project_with_variants(simple_graph_factory):
     )
     
     # Register variants for node_b
-    def variant_b_fast(state: Dict[str, Any]) -> Dict[str, Any]:
+    def variant_b_fast(state: dict[str, Any]) -> dict[str, Any]:
         return {"messages": state.get("messages", []) + ["B_FAST"], "count": state.get("count", 0) + 1}
     
-    def variant_b_slow(state: Dict[str, Any]) -> Dict[str, Any]:
+    def variant_b_slow(state: dict[str, Any]) -> dict[str, Any]:
         time.sleep(0.05)
         return {"messages": state.get("messages", []) + ["B_SLOW"], "count": state.get("count", 0) + 1}
     
@@ -462,7 +456,7 @@ class MockVenvSpec:
     """Mock venv specification."""
     env_id: str
     python_version: str = "3.12"
-    packages: List[str] = None
+    packages: list[str] = None
     
     def __post_init__(self):
         self.packages = self.packages or []
@@ -473,16 +467,16 @@ class MockVenvStatus:
     """Mock venv status."""
     env_id: str
     status: str = "ready"
-    python_path: Optional[str] = None
-    error: Optional[str] = None
+    python_path: str | None = None
+    error: str | None = None
 
 
 class MockVenvProvider:
     """Mock virtual environment provider."""
     
     def __init__(self):
-        self._environments: Dict[str, MockVenvStatus] = {}
-        self._specs: Dict[str, MockVenvSpec] = {}
+        self._environments: dict[str, MockVenvStatus] = {}
+        self._specs: dict[str, MockVenvSpec] = {}
     
     def create_environment(self, spec: MockVenvSpec) -> str:
         """Create a new environment."""
@@ -494,7 +488,7 @@ class MockVenvProvider:
         )
         return spec.env_id
     
-    def get_status(self, env_id: str) -> Optional[MockVenvStatus]:
+    def get_status(self, env_id: str) -> MockVenvStatus | None:
         """Get environment status."""
         return self._environments.get(env_id)
     
@@ -505,7 +499,7 @@ class MockVenvProvider:
             return True
         return False
     
-    def list_environments(self) -> List[str]:
+    def list_environments(self) -> list[str]:
         """List all environments."""
         return list(self._environments.keys())
 
@@ -630,17 +624,17 @@ def sample_batch_test(simple_project):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def create_initial_state() -> Dict[str, Any]:
+def create_initial_state() -> dict[str, Any]:
     """Create initial state for simple graph."""
     return {"messages": [], "count": 0}
 
 
-def create_branching_state(branch: str = "a") -> Dict[str, Any]:
+def create_branching_state(branch: str = "a") -> dict[str, Any]:
     """Create initial state for branching graph."""
     return {"messages": [], "branch": branch, "count": 0}
 
 
-def create_file_state(workspace_path: str) -> Dict[str, Any]:
+def create_file_state(workspace_path: str) -> dict[str, Any]:
     """Create initial state for file processing graph."""
     return {"files_processed": [], "file_count": 0, "workspace_path": workspace_path}
 

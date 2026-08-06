@@ -17,25 +17,24 @@ SOLID Test Principles:
 - Each test has single assertion focus
 """
 
-import pytest
-from unittest.mock import Mock, MagicMock, patch, call
-from typing import Dict, Any, Optional
 import uuid
+from unittest.mock import MagicMock, call
+
+import pytest
 
 from wtb.domain.interfaces.batch_coordinator import (
+    BatchOperationRequest,
+    BatchOperationResult,
     IBatchExecutionCoordinator,
     IExecutionControllerFactory,
     OperationType,
-    BatchOperationRequest,
-    BatchOperationResult,
 )
+from wtb.domain.models.outbox import OutboxEventType
 from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
     ExecutionStatus,
 )
-from wtb.domain.models.outbox import OutboxEventType
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -128,7 +127,9 @@ def mock_controller_factory(mock_controller):
 @pytest.fixture
 def coordinator(mock_uow_factory, mock_controller_factory, mock_state_adapter, mock_file_tracking):
     """Create BatchExecutionCoordinator with mocks."""
-    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+    from wtb.application.services.batch_execution_coordinator import (
+        BatchExecutionCoordinator,
+    )
     
     return BatchExecutionCoordinator(
         uow_factory=mock_uow_factory,
@@ -404,7 +405,9 @@ class TestBatchOperate:
         mock_controller,
     ):
         """Batch should continue processing on individual failures."""
-        from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
         
         # First call succeeds, second fails, third succeeds
         mock_execution_1 = MagicMock(spec=Execution)
@@ -455,7 +458,9 @@ class TestBatchOperate:
         mock_controller,
     ):
         """Batch should stop on first error when stop_on_error=True."""
-        from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
         
         mock_execution = MagicMock(spec=Execution)
         mock_execution.id = "exec-1"
@@ -664,7 +669,9 @@ class TestRollbackCleanupArchitecture:
         mock_file_tracking
     ):
         """Coordinator should accept optional WTBConfig parameter."""
-        from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
         from wtb.config import WTBConfig
         
         config = WTBConfig(
@@ -692,8 +699,11 @@ class TestRollbackCleanupArchitecture:
         mock_file_tracking
     ):
         """Coordinator should NOT have file_cleanup_service parameter."""
-        from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
         import inspect
+
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
         
         sig = inspect.signature(BatchExecutionCoordinator.__init__)
         param_names = list(sig.parameters.keys())
@@ -714,7 +724,9 @@ class TestRollbackCleanupArchitecture:
         mock_execution,
     ):
         """Rollback should include cleanup configuration in outbox event payload."""
-        from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
         from wtb.config import WTBConfig
         
         config = WTBConfig(
@@ -765,7 +777,9 @@ class TestRollbackCleanupArchitecture:
         mock_execution,
     ):
         """Rollback without config should not enable cleanup (opt-in feature)."""
-        from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+        from wtb.application.services.batch_execution_coordinator import (
+            BatchExecutionCoordinator,
+        )
         
         # No config passed
         coordinator = BatchExecutionCoordinator(

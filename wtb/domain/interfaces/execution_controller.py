@@ -6,7 +6,7 @@ Follows Interface Segregation Principle (ISP) by providing focused methods.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass  # For future type hints like CompiledStateGraph
@@ -31,10 +31,10 @@ class IExecutionController(ABC):
     def create_execution(
         self, 
         workflow: TestWorkflow,
-        initial_state: Optional[Dict[str, Any]] = None,
-        breakpoints: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        initial_state: dict[str, Any] | None = None,
+        breakpoints: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        execution_id: str | None = None,
     ) -> Execution:
         """
         Create a new execution for a workflow.
@@ -103,7 +103,7 @@ class IExecutionController(ABC):
     def resume(
         self, 
         execution_id: str, 
-        modified_state: Optional[Dict[str, Any]] = None
+        modified_state: dict[str, Any] | None = None
     ) -> Execution:
         """
         Resume paused execution, optionally with modified state.

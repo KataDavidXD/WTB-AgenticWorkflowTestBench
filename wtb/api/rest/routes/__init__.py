@@ -9,11 +9,11 @@ Provides:
 - /api/v1/health - Health checks
 """
 
-from .workflows import router as workflows_router
-from .executions import router as executions_router
 from .audit import router as audit_router
 from .batch_tests import router as batch_tests_router
+from .executions import router as executions_router
 from .health import router as health_router
+from .workflows import router as workflows_router
 
 __all__ = [
     "workflows_router",

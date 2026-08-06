@@ -1,11 +1,12 @@
 """Workflow repository implementation."""
 
 import json
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import IWorkflowRepository
 from wtb.domain.models import TestWorkflow
+
 from ..models import WorkflowORM
 from .base import BaseRepository
 
@@ -55,7 +56,7 @@ class WorkflowRepository(BaseRepository[TestWorkflow, WorkflowORM], IWorkflowRep
             metadata_=json.dumps(domain.metadata),
         )
     
-    def find_by_name(self, name: str) -> Optional[TestWorkflow]:
+    def find_by_name(self, name: str) -> TestWorkflow | None:
         """Find workflow by name."""
         orm = (
             self._session.query(WorkflowORM)
@@ -64,7 +65,7 @@ class WorkflowRepository(BaseRepository[TestWorkflow, WorkflowORM], IWorkflowRep
         )
         return self._to_domain(orm) if orm else None
     
-    def find_by_version(self, name: str, version: str) -> Optional[TestWorkflow]:
+    def find_by_version(self, name: str, version: str) -> TestWorkflow | None:
         """Find workflow by name and version."""
         orm = (
             self._session.query(WorkflowORM)
@@ -73,7 +74,7 @@ class WorkflowRepository(BaseRepository[TestWorkflow, WorkflowORM], IWorkflowRep
         )
         return self._to_domain(orm) if orm else None
     
-    def list_all(self) -> List[TestWorkflow]:
+    def list_all(self) -> list[TestWorkflow]:
         """List all workflows without pagination."""
         orms = self._session.query(WorkflowORM).all()
         return [self._to_domain(orm) for orm in orms]

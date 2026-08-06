@@ -4,36 +4,34 @@ Pytest fixtures for File Processing tests.
 Shared fixtures for unit and integration tests.
 """
 
-import pytest
-import tempfile
 import os
 import shutil
-from pathlib import Path
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from unittest.mock import MagicMock, Mock
+import tempfile
 import uuid
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
+import pytest
+
+from wtb.domain.events.file_processing_events import (
+    BlobCreatedEvent,
+    FileCommitCreatedEvent,
+    FileRestoredEvent,
 )
 from wtb.domain.interfaces.file_processing_repository import (
     IBlobRepository,
-    IFileCommitRepository,
     ICheckpointFileLinkRepository,
+    IFileCommitRepository,
 )
-from wtb.domain.events.file_processing_events import (
-    FileCommitCreatedEvent,
-    FileRestoredEvent,
-    BlobCreatedEvent,
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
 )
 from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Temporary File Fixtures
@@ -50,7 +48,7 @@ def temp_dir():
 
 
 @pytest.fixture
-def sample_files(temp_dir) -> Dict[str, Path]:
+def sample_files(temp_dir) -> dict[str, Path]:
     """Create sample test files with known content."""
     files = {}
     
@@ -100,7 +98,7 @@ class InMemoryBlobRepository(IBlobRepository):
     """In-memory blob repository for testing."""
     
     def __init__(self):
-        self._storage: Dict[str, bytes] = {}
+        self._storage: dict[str, bytes] = {}
     
     def save(self, content: bytes) -> BlobId:
         """Save content and return content-addressed BlobId."""
@@ -108,7 +106,7 @@ class InMemoryBlobRepository(IBlobRepository):
         self._storage[blob_id.value] = content
         return blob_id
     
-    def get(self, blob_id: BlobId) -> Optional[bytes]:
+    def get(self, blob_id: BlobId) -> bytes | None:
         return self._storage.get(blob_id.value)
     
     def exists(self, blob_id: BlobId) -> bool:
@@ -129,7 +127,7 @@ class InMemoryBlobRepository(IBlobRepository):
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(content)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get storage statistics."""
         total_size = sum(len(content) for content in self._storage.values())
         return {
@@ -138,7 +136,7 @@ class InMemoryBlobRepository(IBlobRepository):
             "total_size_mb": total_size / (1024 * 1024),
         }
     
-    def get_all_ids(self) -> List[BlobId]:
+    def get_all_ids(self) -> list[BlobId]:
         """Helper method for testing - not in interface."""
         return [BlobId(hash_val) for hash_val in self._storage.keys()]
     
@@ -151,16 +149,16 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
     """In-memory file commit repository for testing."""
     
     def __init__(self):
-        self._storage: Dict[str, FileCommit] = {}
-        self._checkpoint_links: Dict[int, str] = {}  # checkpoint_id -> commit_id
+        self._storage: dict[str, FileCommit] = {}
+        self._checkpoint_links: dict[int, str] = {}  # checkpoint_id -> commit_id
     
     def save(self, commit: FileCommit) -> None:
         self._storage[commit.commit_id.value] = commit
     
-    def get_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id(self, commit_id: CommitId) -> FileCommit | None:
         return self._storage.get(commit_id.value)
     
-    def get_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id_without_mementos(self, commit_id: CommitId) -> FileCommit | None:
         """Get commit without loading mementos (optimization for listings)."""
         commit = self._storage.get(commit_id.value)
         if commit:
@@ -175,7 +173,7 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
             )
         return None
     
-    def get_all(self, limit: int = 100, offset: int = 0) -> List[FileCommit]:
+    def get_all(self, limit: int = 100, offset: int = 0) -> list[FileCommit]:
         """Get all commits without mementos, ordered newest first."""
         commits = sorted(
             self._storage.values(),
@@ -184,13 +182,13 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
         )
         return commits[offset:offset + limit]
     
-    def get_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+    def get_by_execution_id(self, execution_id: str) -> list[FileCommit]:
         return [
             commit for commit in self._storage.values()
             if commit.execution_id == execution_id
         ]
     
-    def get_by_checkpoint_id(self, checkpoint_id: int) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: int) -> FileCommit | None:
         """Get commit linked to a checkpoint."""
         commit_id = self._checkpoint_links.get(checkpoint_id)
         if commit_id:
@@ -232,16 +230,16 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
     """In-memory checkpoint file link repository for testing."""
     
     def __init__(self):
-        self._storage: Dict[int, CheckpointFileLink] = {}
+        self._storage: dict[int, CheckpointFileLink] = {}
     
     def add(self, link: CheckpointFileLink) -> None:
         """Add or update a checkpoint-file link (upsert)."""
         self._storage[link.checkpoint_id] = link
     
-    def get_by_checkpoint(self, checkpoint_id: int) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: int) -> CheckpointFileLink | None:
         return self._storage.get(checkpoint_id)
     
-    def get_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
+    def get_by_commit(self, commit_id: CommitId) -> list[CheckpointFileLink]:
         return [
             link for link in self._storage.values()
             if link.commit_id.value == commit_id.value
@@ -268,7 +266,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         """Helper: check if link exists (used by tests)."""
         return checkpoint_id in self._storage
     
-    def list_all(self, limit: int = 100, offset: int = 0) -> List[CheckpointFileLink]:
+    def list_all(self, limit: int = 100, offset: int = 0) -> list[CheckpointFileLink]:
         """Helper: list all links (used by tests)."""
         links = list(self._storage.values())
         return links[offset:offset + limit]
@@ -372,9 +370,9 @@ def execution_context():
 
 
 def create_test_commit(
-    file_paths: List[str],
+    file_paths: list[str],
     message: str = "Test commit",
-    execution_id: Optional[str] = None,
+    execution_id: str | None = None,
 ) -> FileCommit:
     """
     Create a test commit with mementos from file paths.
@@ -403,9 +401,9 @@ def create_test_commit(
 def create_and_save_commit(
     blob_repo: IBlobRepository,
     commit_repo: IFileCommitRepository,
-    file_paths: List[str],
+    file_paths: list[str],
     message: str = "Test commit",
-    execution_id: Optional[str] = None,
+    execution_id: str | None = None,
 ) -> FileCommit:
     """
     Create commit, save blobs, and save commit to repositories.
@@ -429,7 +427,7 @@ def create_and_save_commit(
 @pytest.fixture
 def create_commit_helper(blob_repository, commit_repository):
     """Fixture providing commit creation helper function."""
-    def _create(file_paths: List[str], message: str = "Test", execution_id: str = None):
+    def _create(file_paths: list[str], message: str = "Test", execution_id: str = None):
         return create_and_save_commit(
             blob_repository,
             commit_repository,

@@ -9,15 +9,15 @@ actor checkpoint database without interpreting each other's rows.
 
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import datetime
 import json
-from pathlib import Path
 import sqlite3
 import threading
-from types import SimpleNamespace
-from typing import Any, Dict, Literal, Optional, Union
 import uuid
+from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal, Union
 
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
 from wtb.domain.models import ExecutionState
@@ -39,7 +39,7 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         self.storage_path = Path(storage_path).expanduser().resolve()
         self._config = SimpleNamespace(connection_string=str(self.storage_path))
         self._storage_lock = threading.RLock()
-        self._connection: Optional[sqlite3.Connection] = None
+        self._connection: sqlite3.Connection | None = None
         self._open_storage()
 
     @staticmethod
@@ -146,9 +146,9 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         """Refresh committed rows before execution/session-scoped operations."""
         with self._storage_lock:
             connection = self._require_connection()
-            sessions: Dict[str, Dict[str, Any]] = {}
-            checkpoints: Dict[str, InMemoryCheckpoint] = {}
-            boundaries: Dict[str, InMemoryNodeBoundary] = {}
+            sessions: dict[str, dict[str, Any]] = {}
+            checkpoints: dict[str, InMemoryCheckpoint] = {}
+            boundaries: dict[str, InMemoryNodeBoundary] = {}
 
             for row in connection.execute(
                 """
@@ -224,8 +224,8 @@ class SqliteStateAdapter(InMemoryStateAdapter):
 
     def _refresh_current_session(
         self,
-        session_id: Optional[str],
-        execution_id: Optional[str],
+        session_id: str | None,
+        execution_id: str | None,
     ) -> None:
         self._reload_from_storage()
         self._current_session_id = session_id
@@ -238,7 +238,7 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         self,
         execution_id: str,
         initial_state: ExecutionState,
-    ) -> Optional[str]:
+    ) -> str | None:
         session_id = f"wtb-{execution_id}"
         payload = self._serialize_state(initial_state)
         created_at = datetime.now().isoformat()
@@ -267,7 +267,7 @@ class SqliteStateAdapter(InMemoryStateAdapter):
     def set_current_session(
         self,
         session_id: str,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
     ) -> bool:
         self._reload_from_storage()
         session = self._sessions.get(session_id)
@@ -286,7 +286,7 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         self._step_counter = self._max_step_for_session(session_id)
         return True
 
-    def get_recovery_head(self) -> Optional[Dict[str, Any]]:
+    def get_recovery_head(self) -> dict[str, Any] | None:
         """Return the latest durable node boundary for the active execution.
 
         SQLite insertion order is the recovery order. A completed head is only
@@ -319,7 +319,7 @@ class SqliteStateAdapter(InMemoryStateAdapter):
                     "Latest node boundary does not belong to the active execution"
                 )
 
-            recovered_state: Optional[ExecutionState] = None
+            recovered_state: ExecutionState | None = None
             exit_checkpoint_id = row[4]
             if row[5] == "completed":
                 checkpoint_row = None
@@ -361,8 +361,8 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         state: ExecutionState,
         node_id: str,
         trigger: CheckpointTrigger,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         session_id = self._current_session_id
         execution_id = self._current_execution_id
@@ -518,9 +518,9 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         node_id: str,
         entry_checkpoint_id: str,
         *,
-        expected_predecessor_checkpoint_id: Optional[str] = None,
+        expected_predecessor_checkpoint_id: str | None = None,
         enforce_predecessor: bool = False,
-        resume_claim_id: Optional[str] = None,
+        resume_claim_id: str | None = None,
     ) -> Union[str, Literal[False]]:
         session_id = self._current_session_id
         execution_id = self._current_execution_id
@@ -631,8 +631,8 @@ class SqliteStateAdapter(InMemoryStateAdapter):
         node_id: str,
         *,
         node_status: str,
-        exit_checkpoint_id: Optional[str] = None,
-        error_message: Optional[str] = None,
+        exit_checkpoint_id: str | None = None,
+        error_message: str | None = None,
     ) -> bool:
         """Atomically claim one started boundary's terminal transition."""
         session_id = self._current_session_id

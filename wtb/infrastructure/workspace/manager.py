@@ -30,28 +30,24 @@ import re
 import shutil
 import sys
 import threading
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
+from wtb.domain.events.workspace_events import (
+    OrphanCleanupCompletedEvent,
+    OrphanWorkspaceDetectedEvent,
+    WorkspaceCleanedUpEvent,
+    WorkspaceCreatedEvent,
+)
 from wtb.domain.models.workspace import (
-    Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
+    CleanupReport,
     LinkMethod,
     LinkResult,
     OrphanWorkspace,
-    CleanupReport,
-)
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceActivatedEvent,
-    WorkspaceDeactivatedEvent,
-    WorkspaceCleanedUpEvent,
-    FileSnapshotCreatedEvent,
-    OrphanWorkspaceDetectedEvent,
-    OrphanCleanupCompletedEvent,
+    Workspace,
+    WorkspaceConfig,
+    WorkspaceStrategy,
 )
 
 if TYPE_CHECKING:
@@ -272,7 +268,7 @@ class WorkspaceManager:
         self,
         config: WorkspaceConfig,
         event_bus: Optional["WTBEventBus"] = None,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
     ):
         """
         Initialize WorkspaceManager.
@@ -288,14 +284,14 @@ class WorkspaceManager:
         self._lock = threading.RLock()
         
         # Active workspaces: workspace_id -> Workspace
-        self._workspaces: Dict[str, Workspace] = {}
+        self._workspaces: dict[str, Workspace] = {}
 
         # Immutable physical identity recorded when an isolated workspace is
         # created. Cleanup must match this map before touching the filesystem.
-        self._workspace_roots: Dict[str, Path] = {}
+        self._workspace_roots: dict[str, Path] = {}
         
         # Batch tracking: batch_id -> set of workspace_ids
-        self._batch_workspaces: Dict[str, set] = {}
+        self._batch_workspaces: dict[str, set] = {}
         
         # Anchor every later containment check to one canonical directory.
         configured_base_dir = Path(config.get_base_dir()).absolute()
@@ -340,8 +336,8 @@ class WorkspaceManager:
         batch_id: str,
         variant_name: str,
         execution_id: str,
-        source_paths: Optional[List[Path]] = None,
-        env_spec: Optional[Any] = None,  # EnvSpec for venv
+        source_paths: list[Path] | None = None,
+        env_spec: Any | None = None,  # EnvSpec for venv
     ) -> Workspace:
         """
         Create isolated workspace for variant execution.
@@ -370,7 +366,7 @@ class WorkspaceManager:
         
         import uuid
         workspace_id = f"ws-{uuid.uuid4().hex[:12]}"
-        workspace_dir: Optional[Path] = None
+        workspace_dir: Path | None = None
         workspace_dir_created = False
         
         with self._lock:
@@ -396,7 +392,7 @@ class WorkspaceManager:
                 # Track file copying stats
                 file_count = 0
                 total_size = 0
-                link_results: List[LinkResult] = []
+                link_results: list[LinkResult] = []
                 
                 # Copy/link source files
                 if source_paths:
@@ -477,7 +473,7 @@ class WorkspaceManager:
             except Exception as e:
                 # Only remove a directory this call created, and revalidate it
                 # immediately before deletion to avoid following redirects.
-                cleanup_dir: Optional[Path] = None
+                cleanup_dir: Path | None = None
                 if workspace_dir_created and workspace_dir is not None:
                     try:
                         cleanup_dir = self._managed_path(workspace_dir)
@@ -522,7 +518,7 @@ class WorkspaceManager:
         source_workspace_id: str,
         fork_checkpoint_id: str,
         new_execution_id: str,
-        file_commit_id: Optional[str] = None,
+        file_commit_id: str | None = None,
     ) -> Workspace:
         """
         Create workspace for a fork/branch operation.
@@ -568,7 +564,7 @@ class WorkspaceManager:
     # Workspace Retrieval
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_workspace(self, workspace_id: str) -> Optional[Workspace]:
+    def get_workspace(self, workspace_id: str) -> Workspace | None:
         """
         Get workspace by ID.
         
@@ -581,7 +577,7 @@ class WorkspaceManager:
         with self._lock:
             return self._workspaces.get(workspace_id)
     
-    def get_workspace_by_execution(self, execution_id: str) -> Optional[Workspace]:
+    def get_workspace_by_execution(self, execution_id: str) -> Workspace | None:
         """
         Get workspace by execution ID.
         
@@ -599,8 +595,8 @@ class WorkspaceManager:
     
     def list_workspaces(
         self,
-        batch_id: Optional[str] = None,
-    ) -> List[Workspace]:
+        batch_id: str | None = None,
+    ) -> list[Workspace]:
         """
         List all workspaces, optionally filtered by batch.
         
@@ -656,7 +652,7 @@ class WorkspaceManager:
             
             files_removed = 0
             space_freed = 0
-            workspace_root: Optional[Path] = None
+            workspace_root: Path | None = None
             if workspace.strategy is not WorkspaceStrategy.NONE:
                 expected_root = self._workspace_roots.get(workspace_id)
                 if expected_root is None:
@@ -771,7 +767,7 @@ class WorkspaceManager:
         Returns:
             CleanupReport with statistics
         """
-        orphans: List[OrphanWorkspace] = []
+        orphans: list[OrphanWorkspace] = []
         grace_hours = self._config.orphan_cleanup_grace_hours
         
         # Scan for orphan workspaces
@@ -951,7 +947,7 @@ class WorkspaceManager:
     # Statistics
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get workspace manager statistics.
         

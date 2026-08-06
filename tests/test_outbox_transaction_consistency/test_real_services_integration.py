@@ -12,15 +12,13 @@ This test file verifies system behavior with:
 Run with: pytest tests/test_outbox_transaction_consistency/test_real_services_integration.py -v
 """
 
-import pytest
-import uuid
-import asyncio
 import socket
-from datetime import datetime
+import uuid
+
+import pytest
 
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper: Check Service Availability
@@ -207,9 +205,10 @@ class TestRealLangGraphIntegration:
     
     def test_real_sqlite_checkpointer_persistence(self, checkpoint_db_path):
         """LangGraph SQLite checkpointer should persist state."""
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        from langgraph.graph import StateGraph, END
         from typing import TypedDict
+
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        from langgraph.graph import END, StateGraph
         
         class State(TypedDict):
             count: int
@@ -241,9 +240,10 @@ class TestRealLangGraphIntegration:
     
     def test_real_checkpoint_history(self, checkpoint_db_path):
         """Checkpoint history should work with real SQLite."""
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        from langgraph.graph import StateGraph, END
         from typing import TypedDict
+
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        from langgraph.graph import END, StateGraph
         
         class State(TypedDict):
             count: int
@@ -287,8 +287,9 @@ class TestRealVenvManagerIntegration:
         if not is_venv_manager_available():
             pytest.skip("UV Venv Manager not running on localhost:50051")
         
-        from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
         import grpc
+
+        from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
         
         provider = GrpcEnvironmentProvider("localhost:50051", timeout_seconds=60)
         

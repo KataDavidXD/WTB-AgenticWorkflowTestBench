@@ -20,17 +20,19 @@ Usage:
     store = LangGraphCheckpointStore.create_for_production("postgresql://...")
 """
 
-from dataclasses import dataclass
-from typing import Optional, List, Any, Dict
-from datetime import datetime
 import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
-from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from wtb.domain.interfaces.checkpoint_store import ICheckpointStore, ICheckpointStoreFactory
+from wtb.domain.interfaces.checkpoint_store import (
+    ICheckpointStore,
+    ICheckpointStoreFactory,
+)
 from wtb.domain.models.checkpoint import (
     Checkpoint,
     CheckpointId,
@@ -44,7 +46,7 @@ logger = logging.getLogger(__name__)
 class LangGraphCheckpointConfig:
     """Configuration for LangGraph checkpoint store."""
     checkpointer_type: str = "memory"  # "memory", "sqlite", "postgres"
-    connection_string: Optional[str] = None
+    connection_string: str | None = None
     
     @classmethod
     def for_testing(cls) -> "LangGraphCheckpointConfig":
@@ -82,7 +84,7 @@ class LangGraphCheckpointStore(ICheckpointStore):
     def __init__(
         self, 
         checkpointer: BaseCheckpointSaver,
-        graph: Optional[CompiledStateGraph] = None
+        graph: CompiledStateGraph | None = None
     ):
         """
         Initialize with checkpointer and optional compiled graph.
@@ -103,8 +105,9 @@ class LangGraphCheckpointStore(ICheckpointStore):
     def create_for_development(cls, db_path: str = "data/wtb_checkpoints.db") -> "LangGraphCheckpointStore":
         """Create store with SqliteSaver for development."""
         try:
-            from langgraph.checkpoint.sqlite import SqliteSaver
             import sqlite3
+
+            from langgraph.checkpoint.sqlite import SqliteSaver
             
             conn = sqlite3.connect(db_path, check_same_thread=False)
             checkpointer = SqliteSaver(conn)
@@ -165,9 +168,9 @@ class LangGraphCheckpointStore(ICheckpointStore):
             return thread_id[4:]
         return thread_id
     
-    def _get_config(self, execution_id: str, checkpoint_id: Optional[str] = None) -> Dict[str, Any]:
+    def _get_config(self, execution_id: str, checkpoint_id: str | None = None) -> dict[str, Any]:
         """Build LangGraph config."""
-        config: Dict[str, Any] = {
+        config: dict[str, Any] = {
             "configurable": {
                 "thread_id": self._to_thread_id(execution_id)
             }
@@ -249,7 +252,7 @@ class LangGraphCheckpointStore(ICheckpointStore):
             logger.error(f"Failed to save checkpoint: {e}")
             raise
     
-    def load(self, checkpoint_id: CheckpointId) -> Optional[Checkpoint]:
+    def load(self, checkpoint_id: CheckpointId) -> Checkpoint | None:
         """
         Load checkpoint by ID.
         
@@ -268,7 +271,7 @@ class LangGraphCheckpointStore(ICheckpointStore):
         )
         return None
     
-    def load_by_execution(self, execution_id: str) -> List[Checkpoint]:
+    def load_by_execution(self, execution_id: str) -> list[Checkpoint]:
         """Load all checkpoints for an execution."""
         if not self._graph:
             logger.warning("Cannot load checkpoints without graph")
@@ -299,7 +302,7 @@ class LangGraphCheckpointStore(ICheckpointStore):
             checkpoints=checkpoints,
         )
     
-    def load_latest(self, execution_id: str) -> Optional[Checkpoint]:
+    def load_latest(self, execution_id: str) -> Checkpoint | None:
         """Load the most recent checkpoint for an execution."""
         if not self._graph:
             logger.warning("Cannot load checkpoint without graph")
@@ -356,7 +359,7 @@ class LangGraphCheckpointStore(ICheckpointStore):
         self, 
         execution_id: str, 
         checkpoint_id: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Get state values at a specific checkpoint.
         
@@ -408,7 +411,7 @@ class LangGraphCheckpointStore(ICheckpointStore):
 class LangGraphCheckpointStoreFactory(ICheckpointStoreFactory):
     """Factory for creating LangGraphCheckpointStore instances."""
     
-    def __init__(self, config: Optional[LangGraphCheckpointConfig] = None):
+    def __init__(self, config: LangGraphCheckpointConfig | None = None):
         """
         Initialize factory with optional config.
         

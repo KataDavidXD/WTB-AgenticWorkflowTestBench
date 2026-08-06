@@ -7,40 +7,35 @@ covering: run, resume, rollback, fork, batch, and negative cases.
 Uses real LangGraph graphs from wtb.testing.fixtures.
 """
 
-import pytest
-from typing import Optional
-from langgraph.graph import StateGraph, END
 
+import pytest
+from langgraph.graph import END, StateGraph
+
+from wtb.application.services.execution_controller import (
+    DefaultNodeExecutor,
+    ExecutionController,
+)
 from wtb.domain.models.workflow import (
-    Execution,
     ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.domain.models.outbox import OutboxEventType
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
-from wtb.application.services.execution_controller import (
-    ExecutionController,
-    DefaultNodeExecutor,
-)
-from wtb.application.services.outbox_controller_decorator import (
-    OutboxExecutionControllerDecorator,
-)
 from wtb.testing.fixtures import (
     MinimalState,
-    create_minimal_graph,
     create_conditional_graph,
+    create_minimal_graph,
 )
 
 
 def _try_import_langgraph():
     try:
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
             LANGGRAPH_AVAILABLE,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         if not LANGGRAPH_AVAILABLE:
             pytest.skip("LangGraph not available")
@@ -100,7 +95,7 @@ def setup():
     return controller, adapter, uow, workflow
 
 
-def _initial_state(value: int = 0, route: Optional[str] = None) -> dict:
+def _initial_state(value: int = 0, route: str | None = None) -> dict:
     return {"value": value, "messages": [], "route": route}
 
 

@@ -4,28 +4,26 @@ Tests for WTBAuditTrail and AuditEventListener.
 Tests audit entry creation, event recording, and display formatting.
 """
 
-import pytest
 from datetime import datetime, timedelta
 
-from wtb.infrastructure.events.wtb_audit_trail import (
-    WTBAuditEventType,
-    WTBAuditSeverity,
-    WTBAuditEntry,
-    WTBAuditTrail,
-    AuditEventListener,
-)
-from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 from wtb.domain.events import (
-    ExecutionStartedEvent,
+    CheckpointCreatedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    ExecutionPausedEvent,
-    NodeStartedEvent,
+    ExecutionStartedEvent,
     NodeCompletedEvent,
     NodeFailedEvent,
-    CheckpointCreatedEvent,
+    NodeStartedEvent,
     RollbackPerformedEvent,
 )
+from wtb.infrastructure.events.wtb_audit_trail import (
+    AuditEventListener,
+    WTBAuditEntry,
+    WTBAuditEventType,
+    WTBAuditSeverity,
+    WTBAuditTrail,
+)
+from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 
 
 class TestWTBAuditEntry:

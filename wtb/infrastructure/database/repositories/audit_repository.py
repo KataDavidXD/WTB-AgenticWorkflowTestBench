@@ -2,14 +2,15 @@
 SQLAlchemy Audit Log Repository Implementation.
 """
 
-from typing import List, Optional
 import json
-from sqlalchemy.orm import Session
+
 from sqlalchemy import desc
+from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import IAuditLogRepository
 from wtb.domain.models.audit import AuditEntry
 from wtb.infrastructure.database.models import AuditLogORM
+
 from .base import BaseRepository
 
 
@@ -50,7 +51,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[AuditEntry, AuditLogORM], IAud
             duration_ms=entity.duration_ms,
         )
     
-    def append_logs(self, execution_id: str, logs: List[AuditEntry]) -> None:
+    def append_logs(self, execution_id: str, logs: list[AuditEntry]) -> None:
         """
         Append a batch of logs for an execution.
         
@@ -68,7 +69,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[AuditEntry, AuditLogORM], IAud
         
         self._session.add_all(orms)
     
-    def find_by_execution(self, execution_id: str) -> List[AuditEntry]:
+    def find_by_execution(self, execution_id: str) -> list[AuditEntry]:
         """
         Get all logs for an execution.
         
@@ -86,7 +87,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[AuditEntry, AuditLogORM], IAud
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def get(self, id: str) -> Optional[AuditEntry]:
+    def get(self, id: str) -> AuditEntry | None:
         """Get by ID (not typically used for logs, but required by interface)."""
         orm = self._session.query(AuditLogORM).filter(AuditLogORM.id == int(id)).first()
         return self._to_domain(orm) if orm else None
@@ -95,7 +96,7 @@ class SQLAlchemyAuditLogRepository(BaseRepository[AuditEntry, AuditLogORM], IAud
         """Check if exists."""
         return self._session.query(AuditLogORM).filter(AuditLogORM.id == int(id)).count() > 0
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[AuditEntry]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[AuditEntry]:
         """List logs (recent first)."""
         orms = (
             self._session.query(AuditLogORM)

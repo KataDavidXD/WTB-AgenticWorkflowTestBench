@@ -27,32 +27,6 @@ Usage:
     print(execution.status)  # ExecutionStatus.COMPLETED
 """
 
-from .workflow_project import (
-    WorkflowProject,
-    FileTrackingConfig,
-    EnvironmentConfig,
-    ExecutionConfig,
-    EnvSpec,
-    RayConfig,
-    NodeResourceConfig,
-    WorkspaceIsolationConfig,
-    PauseStrategyConfig,
-    NodeVariant,
-    WorkflowVariant,
-)
-from .test_bench import (
-    # Main classes
-    WTBTestBench,
-    WTBTestBenchBuilder,
-    # SDK operation results (thin DTOs, not domain models)
-    RollbackResult,
-    ForkResult,
-    BatchRollbackResult,   # NEW v1.8: Batch rollback result
-    BatchForkResult,       # NEW v1.8: Batch fork result
-    # Deprecated
-    ExecutionControllerBuilder,
-)
-
 # Re-export coordinator for advanced use (v1.8)
 from wtb.application.services.batch_execution_coordinator import (
     BatchExecutionCoordinator,
@@ -62,11 +36,37 @@ from wtb.domain.interfaces.batch_coordinator import (
     BatchOperationResult,
     OperationType,
 )
+from wtb.domain.models.batch_test import BatchTest, BatchTestResult, BatchTestStatus
+from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
 
 # Re-export domain models for convenience (single import location)
 from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
-from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
-from wtb.domain.models.batch_test import BatchTest, BatchTestResult, BatchTestStatus
+
+from .test_bench import (
+    BatchForkResult,  # NEW v1.8: Batch fork result
+    BatchRollbackResult,  # NEW v1.8: Batch rollback result
+    # Deprecated
+    ExecutionControllerBuilder,
+    ForkResult,
+    # SDK operation results (thin DTOs, not domain models)
+    RollbackResult,
+    # Main classes
+    WTBTestBench,
+    WTBTestBenchBuilder,
+)
+from .workflow_project import (
+    EnvironmentConfig,
+    EnvSpec,
+    ExecutionConfig,
+    FileTrackingConfig,
+    NodeResourceConfig,
+    NodeVariant,
+    PauseStrategyConfig,
+    RayConfig,
+    WorkflowProject,
+    WorkflowVariant,
+    WorkspaceIsolationConfig,
+)
 
 __all__ = [
     # Main SDK classes

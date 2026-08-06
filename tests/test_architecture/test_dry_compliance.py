@@ -15,11 +15,11 @@ SOLID Compliance:
 - DIP: Repositories depend on mapper abstractions
 """
 
-import pytest
 import hashlib
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BlobStorageCore Tests
@@ -175,9 +175,10 @@ class TestOutboxMapper:
     
     def test_to_domain_parses_payload(self):
         """Verify payload JSON parsing."""
-        from wtb.infrastructure.database.mappers import OutboxMapper
-        from wtb.domain.models.outbox import OutboxEventType, OutboxStatus
         from datetime import datetime
+
+        from wtb.domain.models.outbox import OutboxEventType, OutboxStatus
+        from wtb.infrastructure.database.mappers import OutboxMapper
         
         # Create mock ORM object
         mock_orm = MagicMock()
@@ -202,8 +203,8 @@ class TestOutboxMapper:
     
     def test_to_orm_dict_serializes_payload(self):
         """Verify payload JSON serialization."""
-        from wtb.infrastructure.database.mappers import OutboxMapper
         from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+        from wtb.infrastructure.database.mappers import OutboxMapper
         
         event = OutboxEvent(
             event_type=OutboxEventType.CHECKPOINT_CREATE,
@@ -221,9 +222,10 @@ class TestOutboxMapper:
     
     def test_update_orm_from_event(self):
         """Verify ORM update from event."""
-        from wtb.infrastructure.database.mappers import OutboxMapper
-        from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
         from datetime import datetime
+
+        from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
+        from wtb.infrastructure.database.mappers import OutboxMapper
         
         mock_orm = MagicMock()
         
@@ -255,6 +257,7 @@ class TestRepositoryUsesMappers:
     def test_sync_blob_repo_uses_blob_storage_core(self):
         """Sync blob repository uses BlobStorageCore."""
         import inspect
+
         from wtb.infrastructure.database.repositories.file_processing_repository import (
             SQLAlchemyBlobRepository,
         )
@@ -268,6 +271,7 @@ class TestRepositoryUsesMappers:
     def test_async_blob_repo_uses_blob_storage_core(self):
         """Async blob repository uses BlobStorageCore."""
         import inspect
+
         from wtb.infrastructure.database.async_repositories.async_file_processing_repository import (
             AsyncSQLAlchemyBlobRepository,
         )
@@ -281,6 +285,7 @@ class TestRepositoryUsesMappers:
     def test_sync_outbox_repo_uses_outbox_mapper(self):
         """Sync outbox repository uses OutboxMapper."""
         import inspect
+
         from wtb.infrastructure.database.repositories.outbox_repository import (
             SQLAlchemyOutboxRepository,
         )
@@ -293,6 +298,7 @@ class TestRepositoryUsesMappers:
     def test_async_outbox_repo_uses_outbox_mapper(self):
         """Async outbox repository uses OutboxMapper."""
         import inspect
+
         from wtb.infrastructure.database.async_repositories.async_outbox_repository import (
             AsyncOutboxRepository,
         )
@@ -305,6 +311,7 @@ class TestRepositoryUsesMappers:
     def test_sync_file_commit_repo_uses_mapper(self):
         """Sync file commit repository uses FileCommitMapper."""
         import inspect
+
         from wtb.infrastructure.database.repositories.file_processing_repository import (
             SQLAlchemyFileCommitRepository,
         )
@@ -316,6 +323,7 @@ class TestRepositoryUsesMappers:
     def test_async_file_commit_repo_uses_mapper(self):
         """Async file commit repository uses FileCommitMapper."""
         import inspect
+
         from wtb.infrastructure.database.async_repositories.async_file_processing_repository import (
             AsyncSQLAlchemyFileCommitRepository,
         )
@@ -337,9 +345,9 @@ class TestSOLIDCompliance:
         """Each mapper handles only one domain model."""
         from wtb.infrastructure.database.mappers import (
             BlobStorageCore,
-            OutboxMapper,
-            FileCommitMapper,
             CheckpointFileLinkMapper,
+            FileCommitMapper,
+            OutboxMapper,
         )
         
         # BlobStorageCore: only blob storage logic
@@ -380,6 +388,7 @@ class TestSOLIDCompliance:
     def test_dip_repositories_depend_on_mappers(self):
         """Repositories depend on mapper abstractions, not inline logic."""
         import inspect
+
         from wtb.infrastructure.database.repositories.file_processing_repository import (
             SQLAlchemyBlobRepository,
             SQLAlchemyFileCommitRepository,

@@ -13,36 +13,22 @@ Design Reference:
 - docs/file_processing/ARCHITECTURE.md
 """
 
+import hashlib
 import json
 import os
-import shutil
 import sys
-import tempfile
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
 import uuid
-import hashlib
+from pathlib import Path
 
 import pytest
 
 from wtb.domain.models.workspace import (
-    Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
     LinkMethod,
-    LinkResult,
-)
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    FileSnapshotCreatedEvent,
+    Workspace,
 )
 from wtb.infrastructure.workspace.manager import (
-    WorkspaceManager,
     create_file_link,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test: File Link Operations

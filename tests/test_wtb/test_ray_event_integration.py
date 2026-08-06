@@ -12,13 +12,9 @@ Test Categories:
 - Transaction Consistency: ACID properties
 """
 
-import pytest
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-from unittest.mock import Mock, MagicMock, patch
 import threading
 import time
-
+from unittest.mock import MagicMock, Mock
 
 # ═══════════════════════════════════════════════════════════════
 # Ray Event Domain Models Tests
@@ -98,10 +94,10 @@ class TestRayEventModels:
     def test_ray_event_inherits_from_wtb_event(self):
         """Test all Ray events inherit from WTBEvent."""
         from wtb.domain.events import (
-            WTBEvent,
-            RayBatchTestStartedEvent,
             RayBatchTestCompletedEvent,
+            RayBatchTestStartedEvent,
             RayVariantExecutionCompletedEvent,
+            WTBEvent,
         )
         
         assert issubclass(RayBatchTestStartedEvent, WTBEvent)
@@ -115,7 +111,7 @@ class TestRayEventSerialization:
     def test_serialize_ray_batch_test_started(self):
         """Test serialization of RayBatchTestStartedEvent."""
         from wtb.domain.events import RayBatchTestStartedEvent
-        from wtb.infrastructure.events import serialize_ray_event, deserialize_ray_event
+        from wtb.infrastructure.events import serialize_ray_event
         
         event = RayBatchTestStartedEvent(
             batch_test_id="bt-1",
@@ -136,7 +132,7 @@ class TestRayEventSerialization:
     def test_deserialize_ray_batch_test_started(self):
         """Test deserialization of RayBatchTestStartedEvent."""
         from wtb.domain.events import RayBatchTestStartedEvent
-        from wtb.infrastructure.events import serialize_ray_event, deserialize_ray_event
+        from wtb.infrastructure.events import deserialize_ray_event, serialize_ray_event
         
         original = RayBatchTestStartedEvent(
             batch_test_id="bt-1",
@@ -158,15 +154,15 @@ class TestRayEventSerialization:
     def test_serialization_roundtrip_all_ray_events(self):
         """Test serialization roundtrip for all Ray event types."""
         from wtb.domain.events import (
-            RayBatchTestStartedEvent,
+            RayActorPoolCreatedEvent,
             RayBatchTestCompletedEvent,
             RayBatchTestFailedEvent,
-            RayVariantExecutionStartedEvent,
+            RayBatchTestStartedEvent,
             RayVariantExecutionCompletedEvent,
             RayVariantExecutionFailedEvent,
-            RayActorPoolCreatedEvent,
+            RayVariantExecutionStartedEvent,
         )
-        from wtb.infrastructure.events import serialize_ray_event, deserialize_ray_event
+        from wtb.infrastructure.events import deserialize_ray_event, serialize_ray_event
         
         events = [
             RayBatchTestStartedEvent(batch_test_id="bt-1", workflow_id="wf-1"),
@@ -208,7 +204,7 @@ class TestRayEventBridge:
     
     def test_bridge_creation_without_outbox(self):
         """Test bridge creation without outbox pattern."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(
@@ -221,8 +217,8 @@ class TestRayEventBridge:
     
     def test_bridge_publishes_to_event_bus(self):
         """Test bridge publishes events to event bus."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayBatchTestStartedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(
@@ -247,7 +243,7 @@ class TestRayEventBridge:
     
     def test_bridge_tracks_batch_start_time(self):
         """Test bridge tracks batch test start times."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
@@ -265,8 +261,8 @@ class TestRayEventBridge:
     
     def test_bridge_calculates_duration_on_completion(self):
         """Test bridge calculates duration on batch completion."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayBatchTestCompletedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
@@ -298,8 +294,11 @@ class TestRayEventBridge:
     
     def test_bridge_variant_execution_events(self):
         """Test bridge emits variant execution events."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
-        from wtb.domain.events import RayVariantExecutionStartedEvent, RayVariantExecutionCompletedEvent
+        from wtb.domain.events import (
+            RayVariantExecutionCompletedEvent,
+            RayVariantExecutionStartedEvent,
+        )
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
@@ -334,7 +333,7 @@ class TestRayEventBridge:
     
     def test_bridge_cleanup_removes_tracking(self):
         """Test bridge cleanup removes batch tracking data."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
@@ -356,8 +355,8 @@ class TestRayEventBridge:
     
     def test_bridge_thread_safety(self):
         """Test bridge is thread-safe for concurrent access."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayVariantExecutionCompletedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
@@ -391,7 +390,7 @@ class TestRayEventBridgeWithOutbox:
     
     def test_bridge_with_outbox_creates_outbox_event(self):
         """Test bridge with outbox creates outbox events."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         # Mock UoW and outbox
         mock_uow = MagicMock()
@@ -421,7 +420,7 @@ class TestRayEventBridgeWithOutbox:
     
     def test_bridge_with_outbox_commits_transaction(self):
         """Test bridge with outbox commits transaction."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         mock_uow = MagicMock()
         mock_uow.__enter__ = Mock(return_value=mock_uow)
@@ -448,8 +447,8 @@ class TestRayEventBridgeWithOutbox:
     
     def test_bridge_batch_publish(self):
         """Test bridge can publish multiple events atomically."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayVariantExecutionCompletedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         mock_uow = MagicMock()
         mock_uow.__enter__ = Mock(return_value=mock_uow)
@@ -489,8 +488,8 @@ class TestWTBAuditTrailRayEvents:
     
     def test_audit_trail_records_ray_batch_test_started(self):
         """Test audit trail records RayBatchTestStartedEvent."""
-        from wtb.infrastructure.events import WTBAuditTrail, WTBAuditEventType
         from wtb.domain.events import RayBatchTestStartedEvent
+        from wtb.infrastructure.events import WTBAuditEventType, WTBAuditTrail
         
         trail = WTBAuditTrail()
         
@@ -511,8 +510,12 @@ class TestWTBAuditTrailRayEvents:
     
     def test_audit_trail_records_ray_batch_test_completed(self):
         """Test audit trail records RayBatchTestCompletedEvent."""
-        from wtb.infrastructure.events import WTBAuditTrail, WTBAuditEventType, WTBAuditSeverity
         from wtb.domain.events import RayBatchTestCompletedEvent
+        from wtb.infrastructure.events import (
+            WTBAuditEventType,
+            WTBAuditSeverity,
+            WTBAuditTrail,
+        )
         
         trail = WTBAuditTrail()
         
@@ -535,8 +538,12 @@ class TestWTBAuditTrailRayEvents:
     
     def test_audit_trail_records_ray_batch_test_failed(self):
         """Test audit trail records RayBatchTestFailedEvent."""
-        from wtb.infrastructure.events import WTBAuditTrail, WTBAuditEventType, WTBAuditSeverity
         from wtb.domain.events import RayBatchTestFailedEvent
+        from wtb.infrastructure.events import (
+            WTBAuditEventType,
+            WTBAuditSeverity,
+            WTBAuditTrail,
+        )
         
         trail = WTBAuditTrail()
         
@@ -557,12 +564,12 @@ class TestWTBAuditTrailRayEvents:
     
     def test_audit_trail_records_ray_variant_events(self):
         """Test audit trail records variant execution events."""
-        from wtb.infrastructure.events import WTBAuditTrail, WTBAuditEventType
         from wtb.domain.events import (
-            RayVariantExecutionStartedEvent,
             RayVariantExecutionCompletedEvent,
             RayVariantExecutionFailedEvent,
+            RayVariantExecutionStartedEvent,
         )
+        from wtb.infrastructure.events import WTBAuditEventType, WTBAuditTrail
         
         trail = WTBAuditTrail()
         
@@ -601,12 +608,12 @@ class TestWTBAuditTrailRayEvents:
     
     def test_audit_trail_records_ray_actor_events(self):
         """Test audit trail records actor lifecycle events."""
-        from wtb.infrastructure.events import WTBAuditTrail, WTBAuditEventType
         from wtb.domain.events import (
-            RayActorPoolCreatedEvent,
-            RayActorInitializedEvent,
             RayActorFailedEvent,
+            RayActorInitializedEvent,
+            RayActorPoolCreatedEvent,
         )
+        from wtb.infrastructure.events import WTBAuditEventType, WTBAuditTrail
         
         trail = WTBAuditTrail()
         
@@ -644,13 +651,16 @@ class TestAuditEventListenerRayEvents:
     
     def test_listener_auto_records_ray_events(self):
         """Test AuditEventListener automatically records Ray events."""
+        from wtb.domain.events import (
+            RayBatchTestCompletedEvent,
+            RayBatchTestStartedEvent,
+        )
         from wtb.infrastructure.events import (
-            WTBEventBus,
-            WTBAuditTrail,
             AuditEventListener,
             WTBAuditEventType,
+            WTBAuditTrail,
+            WTBEventBus,
         )
-        from wtb.domain.events import RayBatchTestStartedEvent, RayBatchTestCompletedEvent
         
         event_bus = WTBEventBus()
         trail = WTBAuditTrail()
@@ -766,11 +776,11 @@ class TestGlobalRayEventBridge:
     def test_set_and_get_ray_event_bridge(self):
         """Test setting and getting global bridge."""
         from wtb.infrastructure.events import (
-            WTBEventBus,
             RayEventBridge,
+            WTBEventBus,
             get_ray_event_bridge,
-            set_ray_event_bridge,
             reset_ray_event_bridge,
+            set_ray_event_bridge,
         )
         
         reset_ray_event_bridge()
@@ -796,11 +806,11 @@ class TestRayEventIntegration:
     def test_full_batch_test_event_flow(self):
         """Test full event flow for a batch test simulation."""
         from wtb.infrastructure.events import (
-            WTBEventBus,
-            WTBAuditTrail,
             AuditEventListener,
             RayEventBridge,
             WTBAuditEventType,
+            WTBAuditTrail,
+            WTBEventBus,
         )
         
         # Setup
@@ -882,11 +892,10 @@ class TestRayEventIntegration:
     def test_batch_test_with_failures(self):
         """Test event flow with variant failures."""
         from wtb.infrastructure.events import (
-            WTBEventBus,
-            WTBAuditTrail,
             AuditEventListener,
             RayEventBridge,
-            WTBAuditSeverity,
+            WTBAuditTrail,
+            WTBEventBus,
         )
         
         event_bus = WTBEventBus()

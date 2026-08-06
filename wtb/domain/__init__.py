@@ -8,9 +8,7 @@ This layer contains:
 - Domain Services: Pure domain logic
 """
 
-from . import models
-from . import interfaces
-from . import events
+from . import events, interfaces, models
 
 __all__ = [
     "models",

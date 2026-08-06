@@ -1,1 +1,3 @@
-import wtb; print(wtb.__version__)
+import wtb
+
+print(wtb.__version__)

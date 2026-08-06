@@ -1,11 +1,12 @@
 """Execution repository implementation."""
 
 import json
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import IExecutionRepository
 from wtb.domain.models import Execution, ExecutionState, ExecutionStatus
+
 from ..models import ExecutionORM
 from .base import BaseRepository
 
@@ -76,7 +77,7 @@ class ExecutionRepository(BaseRepository[Execution, ExecutionORM], IExecutionRep
             metadata_=json.dumps(domain.metadata),
         )
     
-    def find_by_workflow(self, workflow_id: str) -> List[Execution]:
+    def find_by_workflow(self, workflow_id: str) -> list[Execution]:
         """Find all executions for a workflow."""
         orms = (
             self._session.query(ExecutionORM)
@@ -86,7 +87,7 @@ class ExecutionRepository(BaseRepository[Execution, ExecutionORM], IExecutionRep
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_by_status(self, status: ExecutionStatus) -> List[Execution]:
+    def find_by_status(self, status: ExecutionStatus) -> list[Execution]:
         """Find executions by status."""
         orms = (
             self._session.query(ExecutionORM)
@@ -96,7 +97,7 @@ class ExecutionRepository(BaseRepository[Execution, ExecutionORM], IExecutionRep
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_running(self) -> List[Execution]:
+    def find_running(self) -> list[Execution]:
         """Find all currently running executions."""
         return self.find_by_status(ExecutionStatus.RUNNING)
 

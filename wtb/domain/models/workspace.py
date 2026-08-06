@@ -21,16 +21,15 @@ Related Documents:
 - docs/issues/WORKSPACE_ISOLATION_DESIGN.md
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 import hashlib
 import json
 import os
 import sys
-import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Optional
 
 
 class WorkspaceStrategy(Enum):
@@ -78,7 +77,7 @@ class WorkspaceConfig:
     strategy: WorkspaceStrategy = WorkspaceStrategy.WORKSPACE
     
     # Paths
-    base_dir: Optional[Path] = None       # Default: system temp
+    base_dir: Path | None = None       # Default: system temp
     
     # Lifecycle
     cleanup_on_complete: bool = True      # Auto-cleanup on success
@@ -102,7 +101,7 @@ class WorkspaceConfig:
         import tempfile
         return Path(tempfile.gettempdir()) / "wtb_workspaces"
     
-    def validate_cross_partition(self, source_paths: List[Path]) -> List[Path]:
+    def validate_cross_partition(self, source_paths: list[Path]) -> list[Path]:
         """
         Check for cross-partition sources on Windows.
         
@@ -157,19 +156,19 @@ class Workspace:
     strategy: WorkspaceStrategy = WorkspaceStrategy.WORKSPACE
     
     # Source tracking
-    source_snapshot_commit_id: Optional[str] = None
-    source_paths: List[str] = field(default_factory=list)
+    source_snapshot_commit_id: str | None = None
+    source_paths: list[str] = field(default_factory=list)
     
     # Venv tracking (Phase V1)
-    venv_spec_hash: Optional[str] = None
-    venv_commit_id: Optional[str] = None
+    venv_spec_hash: str | None = None
+    venv_commit_id: str | None = None
     
     # Statistics
     file_count: int = 0
     total_size_bytes: int = 0
     
     # Internal state
-    _original_cwd: Optional[Path] = field(default=None, repr=False)
+    _original_cwd: Path | None = field(default=None, repr=False)
     _is_active: bool = field(default=False, repr=False)
     
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -252,7 +251,7 @@ class Workspace:
     # Path Operations
     # ═══════════════════════════════════════════════════════════════════════════════
     
-    def get_relative_path(self, absolute_path: Path) -> Optional[Path]:
+    def get_relative_path(self, absolute_path: Path) -> Path | None:
         """
         Get path relative to workspace root.
         
@@ -297,9 +296,9 @@ class Workspace:
     
     def write_output_files(
         self, 
-        output_files: Dict[str, str],
-        subdirectory: Optional[str] = None,
-    ) -> List[Path]:
+        output_files: dict[str, str],
+        subdirectory: str | None = None,
+    ) -> list[Path]:
         """
         Write output files from state to the workspace output directory.
         
@@ -330,7 +329,7 @@ class Workspace:
             target_dir = target_dir / subdirectory
         target_dir.mkdir(parents=True, exist_ok=True)
         
-        written_paths: List[Path] = []
+        written_paths: list[Path] = []
         
         for filename, content in output_files.items():
             # Sanitize filename (remove path separators for security)
@@ -357,7 +356,7 @@ class Workspace:
         
         return written_paths
     
-    def collect_output_file_paths(self) -> List[Path]:
+    def collect_output_file_paths(self) -> list[Path]:
         """
         Collect all files in the output directory.
         
@@ -373,7 +372,7 @@ class Workspace:
     # Serialization
     # ═══════════════════════════════════════════════════════════════════════════════
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage/transmission."""
         return {
             "workspace_id": self.workspace_id,
@@ -392,7 +391,7 @@ class Workspace:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Workspace":
+    def from_dict(cls, data: dict[str, Any]) -> "Workspace":
         """Create Workspace from dictionary."""
         return cls(
             workspace_id=data["workspace_id"],
@@ -466,7 +465,7 @@ class Workspace:
             encoding="utf-8"
         )
     
-    def read_lock_file(self) -> Optional[Dict[str, Any]]:
+    def read_lock_file(self) -> dict[str, Any] | None:
         """
         Read lock file data.
         
@@ -517,8 +516,8 @@ class OrphanWorkspace:
     pid: int
     created_at: datetime
     age: float                   # Age in hours
-    session_id: Optional[str] = None
-    batch_test_id: Optional[str] = None
+    session_id: str | None = None
+    batch_test_id: str | None = None
 
 
 @dataclass
@@ -529,7 +528,7 @@ class CleanupReport:
     orphans_found: int = 0
     orphans_cleaned: int = 0
     space_freed_bytes: int = 0
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     
     @property
     def space_freed_mb(self) -> float:
@@ -539,9 +538,9 @@ class CleanupReport:
 
 def compute_venv_spec_hash(
     python_version: str,
-    dependencies: List[str],
-    requirements_file_content: Optional[str] = None,
-    lock_file_content: Optional[str] = None,
+    dependencies: list[str],
+    requirements_file_content: str | None = None,
+    lock_file_content: str | None = None,
 ) -> str:
     """
     Compute hash for venv specification.

@@ -20,30 +20,29 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
-import tempfile
 import time
 from datetime import datetime
 from operator import add
 from pathlib import Path
-from typing import Annotated, Any, Dict, TypedDict
+from typing import Annotated, TypedDict
 
 import pytest
 
-# WTB imports
-from wtb.sdk import WTBTestBench, WorkflowProject, FileTrackingConfig, ExecutionConfig
 from wtb.domain.models.workflow import ExecutionStatus
-from wtb.application.factories import WTBTestBenchFactory
 from wtb.infrastructure.adapters.langgraph_state_adapter import (
-    LangGraphStateAdapter,
-    LangGraphConfig,
-    CheckpointerType,
     LANGGRAPH_AVAILABLE,
+    CheckpointerType,
+    LangGraphConfig,
+    LangGraphStateAdapter,
 )
+
+# WTB imports
+from wtb.sdk import WorkflowProject, WTBTestBench
 
 # LangGraph imports
 try:
-    from langgraph.graph import StateGraph, END
     from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.graph import END, StateGraph
     LANGGRAPH_SQLITE_AVAILABLE = True
 except ImportError:
     LANGGRAPH_SQLITE_AVAILABLE = False
@@ -196,7 +195,7 @@ class TestSQLiteCheckpointPersistence:
         tables = {row[0] for row in cursor.fetchall()}
         conn.close()
         
-        assert len(tables) > 0, f"No tables created in checkpoint database"
+        assert len(tables) > 0, "No tables created in checkpoint database"
         print(f"\n[OK] Checkpoint tables created: {tables}")
 
 
@@ -463,7 +462,7 @@ class TestRollbackAndTimeTravel:
         assert rollback_result.success, \
             f"Rollback failed: {rollback_result.error}"
         
-        print(f"[OK] Rollback successful")
+        print("[OK] Rollback successful")
     
     def test_checkpoint_history_ordered(self, test_data_dir, simple_graph_factory):
         """Verify checkpoint history is properly ordered for time-travel."""
@@ -559,7 +558,7 @@ class TestACIDCompliance:
         assert recovered_count == original_count, \
             f"Checkpoint count mismatch: {recovered_count} != {original_count}"
         
-        print(f"\n[OK] Durability verified: data survives reconnection")
+        print("\n[OK] Durability verified: data survives reconnection")
     
     def test_isolation_between_threads(self, test_data_dir, simple_graph_factory):
         """Verify thread isolation (Isolation)."""
@@ -601,7 +600,7 @@ class TestACIDCompliance:
         # they're global sequential IDs, but the checkpoint content/state should differ
         assert len(cp1) > 0 and len(cp2) > 0, "Both executions should have checkpoints"
         
-        print(f"\n[OK] Thread isolation working")
+        print("\n[OK] Thread isolation working")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -627,7 +626,7 @@ class TestRayIntegration:
         resources = ray.cluster_resources()
         print(f"\n  Ray CPUs: {resources.get('CPU', 0)}")
         print(f"  Ray Memory: {resources.get('memory', 0) / (1024**3):.1f} GB")
-        print(f"[OK] Ray initialized")
+        print("[OK] Ray initialized")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -659,7 +658,7 @@ class TestArchitecturePatterns:
         assert "StateGraph" in graph_type, \
             f"Expected StateGraph, got {graph_type}"
         
-        print(f"\n[OK] Graph factory returns uncompiled StateGraph (correct pattern)")
+        print("\n[OK] Graph factory returns uncompiled StateGraph (correct pattern)")
     
     def test_state_adapter_compiles_with_checkpointer(self, test_data_dir, simple_graph_factory):
         """Verify StateAdapter recompiles graph with its checkpointer."""
@@ -688,7 +687,7 @@ class TestArchitecturePatterns:
         
         print(f"\n  Compiled graph type: {type(compiled).__name__}")
         print(f"  Checkpointer type: {type(checkpointer).__name__}")
-        print(f"\n[OK] StateAdapter correctly compiles graph with checkpointer")
+        print("\n[OK] StateAdapter correctly compiles graph with checkpointer")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -734,7 +733,7 @@ class TestRollbackBranchingForkACID:
         assert execution.status == ExecutionStatus.PAUSED, "Execution should be paused after rollback"
         
         print(f"  Execution status after rollback: {execution.status}")
-        print(f"\n[OK] Rollback restores state correctly")
+        print("\n[OK] Rollback restores state correctly")
     
     def test_rollback_persists_across_reconnection(self, test_data_dir, simple_graph_factory):
         """Test rollback state persists (Durability)."""
@@ -777,7 +776,7 @@ class TestRollbackBranchingForkACID:
         assert execution.status == ExecutionStatus.PAUSED, \
             "Rollback state should persist as PAUSED"
         
-        print(f"\n[OK] Rollback state persists across reconnection")
+        print("\n[OK] Rollback state persists across reconnection")
     
     def test_fork_creates_independent_copy(self, test_data_dir, simple_graph_factory):
         """Test fork creates independent execution copy."""
@@ -812,7 +811,7 @@ class TestRollbackBranchingForkACID:
         # Fork should be independent
         assert fork_result.fork_execution_id != result.id
         
-        print(f"\n[OK] Fork creates independent execution copy")
+        print("\n[OK] Fork creates independent execution copy")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -842,9 +841,9 @@ class TestNodeReplacementACID:
             implementation=lambda state: {"step_count": state.get("step_count", 0) + 10},
             description="Fast processing variant",
         )
-        print(f"\n  Registered variant: fast_process for process_node")
+        print("\n  Registered variant: fast_process for process_node")
         
-        print(f"\n[OK] Variant registration persists")
+        print("\n[OK] Variant registration persists")
     
     def test_variant_application_consistent(self, test_data_dir, simple_graph_factory):
         """Test variant application produces consistent results (Consistency)."""
@@ -879,7 +878,7 @@ class TestNodeReplacementACID:
         
         print(f"\n  Execution 1 checkpoints: {len(cp1)}")
         print(f"  Execution 2 checkpoints: {len(cp2)}")
-        print(f"\n[OK] Variant application produces consistent results")
+        print("\n[OK] Variant application produces consistent results")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -921,7 +920,7 @@ class TestCrossSystemConsistency:
         print(f"\n  Execution: {execution.id[:8]}...")
         print(f"  Session ID: {execution.session_id}")
         print(f"  Checkpoints: {len(checkpoints)}")
-        print(f"\n[OK] Execution and checkpoints are atomically consistent")
+        print("\n[OK] Execution and checkpoints are atomically consistent")
     
     def test_rollback_updates_both_systems(self, test_data_dir, simple_graph_factory):
         """Test rollback updates both WTB DB and LangGraph state."""
@@ -954,7 +953,7 @@ class TestCrossSystemConsistency:
         
         print(f"\n  WTB status after rollback: {execution.status}")
         print(f"  LangGraph state accessible: {current_state is not None}")
-        print(f"\n[OK] Rollback updates both systems consistently")
+        print("\n[OK] Rollback updates both systems consistently")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -998,7 +997,7 @@ class TestRealRayIntegration:
         
         print(f"\n  Ray CPUs: {resources.get('CPU', 0)}")
         print(f"  Ray Memory: {resources.get('memory', 0) / (1024**3):.2f} GB")
-        print(f"\n[OK] Ray cluster resources verified")
+        print("\n[OK] Ray cluster resources verified")
     
     def test_ray_task_execution_consistency(self):
         """Test Ray task execution produces consistent results (ACID: Consistency)."""
@@ -1019,7 +1018,7 @@ class TestRealRayIntegration:
         assert results[0] == 21, f"Expected 21, got {results[0]}"
         
         print(f"\n  Task results: {results}")
-        print(f"\n[OK] Ray task execution is consistent")
+        print("\n[OK] Ray task execution is consistent")
     
     def test_ray_actor_state_isolation(self):
         """Test Ray actors have isolated state (ACID: Isolation)."""
@@ -1055,7 +1054,7 @@ class TestRealRayIntegration:
         
         print(f"\n  Actor1 count: {count1}")
         print(f"  Actor2 count: {count2}")
-        print(f"\n[OK] Ray actor state isolation verified")
+        print("\n[OK] Ray actor state isolation verified")
     
     def test_ray_parallel_execution_atomicity(self):
         """Test parallel Ray tasks complete atomically (ACID: Atomicity)."""
@@ -1090,7 +1089,7 @@ class TestRealRayIntegration:
                 f"Task {r['task_id']} has wrong result: {r['result']} != {expected}"
         
         print(f"\n  Completed {len(results)} parallel tasks")
-        print(f"\n[OK] Ray parallel execution atomicity verified")
+        print("\n[OK] Ray parallel execution atomicity verified")
     
     def test_ray_object_store_durability(self):
         """Test Ray object store maintains data durability (ACID: Durability)."""
@@ -1120,7 +1119,7 @@ class TestRealRayIntegration:
         
         print(f"\n  Object size: {len(large_data['values'])} values")
         print(f"  Verified from task: {verified}")
-        print(f"\n[OK] Ray object store durability verified")
+        print("\n[OK] Ray object store durability verified")
     
     def test_ray_error_handling_consistency(self):
         """Test Ray error handling maintains consistency (ACID: Consistency)."""
@@ -1145,7 +1144,7 @@ class TestRealRayIntegration:
         
         print(f"\n  Success before failure: {result}")
         print(f"  Success after failure: {result_after}")
-        print(f"\n[OK] Ray error handling maintains consistency")
+        print("\n[OK] Ray error handling maintains consistency")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1198,14 +1197,16 @@ class TestRealRayBatchRunner:
     def test_ray_batch_runner_available(self):
         """Verify RayBatchTestRunner is available."""
         from wtb.application.services.ray_batch_runner import (
-            RayBatchTestRunner,
             RAY_AVAILABLE as RUNNER_RAY_AVAILABLE,
+        )
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
         )
         
         assert RUNNER_RAY_AVAILABLE, "Ray should be available in batch runner"
         assert RayBatchTestRunner.is_available(), "RayBatchTestRunner should be available"
         
-        print(f"\n[OK] RayBatchTestRunner is available")
+        print("\n[OK] RayBatchTestRunner is available")
     
     def test_ray_batch_runner_initialization(self, batch_runner_data_dir):
         """Test RayBatchTestRunner initializes correctly."""
@@ -1227,14 +1228,14 @@ class TestRealRayBatchRunner:
         runner.shutdown()
         
         print(f"\n  Config: {config}")
-        print(f"\n[OK] RayBatchTestRunner initialized successfully")
+        print("\n[OK] RayBatchTestRunner initialized successfully")
     
     def test_ray_batch_runner_actor_pool_creation(self, batch_runner_data_dir):
         """Test actor pool creation (SOLID: Single Responsibility)."""
         from wtb.application.services.ray_batch_runner import RayBatchTestRunner
         from wtb.config import RayConfig
         from wtb.domain.models.batch_test import BatchTest, VariantCombination
-        from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
+        from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
         
         config = RayConfig.for_testing()
         
@@ -1286,16 +1287,17 @@ class TestRealRayBatchRunner:
         finally:
             runner.shutdown()
         
-        print(f"\n[OK] Actor pool creation verified")
+        print("\n[OK] Actor pool creation verified")
     
     def test_ray_batch_runner_progress_tracking(self, batch_runner_data_dir):
         """Test progress tracking during batch execution."""
+        import threading
+
         from wtb.application.services.ray_batch_runner import RayBatchTestRunner
         from wtb.config import RayConfig
-        from wtb.domain.models.batch_test import BatchTest, VariantCombination
-        from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
         from wtb.domain.interfaces.batch_runner import BatchRunnerStatus
-        import threading
+        from wtb.domain.models.batch_test import BatchTest, VariantCombination
+        from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
         
         config = RayConfig.for_testing()
         
@@ -1357,7 +1359,7 @@ class TestRealRayBatchRunner:
         finally:
             runner.shutdown()
         
-        print(f"\n[OK] Progress tracking verified")
+        print("\n[OK] Progress tracking verified")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1413,7 +1415,7 @@ class TestRealUVVenvManagerIntegration:
             "gRPC stub should be initialized"
         
         print(f"\n  Connected to: {grpc_provider._grpc_address}")
-        print(f"\n[OK] gRPC provider connected")
+        print("\n[OK] gRPC provider connected")
     
     def test_environment_creation_atomicity(self, grpc_provider):
         """Test environment creation is atomic (ACID: Atomicity)."""
@@ -1441,7 +1443,7 @@ class TestRealUVVenvManagerIntegration:
             # Cleanup
             grpc_provider.cleanup_environment(variant_id)
         
-        print(f"\n[OK] Environment creation atomicity verified")
+        print("\n[OK] Environment creation atomicity verified")
     
     def test_environment_isolation(self, grpc_provider):
         """Test environments are isolated (ACID: Isolation)."""
@@ -1480,7 +1482,7 @@ class TestRealUVVenvManagerIntegration:
             grpc_provider.cleanup_environment(variant1)
             grpc_provider.cleanup_environment(variant2)
         
-        print(f"\n[OK] Environment isolation verified")
+        print("\n[OK] Environment isolation verified")
     
     def test_runtime_env_retrieval(self, grpc_provider):
         """Test runtime environment retrieval for Ray integration."""
@@ -1505,7 +1507,7 @@ class TestRealUVVenvManagerIntegration:
         finally:
             grpc_provider.cleanup_environment(variant_id)
         
-        print(f"\n[OK] Runtime env retrieval verified")
+        print("\n[OK] Runtime env retrieval verified")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1586,11 +1588,11 @@ class TestRayUVVenvCombinedIntegration:
         
         print(f"\n  Environment: {env}")
         print(f"  Task result: {result}")
-        print(f"\n[OK] Ray with environment provider verified")
+        print("\n[OK] Ray with environment provider verified")
     
     def test_workspace_isolation_with_ray(self, combined_data_dir):
         """Test workspace isolation works with Ray actors."""
-        from wtb.domain.models.workspace import Workspace, WorkspaceConfig, WorkspaceStrategy
+        from wtb.domain.models.workspace import WorkspaceConfig, WorkspaceStrategy
         from wtb.infrastructure.workspace.manager import WorkspaceManager
         
         config = WorkspaceConfig(
@@ -1612,7 +1614,6 @@ class TestRayUVVenvCombinedIntegration:
         @ray.remote
         def write_to_workspace(workspace_data: dict, content: str):
             """Write content to workspace output directory."""
-            from pathlib import Path
             from wtb.domain.models.workspace import Workspace
             
             workspace = Workspace.from_dict(workspace_data)
@@ -1637,13 +1638,13 @@ class TestRayUVVenvCombinedIntegration:
         
         print(f"\n  Workspace: {ws.workspace_id}")
         print(f"  Output file: {result_path}")
-        print(f"\n[OK] Workspace isolation with Ray verified")
+        print("\n[OK] Workspace isolation with Ray verified")
     
     def test_venv_cache_with_ray(self, combined_data_dir):
         """Test venv cache integration with Ray."""
         from wtb.infrastructure.environment.venv_cache import (
-            VenvCacheManager,
             VenvCacheConfig,
+            VenvCacheManager,
             VenvSpec,
         )
         
@@ -1671,9 +1672,10 @@ class TestRayUVVenvCombinedIntegration:
         @ray.remote
         def check_cache(cache_dir: str, spec_dict: dict):
             from pathlib import Path
+
             from wtb.infrastructure.environment.venv_cache import (
-                VenvCacheManager,
                 VenvCacheConfig,
+                VenvCacheManager,
                 VenvSpec,
             )
             
@@ -1692,7 +1694,7 @@ class TestRayUVVenvCombinedIntegration:
         
         print(f"\n  Cache entry: {entry.spec_hash}")
         print(f"  Found from Ray: {found}")
-        print(f"\n[OK] Venv cache with Ray verified")
+        print("\n[OK] Venv cache with Ray verified")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1732,8 +1734,7 @@ class TestCrossSystemACIDWithRay:
         @ray.remote
         def run_execution(data_dir: str, query: str):
             """Run execution in Ray task."""
-            from wtb.sdk import WTBTestBench, WorkflowProject
-            from wtb.domain.models.workflow import ExecutionStatus
+            from wtb.sdk import WTBTestBench
             
             # Create new bench instance (isolated)
             bench = WTBTestBench.create(mode="development", data_dir=data_dir)
@@ -1756,7 +1757,7 @@ class TestCrossSystemACIDWithRay:
         assert all(r["status"] == "completed" for r in results)
         
         print(f"\n  Parallel results: {len(results)}")
-        print(f"\n[OK] Parallel executions isolated")
+        print("\n[OK] Parallel executions isolated")
     
     def test_checkpoint_durability_across_ray(self, test_data_dir, simple_graph_factory):
         """Test checkpoints persist across Ray task boundaries (Durability)."""
@@ -1797,7 +1798,7 @@ class TestCrossSystemACIDWithRay:
         
         print(f"\n  Original checkpoints: {original_checkpoints}")
         print(f"  Verified from Ray: {checkpoint_count}")
-        print(f"\n[OK] Checkpoint durability across Ray verified")
+        print("\n[OK] Checkpoint durability across Ray verified")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1852,7 +1853,7 @@ class TestFileSystemArtifacts:
         
         print(f"\n  WTB DB: {wtb_db_path} ({wtb_db_path.stat().st_size} bytes)")
         print(f"  Checkpoint DB: {checkpoint_db_path} ({checkpoint_db_path.stat().st_size} bytes)")
-        print(f"\n[OK] SQLite databases created on disk")
+        print("\n[OK] SQLite databases created on disk")
     
     def test_checkpoint_tables_have_data(self, test_data_dir, simple_graph_factory):
         """Verify checkpoint tables contain actual row data."""
@@ -1894,10 +1895,10 @@ class TestFileSystemArtifacts:
         
         # At least one table should have data
         total_rows = sum(table_counts.values())
-        assert total_rows > 0, f"No checkpoint data found in any table"
+        assert total_rows > 0, "No checkpoint data found in any table"
         
         print(f"\n  Total checkpoint rows: {total_rows}")
-        print(f"\n[OK] Checkpoint tables contain data")
+        print("\n[OK] Checkpoint tables contain data")
     
     def test_wtb_execution_table_populated(self, test_data_dir, simple_graph_factory):
         """Verify WTB execution table has correct data."""
@@ -1938,7 +1939,7 @@ class TestFileSystemArtifacts:
         
         assert status == "completed", f"Expected status 'completed', got '{status}'"
         
-        print(f"\n[OK] WTB execution table populated correctly")
+        print("\n[OK] WTB execution table populated correctly")
     
     def test_checkpoint_blob_data_structure(self, test_data_dir, simple_graph_factory):
         """Verify checkpoint blob data has expected structure."""
@@ -1971,7 +1972,7 @@ class TestFileSystemArtifacts:
                 state_keys = list(cp.state.keys()) if isinstance(cp.state, dict) else "N/A"
                 print(f"    State keys: {state_keys}")
         
-        print(f"\n[OK] Checkpoint blob data has expected structure")
+        print("\n[OK] Checkpoint blob data has expected structure")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2039,7 +2040,7 @@ class TestRollbackFileSystemVerification:
         checkpoints_after = bench.get_checkpoints(result.id)
         print(f"  Checkpoints after rollback: {len(checkpoints_after)}")
         
-        print(f"\n[OK] Rollback updates SQLite checkpoint pointer")
+        print("\n[OK] Rollback updates SQLite checkpoint pointer")
     
     def test_rollback_state_matches_checkpoint(self, test_data_dir, simple_graph_factory):
         """Verify state after rollback matches the target checkpoint state."""
@@ -2075,7 +2076,7 @@ class TestRollbackFileSystemVerification:
         if current_state:
             print(f"  State keys: {list(current_state.keys()) if isinstance(current_state, dict) else 'N/A'}")
         
-        print(f"\n[OK] Rollback state matches checkpoint")
+        print("\n[OK] Rollback state matches checkpoint")
     
     def test_rollback_preserves_checkpoint_history(self, test_data_dir, simple_graph_factory):
         """Verify rollback doesn't delete checkpoint history."""
@@ -2109,7 +2110,7 @@ class TestRollbackFileSystemVerification:
         # History should be preserved (not deleted)
         assert checkpoint_count_after >= 1, "Checkpoint history should be preserved"
         
-        print(f"\n[OK] Rollback preserves checkpoint history")
+        print("\n[OK] Rollback preserves checkpoint history")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2172,7 +2173,7 @@ class TestForkFileSystemVerification:
         
         assert count == 2, f"Expected 2 executions in DB, found {count}"
         
-        print(f"\n[OK] Fork creates new execution record")
+        print("\n[OK] Fork creates new execution record")
     
     def test_fork_creates_isolated_checkpoint_thread(self, test_data_dir, simple_graph_factory):
         """Verify forked execution has isolated checkpoint thread."""
@@ -2212,7 +2213,7 @@ class TestForkFileSystemVerification:
         assert len(original_checkpoints_after) == len(original_checkpoints), \
             "Original checkpoint count should be unchanged"
         
-        print(f"\n[OK] Fork creates isolated checkpoint thread")
+        print("\n[OK] Fork creates isolated checkpoint thread")
     
     def test_fork_original_unchanged(self, test_data_dir, simple_graph_factory):
         """Verify original execution is unchanged after fork."""
@@ -2257,7 +2258,7 @@ class TestForkFileSystemVerification:
         assert original_cp_count_before == original_cp_count_after, \
             "Original checkpoint count should be unchanged"
         
-        print(f"\n[OK] Fork leaves original unchanged")
+        print("\n[OK] Fork leaves original unchanged")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2316,7 +2317,7 @@ class TestNodeReplacementFileSystemVerification:
         
         conn.close()
         
-        print(f"\n[OK] Variant persisted to SQLite")
+        print("\n[OK] Variant persisted to SQLite")
     
     def test_variant_execution_creates_checkpoints(self, test_data_dir, simple_graph_factory):
         """Verify variant execution creates checkpoint data."""
@@ -2359,7 +2360,7 @@ class TestNodeReplacementFileSystemVerification:
         print(f"  Execution 1 IDs: {[str(c.id)[:8] for c in cp1[:2]]}...")
         print(f"  Execution 2 IDs: {[str(c.id)[:8] for c in cp2[:2]]}...")
         
-        print(f"\n[OK] Variant execution creates checkpoints")
+        print("\n[OK] Variant execution creates checkpoints")
     
     def test_variant_survives_reconnection(self, test_data_dir, simple_graph_factory):
         """Verify variant data survives database reconnection."""
@@ -2416,10 +2417,10 @@ class TestNodeReplacementFileSystemVerification:
         assert len(checkpoints) == checkpoint_count, \
             f"Checkpoint count should match: {len(checkpoints)} != {checkpoint_count}"
         
-        print(f"  Second connection: execution found")
+        print("  Second connection: execution found")
         print(f"  Checkpoints recovered: {len(checkpoints)}")
         
-        print(f"\n[OK] Variant survives reconnection")
+        print("\n[OK] Variant survives reconnection")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2481,13 +2482,14 @@ class TestWorkspaceFileSystemVerification:
         contents = list(ws.root_path.iterdir())
         print(f"  Contents: {[p.name for p in contents]}")
         
-        print(f"\n[OK] Workspace directory structure created")
+        print("\n[OK] Workspace directory structure created")
     
     def test_workspace_write_output_files_from_state(self, workspace_test_dir):
         """Verify write_output_files writes _output_files dict to disk."""
+        import json
+
         from wtb.domain.models.workspace import WorkspaceConfig, WorkspaceStrategy
         from wtb.infrastructure.workspace.manager import WorkspaceManager
-        import json
         
         config = WorkspaceConfig(
             enabled=True,
@@ -2536,7 +2538,7 @@ class TestWorkspaceFileSystemVerification:
         print(f"  Collected paths: {[p.name for p in collected]}")
         print(f"  result.json content: {result_content}")
         
-        print(f"\n[OK] write_output_files bridges _output_files state to disk")
+        print("\n[OK] write_output_files bridges _output_files state to disk")
     
     def test_workspace_files_isolated_between_variants(self, workspace_test_dir):
         """Verify files written in one workspace don't appear in another."""
@@ -2579,7 +2581,7 @@ class TestWorkspaceFileSystemVerification:
         print(f"\n  ws1 output: {list(ws1.output_dir.iterdir())}")
         print(f"  ws2 output: {list(ws2.output_dir.iterdir())}")
         
-        print(f"\n[OK] Workspace files isolated between variants")
+        print("\n[OK] Workspace files isolated between variants")
     
     def test_workspace_cleanup_removes_files(self, workspace_test_dir):
         """Verify workspace cleanup removes all files."""
@@ -2617,7 +2619,7 @@ class TestWorkspaceFileSystemVerification:
         print(f"\n  Workspace path: {root_path}")
         print(f"  Exists after cleanup: {root_path.exists()}")
         
-        print(f"\n[OK] Workspace cleanup removes files")
+        print("\n[OK] Workspace cleanup removes files")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2731,7 +2733,7 @@ class TestCompleteSystemIntegration:
         # Verify original unchanged
         original_after_fork = bench.get_execution(execution_id)
         assert original_after_fork is not None
-        print(f"  ✓ Original execution still accessible")
+        print("  ✓ Original execution still accessible")
         
         # Step 7: Reconnection test
         print("\n[STEP 7] Testing durability (reconnection)...")
@@ -2756,7 +2758,7 @@ class TestCompleteSystemIntegration:
         recovered_checkpoints = bench2.get_checkpoints(execution_id)
         assert len(recovered_checkpoints) > 0, "Checkpoints should persist"
         
-        print(f"  ✓ Execution recovered after reconnection")
+        print("  ✓ Execution recovered after reconnection")
         print(f"  ✓ {len(recovered_checkpoints)} checkpoints recovered")
         
         print("\n" + "="*70)

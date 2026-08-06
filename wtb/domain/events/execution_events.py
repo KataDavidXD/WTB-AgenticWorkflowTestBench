@@ -4,10 +4,10 @@ Execution-related domain events.
 Published during workflow execution lifecycle.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any
-import uuid
+from typing import Any
 
 
 @dataclass
@@ -27,7 +27,7 @@ class ExecutionStartedEvent(WTBEvent):
     execution_id: str = ""
     workflow_id: str = ""
     workflow_name: str = ""
-    initial_state: Dict[str, Any] = field(default_factory=dict)
+    initial_state: dict[str, Any] = field(default_factory=dict)
     breakpoints: list = field(default_factory=list)
 
 
@@ -37,7 +37,7 @@ class ExecutionPausedEvent(WTBEvent):
     execution_id: str = ""
     paused_at_node: str = ""
     reason: str = ""  # "breakpoint", "manual", "error"
-    checkpoint_id: Optional[str] = None
+    checkpoint_id: str | None = None
     elapsed_time_ms: float = 0.0
 
 
@@ -46,7 +46,7 @@ class ExecutionResumedEvent(WTBEvent):
     """Published when execution is resumed."""
     execution_id: str = ""
     resume_from_node: str = ""
-    modified_state: Optional[Dict[str, Any]] = None
+    modified_state: dict[str, Any] | None = None
 
 
 @dataclass
@@ -54,7 +54,7 @@ class ExecutionCompletedEvent(WTBEvent):
     """Published when execution completes successfully."""
     execution_id: str = ""
     workflow_id: str = ""
-    final_state: Dict[str, Any] = field(default_factory=dict)
+    final_state: dict[str, Any] = field(default_factory=dict)
     duration_ms: float = 0.0
     nodes_executed: int = 0
     checkpoints_created: int = 0
@@ -68,7 +68,7 @@ class ExecutionFailedEvent(WTBEvent):
     failed_at_node: str = ""
     error_message: str = ""
     error_type: str = ""
-    checkpoint_id: Optional[str] = None
+    checkpoint_id: str | None = None
     duration_ms: float = 0.0
 
 
@@ -76,7 +76,7 @@ class ExecutionFailedEvent(WTBEvent):
 class ExecutionCancelledEvent(WTBEvent):
     """Published when execution is cancelled."""
     execution_id: str = ""
-    cancelled_at_node: Optional[str] = None
+    cancelled_at_node: str | None = None
     reason: str = ""
     duration_ms: float = 0.0
 

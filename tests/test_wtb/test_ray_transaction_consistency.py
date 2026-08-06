@@ -14,14 +14,11 @@ Test Categories:
 - Audit Consistency: Audit trail matches events
 """
 
-import pytest
-from datetime import datetime
-from typing import Dict, Any, List, Optional
-from unittest.mock import Mock, MagicMock, patch
+import queue
 import threading
 import time
-import queue
-
+from datetime import datetime
+from unittest.mock import MagicMock, Mock
 
 # ═══════════════════════════════════════════════════════════════
 # ACID - Atomicity Tests
@@ -33,8 +30,7 @@ class TestAtomicity:
     
     def test_outbox_event_created_in_same_transaction(self):
         """Test outbox event is created in same transaction as publish."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
-        from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         # Mock UoW to track operations
         operations = []
@@ -76,8 +72,8 @@ class TestAtomicity:
     
     def test_batch_events_committed_atomically(self):
         """Test multiple events are committed in single transaction."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayVariantExecutionCompletedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         commit_count = [0]
         add_count = [0]
@@ -113,7 +109,7 @@ class TestAtomicity:
     
     def test_rollback_on_commit_failure(self):
         """Test transaction rolls back if commit fails."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         exit_called = [False]
         
@@ -202,7 +198,12 @@ class TestConsistency:
     
     def test_event_timestamp_ordering(self):
         """Test events maintain timestamp ordering."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge, WTBAuditTrail, AuditEventListener
+        from wtb.infrastructure.events import (
+            AuditEventListener,
+            RayEventBridge,
+            WTBAuditTrail,
+            WTBEventBus,
+        )
         
         event_bus = WTBEventBus()
         trail = WTBAuditTrail()
@@ -258,13 +259,16 @@ class TestIsolation:
     
     def test_concurrent_batch_tests_isolated(self):
         """Test concurrent batch tests don't interfere."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
-        from wtb.domain.events import RayBatchTestStartedEvent, RayBatchTestCompletedEvent
+        from wtb.domain.events import (
+            RayBatchTestCompletedEvent,
+            RayBatchTestStartedEvent,
+        )
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
         
-        received_events: Dict[str, List] = {"bt-1": [], "bt-2": []}
+        received_events: dict[str, list] = {"bt-1": [], "bt-2": []}
         
         def handler(event):
             if hasattr(event, 'batch_test_id'):
@@ -312,7 +316,7 @@ class TestIsolation:
     
     def test_per_batch_audit_trails_isolated(self):
         """Test each batch test has isolated audit trail."""
-        from wtb.infrastructure.events import WTBEventBus, WTBAuditTrail, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBAuditTrail, WTBEventBus
         
         event_bus = WTBEventBus()
         
@@ -358,8 +362,8 @@ class TestIsolation:
     
     def test_thread_safe_event_history(self):
         """Test event history is thread-safe."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayVariantExecutionCompletedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         event_bus = WTBEventBus()
         bridge = RayEventBridge(event_bus=event_bus, use_outbox=False)
@@ -405,7 +409,7 @@ class TestDurability:
     
     def test_outbox_event_persisted_before_publish(self):
         """Test event is persisted to outbox before attempting publish."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         operations = []
         
@@ -460,7 +464,7 @@ class TestDurability:
     
     def test_outbox_event_survives_publish_failure(self):
         """Test event remains in outbox if publish fails."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         outbox_events = []
         update_calls = []
@@ -509,7 +513,7 @@ class TestDurability:
     
     def test_outbox_event_marked_published_on_success(self):
         """Test outbox event is marked published when publish succeeds."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         outbox_events = []
         update_calls = []
@@ -559,13 +563,13 @@ class TestAuditConsistency:
     
     def test_audit_entries_match_published_events(self):
         """Test audit entries match published events."""
+        from wtb.domain.events import RayBatchTestStartedEvent
         from wtb.infrastructure.events import (
-            WTBEventBus,
-            WTBAuditTrail,
             AuditEventListener,
             RayEventBridge,
+            WTBAuditTrail,
+            WTBEventBus,
         )
-        from wtb.domain.events import RayBatchTestStartedEvent
         
         event_bus = WTBEventBus()
         trail = WTBAuditTrail()
@@ -604,11 +608,11 @@ class TestAuditConsistency:
     def test_audit_summary_matches_event_counts(self):
         """Test audit summary matches actual event counts."""
         from wtb.infrastructure.events import (
-            WTBEventBus,
-            WTBAuditTrail,
             AuditEventListener,
             RayEventBridge,
             WTBAuditEventType,
+            WTBAuditTrail,
+            WTBEventBus,
         )
         
         event_bus = WTBEventBus()
@@ -662,11 +666,11 @@ class TestAuditConsistency:
     def test_audit_entries_have_correct_severity(self):
         """Test audit entries have correct severity levels."""
         from wtb.infrastructure.events import (
-            WTBEventBus,
-            WTBAuditTrail,
             AuditEventListener,
             RayEventBridge,
             WTBAuditSeverity,
+            WTBAuditTrail,
+            WTBEventBus,
         )
         
         event_bus = WTBEventBus()
@@ -732,8 +736,8 @@ class TestErrorRecovery:
     
     def test_fallback_to_immediate_publish_on_outbox_error(self):
         """Test fallback to immediate publish when outbox fails."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
         from wtb.domain.events import RayBatchTestStartedEvent
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         # Create UoW that fails
         mock_uow = MagicMock()
@@ -765,7 +769,7 @@ class TestErrorRecovery:
     
     def test_cleanup_on_exception(self):
         """Test resources cleaned up on exception."""
-        from wtb.infrastructure.events import WTBEventBus, RayEventBridge
+        from wtb.infrastructure.events import RayEventBridge, WTBEventBus
         
         exit_called = [False]
         

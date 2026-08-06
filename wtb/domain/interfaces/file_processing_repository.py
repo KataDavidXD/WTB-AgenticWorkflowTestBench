@@ -15,16 +15,14 @@ Implementations:
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from wtb.domain.models.file_processing import (
-    FileCommit,
-    FileMemento,
     BlobId,
-    CommitId,
     CheckpointFileLink,
+    CommitId,
+    FileCommit,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Blob Repository Interface
@@ -64,7 +62,7 @@ class IBlobRepository(ABC):
         pass
     
     @abstractmethod
-    def get(self, blob_id: BlobId) -> Optional[bytes]:
+    def get(self, blob_id: BlobId) -> bytes | None:
         """
         Retrieve content by blob ID.
         
@@ -119,7 +117,7 @@ class IBlobRepository(ABC):
         pass
     
     @abstractmethod
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get storage statistics.
         
@@ -167,7 +165,7 @@ class IFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id(self, commit_id: CommitId) -> FileCommit | None:
         """
         Get commit by ID with mementos loaded.
         
@@ -180,7 +178,7 @@ class IFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id_without_mementos(self, commit_id: CommitId) -> FileCommit | None:
         """
         Get commit by ID WITHOUT loading mementos.
         
@@ -195,7 +193,7 @@ class IFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    def get_all(self, limit: int = 100, offset: int = 0) -> List[FileCommit]:
+    def get_all(self, limit: int = 100, offset: int = 0) -> list[FileCommit]:
         """
         Get all commits (without mementos).
         
@@ -212,7 +210,7 @@ class IFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+    def get_by_execution_id(self, execution_id: str) -> list[FileCommit]:
         """
         Get commits for a WTB execution.
         
@@ -225,7 +223,7 @@ class IFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> FileCommit | None:
         """
         Get commit linked to checkpoint.
         
@@ -289,7 +287,7 @@ class ICheckpointFileLinkRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> CheckpointFileLink | None:
         """
         Get link by checkpoint ID.
         
@@ -302,7 +300,7 @@ class ICheckpointFileLinkRepository(ABC):
         pass
     
     @abstractmethod
-    def get_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
+    def get_by_commit(self, commit_id: CommitId) -> list[CheckpointFileLink]:
         """
         Get all links for a commit.
         
@@ -343,7 +341,7 @@ class ICheckpointFileLinkRepository(ABC):
         pass
     
     @abstractmethod
-    def list_all(self, limit: int = 10000) -> List[CheckpointFileLink]:
+    def list_all(self, limit: int = 10000) -> list[CheckpointFileLink]:
         """
         List all checkpoint file links.
         

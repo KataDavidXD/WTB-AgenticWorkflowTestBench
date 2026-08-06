@@ -8,26 +8,28 @@ Cross-cutting tests that verify:
 - Decorator resilience (missing repo, errors)
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
+
+from wtb.application.services.execution_controller import (
+    DefaultNodeExecutor,
+    ExecutionController,
+)
+from wtb.application.services.outbox_controller_decorator import (
+    OutboxExecutionControllerDecorator,
+)
+from wtb.domain.models.outbox import OutboxEventType
 from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
-from wtb.application.services.execution_controller import (
-    ExecutionController,
-    DefaultNodeExecutor,
-)
-from wtb.application.services.outbox_controller_decorator import (
-    OutboxExecutionControllerDecorator,
-)
 
 
 def _make_workflow() -> TestWorkflow:
@@ -51,9 +53,9 @@ def _make_breakpoint_workflow() -> TestWorkflow:
 def _try_import_langgraph():
     try:
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
             LANGGRAPH_AVAILABLE,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         if not LANGGRAPH_AVAILABLE:
             pytest.skip("LangGraph not available")

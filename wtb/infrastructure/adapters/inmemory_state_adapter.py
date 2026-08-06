@@ -4,15 +4,15 @@ In-Memory State Adapter Implementation.
 Refactored (v1.6): Uses string IDs throughout, matches clean IStateAdapter interface.
 """
 
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-from copy import deepcopy
 import uuid
+from copy import deepcopy
+from datetime import datetime
+from typing import Any
 
 from wtb.domain.interfaces.state_adapter import (
-    IStateAdapter,
-    CheckpointTrigger,
     CheckpointInfo,
+    CheckpointTrigger,
+    IStateAdapter,
     NodeBoundaryInfo,
 )
 from wtb.domain.models import ExecutionState
@@ -27,8 +27,8 @@ class InMemoryCheckpoint:
         state: ExecutionState,
         node_id: str,
         trigger: CheckpointTrigger,
-        name: Optional[str],
-        metadata: Dict[str, Any],
+        name: str | None,
+        metadata: dict[str, Any],
         step: int,
     ):
         self.id = id
@@ -58,11 +58,11 @@ class InMemoryNodeBoundary:
         self.session_id = session_id
         self.node_id = node_id
         self.entry_checkpoint_id = entry_checkpoint_id
-        self.exit_checkpoint_id: Optional[str] = None
+        self.exit_checkpoint_id: str | None = None
         self.node_status = "started"
         self.started_at = datetime.now().isoformat()
-        self.completed_at: Optional[str] = None
-        self.error_message: Optional[str] = None
+        self.completed_at: str | None = None
+        self.error_message: str | None = None
 
 
 class InMemoryStateAdapter(IStateAdapter):
@@ -87,13 +87,13 @@ class InMemoryStateAdapter(IStateAdapter):
     
     def __init__(self):
         # Storage (v1.6: keyed by string IDs)
-        self._sessions: Dict[str, Dict[str, Any]] = {}
-        self._checkpoints: Dict[str, InMemoryCheckpoint] = {}
-        self._boundaries: Dict[str, InMemoryNodeBoundary] = {}
+        self._sessions: dict[str, dict[str, Any]] = {}
+        self._checkpoints: dict[str, InMemoryCheckpoint] = {}
+        self._boundaries: dict[str, InMemoryNodeBoundary] = {}
         
         # Current session tracking
-        self._current_session_id: Optional[str] = None
-        self._current_execution_id: Optional[str] = None
+        self._current_session_id: str | None = None
+        self._current_execution_id: str | None = None
         self._step_counter = 0
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -104,7 +104,7 @@ class InMemoryStateAdapter(IStateAdapter):
         self, 
         execution_id: str,
         initial_state: ExecutionState
-    ) -> Optional[str]:
+    ) -> str | None:
         """Initialize a new session (thread context)."""
         # Session ID = thread_id format (matches LangGraph)
         session_id = f"wtb-{execution_id}"
@@ -122,14 +122,14 @@ class InMemoryStateAdapter(IStateAdapter):
         
         return session_id
     
-    def get_current_session_id(self) -> Optional[str]:
+    def get_current_session_id(self) -> str | None:
         """Get current session ID (thread_id)."""
         return self._current_session_id
     
     def set_current_session(
         self, 
         session_id: str,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
     ) -> bool:
         """Set current session."""
         if session_id in self._sessions:
@@ -157,8 +157,8 @@ class InMemoryStateAdapter(IStateAdapter):
         state: ExecutionState,
         node_id: str,
         trigger: CheckpointTrigger,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None
     ) -> str:
         """Save a state checkpoint. Returns checkpoint_id (UUID string)."""
         if self._current_session_id is None:
@@ -255,7 +255,7 @@ class InMemoryStateAdapter(IStateAdapter):
             return True
         return False
     
-    def _find_boundary(self, node_id: str) -> Optional[InMemoryNodeBoundary]:
+    def _find_boundary(self, node_id: str) -> InMemoryNodeBoundary | None:
         """Find boundary by node ID in current session."""
         for boundary in self._boundaries.values():
             if (boundary.session_id == self._current_session_id and 
@@ -263,7 +263,7 @@ class InMemoryStateAdapter(IStateAdapter):
                 return boundary
         return None
     
-    def get_node_boundaries(self, session_id: str) -> List[NodeBoundaryInfo]:
+    def get_node_boundaries(self, session_id: str) -> list[NodeBoundaryInfo]:
         """Get all node boundaries for a session."""
         return [
             NodeBoundaryInfo(
@@ -279,7 +279,7 @@ class InMemoryStateAdapter(IStateAdapter):
             if b.session_id == session_id
         ]
     
-    def get_node_boundary(self, session_id: str, node_id: str) -> Optional[NodeBoundaryInfo]:
+    def get_node_boundary(self, session_id: str, node_id: str) -> NodeBoundaryInfo | None:
         """Get a specific node boundary."""
         for b in self._boundaries.values():
             if b.session_id == session_id and b.node_id == node_id:
@@ -301,8 +301,8 @@ class InMemoryStateAdapter(IStateAdapter):
     def get_checkpoints(
         self, 
         session_id: str,
-        node_id: Optional[str] = None
-    ) -> List[CheckpointInfo]:
+        node_id: str | None = None
+    ) -> list[CheckpointInfo]:
         """Get checkpoints for a session."""
         result = []
         for cp in self._checkpoints.values():
@@ -323,7 +323,7 @@ class InMemoryStateAdapter(IStateAdapter):
         
         return sorted(result, key=lambda c: c.step)
     
-    def get_node_rollback_targets(self, session_id: str) -> List[CheckpointInfo]:
+    def get_node_rollback_targets(self, session_id: str) -> list[CheckpointInfo]:
         """Get valid node-level rollback targets."""
         result = []
         for b in self._boundaries.values():
@@ -362,7 +362,7 @@ class InMemoryStateAdapter(IStateAdapter):
     # Extended Capabilities
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_checkpoint_history(self) -> List[Dict[str, Any]]:
+    def get_checkpoint_history(self) -> list[dict[str, Any]]:
         """Get checkpoint history for current session."""
         if not self._current_session_id:
             return []

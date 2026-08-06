@@ -12,24 +12,22 @@ Test Categories:
 6. Domain invariants and validation
 """
 
-import pytest
-import tempfile
 from datetime import datetime
-from pathlib import Path
+
+import pytest
 
 from wtb.domain.models.file_processing import (
     BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
     CheckpointFileLink,
+    CommitAlreadyFinalized,
+    CommitId,
     CommitStatus,
+    DuplicateFileError,
+    FileCommit,
+    FileMemento,
     InvalidBlobIdError,
     InvalidCommitIdError,
-    DuplicateFileError,
-    CommitAlreadyFinalized,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BlobId Tests

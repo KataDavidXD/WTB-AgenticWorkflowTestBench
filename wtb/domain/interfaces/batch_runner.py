@@ -11,11 +11,11 @@ Usage:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
-from wtb.domain.models.batch_test import BatchTest, BatchTestResult
+from wtb.domain.models.batch_test import BatchTest
 
 
 class BatchRunnerStatus(Enum):
@@ -35,7 +35,7 @@ class BatchRunnerProgress:
     failed_variants: int
     in_progress_variants: int
     elapsed_ms: float
-    estimated_remaining_ms: Optional[float] = None
+    estimated_remaining_ms: float | None = None
     
     @property
     def progress_pct(self) -> float:
@@ -93,7 +93,7 @@ class IBatchTestRunner(ABC):
         pass
     
     @abstractmethod
-    def get_progress(self, batch_test_id: str) -> Optional[BatchRunnerProgress]:
+    def get_progress(self, batch_test_id: str) -> BatchRunnerProgress | None:
         """
         Get progress information for a running batch test.
         
@@ -147,8 +147,8 @@ class BatchRunnerExecutionError(BatchRunnerError):
         self,
         message: str,
         batch_test_id: str,
-        failed_variant: Optional[str] = None,
-        cause: Optional[Exception] = None,
+        failed_variant: str | None = None,
+        cause: Exception | None = None,
     ):
         super().__init__(message)
         self.batch_test_id = batch_test_id
@@ -175,8 +175,8 @@ class IEnvironmentProvider(ABC):
     def create_environment(
         self,
         variant_id: str,
-        config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Create an isolated execution environment.
         
@@ -193,7 +193,7 @@ class IEnvironmentProvider(ABC):
     def cleanup_environment(
         self,
         variant_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> None:
         """
         Cleanup an execution environment.
@@ -209,7 +209,7 @@ class IEnvironmentProvider(ABC):
         pass
     
     @abstractmethod
-    def get_runtime_env(self, variant_id: str) -> Optional[Dict[str, Any]]:
+    def get_runtime_env(self, variant_id: str) -> dict[str, Any] | None:
         """
         Get the runtime environment specification.
         

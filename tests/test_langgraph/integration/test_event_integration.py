@@ -15,39 +15,24 @@ SOLID Compliance:
 Run with: pytest tests/test_langgraph/integration/test_event_integration.py -v
 """
 
-import pytest
-from typing import Dict, Any, List
-from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch
 import threading
-import time
+from unittest.mock import MagicMock
 
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+import pytest
 
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    StreamModeConfig,
-    LangGraphEventBridge,
-    InMemoryMetricsCollector,
-    create_event_bridge_for_testing,
-)
 from wtb.domain.events import (
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
+    ExecutionStartedEvent,
     NodeCompletedEvent,
     NodeFailedEvent,
+    NodeStartedEvent,
 )
 from wtb.domain.events.checkpoint_events import CheckpointCreated
-
-from tests.test_langgraph.helpers import (
-    create_initial_simple_state,
-    create_initial_branch_state,
-    SimpleState,
+from wtb.infrastructure.events import (
+    StreamModeConfig,
+    create_event_bridge_for_testing,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Event Bus Integration Tests

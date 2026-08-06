@@ -10,23 +10,18 @@ Design (SOLID):
 - ACID: Verifies transaction consistency in rollback/fork operations
 """
 
+from unittest.mock import Mock, patch
+
 import pytest
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
-from unittest.mock import Mock, MagicMock, patch
-from datetime import datetime, timezone
 
 from wtb.sdk import (
-    WTBTestBench,
-    BatchRollbackResult,
     BatchForkResult,
+    BatchRollbackResult,
     BatchTestResult,
-    Checkpoint,
-    CheckpointId,
     Execution,
     ExecutionStatus,
+    WTBTestBench,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures

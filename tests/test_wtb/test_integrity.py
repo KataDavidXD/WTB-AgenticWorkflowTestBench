@@ -7,19 +7,17 @@ Tests:
 - IntegrityChecker functionality
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 from wtb.domain.models.integrity import (
     IntegrityIssue,
     IntegrityIssueType,
-    IntegritySeverity,
     IntegrityReport,
+    IntegritySeverity,
     RepairAction,
 )
-from wtb.domain.models.outbox import OutboxEvent, OutboxStatus, OutboxEventType
-from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 
 
 class TestIntegrityIssue:
@@ -295,8 +293,8 @@ class TestIntegrityChecker:
     
     def test_check_outbox_stuck_events(self, tmp_path):
         """Test detection of stuck outbox events."""
-        from wtb.infrastructure.integrity.checker import IntegrityChecker
         from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+        from wtb.infrastructure.integrity.checker import IntegrityChecker
         
         # Use file-based SQLite for persistence across UoW instances
         db_file = tmp_path / "test.db"
@@ -327,9 +325,9 @@ class TestIntegrityChecker:
     
     def test_check_with_mock_checkpoint_repo(self, tmp_path):
         """Test checking with a mock checkpoint repository."""
-        from wtb.infrastructure.integrity.checker import IntegrityChecker
-        from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
         from wtb.domain.models import NodeBoundary
+        from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+        from wtb.infrastructure.integrity.checker import IntegrityChecker
         
         # Use file-based SQLite for persistence across UoW instances
         db_file = tmp_path / "test.db"
@@ -363,8 +361,8 @@ class TestIntegrityChecker:
     
     def test_check_and_repair(self):
         """Test check_and_repair flow."""
-        from wtb.infrastructure.integrity.checker import IntegrityChecker
         from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+        from wtb.infrastructure.integrity.checker import IntegrityChecker
         
         db_url = "sqlite:///:memory:"
         

@@ -19,18 +19,15 @@ Usage:
     pytest tests/test_wtb/test_outbox_filetracker.py -v
 """
 
-import pytest
-from datetime import datetime
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+from typing import Any
 
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
+import pytest
+
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 from wtb.infrastructure.outbox.processor import (
     OutboxProcessor,
-    VerificationResult,
-    FileVerificationResult,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Mock Implementations
@@ -49,7 +46,7 @@ class MockMemento:
 class MockCommit:
     """Mock commit for testing."""
     commit_id: str
-    _mementos: List[MockMemento]
+    _mementos: list[MockMemento]
     message: str = "test commit"
 
 
@@ -57,12 +54,12 @@ class MockCheckpointRepository:
     """Mock AgentGit checkpoint repository."""
     
     def __init__(self):
-        self._checkpoints: Dict[int, Any] = {}
+        self._checkpoints: dict[int, Any] = {}
     
     def add_checkpoint(self, checkpoint_id: int, data: Any = None) -> None:
         self._checkpoints[checkpoint_id] = data or {"id": checkpoint_id}
     
-    def get_by_id(self, checkpoint_id: int) -> Optional[Any]:
+    def get_by_id(self, checkpoint_id: int) -> Any | None:
         return self._checkpoints.get(checkpoint_id)
 
 
@@ -70,12 +67,12 @@ class MockCommitRepository:
     """Mock FileTracker commit repository."""
     
     def __init__(self):
-        self._commits: Dict[str, MockCommit] = {}
+        self._commits: dict[str, MockCommit] = {}
     
     def add_commit(
         self, 
         commit_id: str, 
-        mementos: List[MockMemento] = None
+        mementos: list[MockMemento] = None
     ) -> MockCommit:
         commit = MockCommit(
             commit_id=commit_id,
@@ -84,10 +81,10 @@ class MockCommitRepository:
         self._commits[commit_id] = commit
         return commit
     
-    def find_by_id(self, commit_id: str) -> Optional[MockCommit]:
+    def find_by_id(self, commit_id: str) -> MockCommit | None:
         return self._commits.get(commit_id)
     
-    def get_by_checkpoint_id(self, checkpoint_id: int) -> Optional[MockCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: int) -> MockCommit | None:
         for commit in self._commits.values():
             if getattr(commit, '_checkpoint_id', None) == checkpoint_id:
                 return commit
@@ -98,7 +95,7 @@ class MockBlobRepository:
     """Mock FileTracker blob repository."""
     
     def __init__(self):
-        self._blobs: Dict[str, bytes] = {}
+        self._blobs: dict[str, bytes] = {}
     
     def add_blob(self, content_hash: str, content: bytes = b"test") -> None:
         self._blobs[content_hash] = content
@@ -108,7 +105,7 @@ class MockBlobRepository:
             content_hash = content_hash.value
         return content_hash in self._blobs
     
-    def get(self, content_hash: str) -> Optional[bytes]:
+    def get(self, content_hash: str) -> bytes | None:
         if hasattr(content_hash, 'value'):
             content_hash = content_hash.value
         return self._blobs.get(content_hash)
@@ -125,14 +122,14 @@ class MockFileTrackingService:
     
     def __init__(self):
         self._available = True
-        self._commits: Dict[str, List[Any]] = {}
-        self._checkpoint_links: Dict[int, str] = {}
-        self._restore_results: Dict[str, Any] = {}
+        self._commits: dict[str, list[Any]] = {}
+        self._checkpoint_links: dict[int, str] = {}
+        self._restore_results: dict[str, Any] = {}
     
     def is_available(self) -> bool:
         return self._available
     
-    def add_commit(self, commit_id: str, files: List[Any]) -> None:
+    def add_commit(self, commit_id: str, files: list[Any]) -> None:
         self._commits[commit_id] = files
     
     def link_checkpoint(self, checkpoint_id: int, commit_id: str) -> None:
@@ -141,10 +138,10 @@ class MockFileTrackingService:
     def set_restore_result(self, commit_id: str, result: Any) -> None:
         self._restore_results[commit_id] = result
     
-    def get_commit_for_checkpoint(self, checkpoint_id: int) -> Optional[str]:
+    def get_commit_for_checkpoint(self, checkpoint_id: int) -> str | None:
         return self._checkpoint_links.get(checkpoint_id)
     
-    def get_tracked_files(self, commit_id: str) -> List[Any]:
+    def get_tracked_files(self, commit_id: str) -> list[Any]:
         return self._commits.get(commit_id, [])
     
     def restore_commit(self, commit_id: str) -> Any:
@@ -155,7 +152,7 @@ class MockFileTrackingService:
         class RestoreResult:
             success: bool = True
             files_restored: int = 0
-            error_message: Optional[str] = None
+            error_message: str | None = None
         
         files = self._commits.get(commit_id, [])
         return RestoreResult(success=True, files_restored=len(files))

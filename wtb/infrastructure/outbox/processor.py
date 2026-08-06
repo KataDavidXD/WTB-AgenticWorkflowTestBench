@@ -30,14 +30,15 @@ Usage:
     processor.start()
 """
 
-from typing import Callable, Dict, Optional, Any, Protocol, List
+import hashlib
+import logging
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-import threading
-import time
-import logging
-import hashlib
+from typing import Any, Optional, Protocol
 
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
@@ -53,7 +54,7 @@ logger = logging.getLogger(__name__)
 class ICheckpointRepository(Protocol):
     """Protocol for AgentGit checkpoint repository access."""
     
-    def get_by_id(self, checkpoint_id: str) -> Optional[Any]:
+    def get_by_id(self, checkpoint_id: str) -> Any | None:
         """Get checkpoint by ID."""
         ...
 
@@ -61,11 +62,11 @@ class ICheckpointRepository(Protocol):
 class ICommitRepository(Protocol):
     """Protocol for FileTracker commit repository access."""
     
-    def find_by_id(self, commit_id: str) -> Optional[Any]:
+    def find_by_id(self, commit_id: str) -> Any | None:
         """Find commit by ID. Returns commit with mementos if found."""
         ...
     
-    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[Any]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> Any | None:
         """Find commit linked to a checkpoint."""
         ...
 
@@ -77,7 +78,7 @@ class IBlobRepository(Protocol):
         """Check if blob with given hash exists."""
         ...
     
-    def get(self, content_hash: str) -> Optional[bytes]:
+    def get(self, content_hash: str) -> bytes | None:
         """Get blob content by hash."""
         ...
 
@@ -94,11 +95,11 @@ class IFileTrackingService(Protocol):
         """Check if service is available."""
         ...
     
-    def get_commit_for_checkpoint(self, checkpoint_id: str) -> Optional[str]:
+    def get_commit_for_checkpoint(self, checkpoint_id: str) -> str | None:
         """Get commit ID linked to a checkpoint."""
         ...
     
-    def get_tracked_files(self, commit_id: str) -> List[Any]:
+    def get_tracked_files(self, commit_id: str) -> list[Any]:
         """Get tracked files for a commit."""
         ...
     
@@ -110,7 +111,7 @@ class IFileTrackingService(Protocol):
         """Restore files from checkpoint's linked commit."""
         ...
     
-    def get_files_at_checkpoint(self, checkpoint_id: str) -> List[str]:
+    def get_files_at_checkpoint(self, checkpoint_id: str) -> list[str]:
         """Get file paths at checkpoint (v1.9)."""
         ...
 
@@ -127,10 +128,10 @@ class IFileCleanupService(Protocol):
         target_checkpoint_id: str,
         execution_id: str,
         current_workspace_path: Path,
-        track_patterns: List[str],
-        exclude_patterns: List[str],
+        track_patterns: list[str],
+        exclude_patterns: list[str],
         file_tracking_service: IFileTrackingService,
-    ) -> List[str]:
+    ) -> list[str]:
         """Identify files created after checkpoint."""
         ...
     
@@ -138,8 +139,8 @@ class IFileCleanupService(Protocol):
         self,
         checkpoint_id: str,
         execution_id: str,
-        orphaned_paths: List[str],
-        backup_dir: Optional[Path] = None,
+        orphaned_paths: list[str],
+        backup_dir: Path | None = None,
         dry_run: bool = False,
         max_files: int = 100,
     ) -> Any:
@@ -157,9 +158,9 @@ class VerificationResult:
     """Result of a verification operation."""
     success: bool
     message: str
-    details: Dict[str, Any] = field(default_factory=dict)
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    details: dict[str, Any] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     verified_at: datetime = field(default_factory=datetime.now)
     
     @classmethod
@@ -168,7 +169,7 @@ class VerificationResult:
         return cls(success=True, message=message, details=details)
     
     @classmethod
-    def failed(cls, message: str, errors: List[str] = None, **details) -> "VerificationResult":
+    def failed(cls, message: str, errors: list[str] = None, **details) -> "VerificationResult":
         """Create failed verification result."""
         return cls(success=False, message=message, errors=errors or [], details=details)
 
@@ -179,8 +180,8 @@ class FileVerificationResult(VerificationResult):
     files_verified: int = 0
     blobs_verified: int = 0
     total_size_bytes: int = 0
-    missing_files: List[str] = field(default_factory=list)
-    corrupted_files: List[str] = field(default_factory=list)
+    missing_files: list[str] = field(default_factory=list)
+    corrupted_files: list[str] = field(default_factory=list)
 
 
 class OutboxProcessor:
@@ -222,10 +223,10 @@ class OutboxProcessor:
     def __init__(
         self,
         wtb_db_url: str,
-        checkpoint_repo: Optional[ICheckpointRepository] = None,
-        commit_repo: Optional[ICommitRepository] = None,
-        blob_repo: Optional[IBlobRepository] = None,
-        file_tracking_service: Optional[IFileTrackingService] = None,
+        checkpoint_repo: ICheckpointRepository | None = None,
+        commit_repo: ICommitRepository | None = None,
+        blob_repo: IBlobRepository | None = None,
+        file_tracking_service: IFileTrackingService | None = None,
         file_cleanup_service: Optional["IFileCleanupService"] = None,
         poll_interval_seconds: float = 1.0,
         batch_size: int = 50,
@@ -259,7 +260,7 @@ class OutboxProcessor:
         self._verify_blob_content = verify_blob_content
         
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         
         # Track verification statistics
         self._stats = {
@@ -275,11 +276,11 @@ class OutboxProcessor:
         }
         
         # Verification results history (bounded)
-        self._verification_history: List[VerificationResult] = []
+        self._verification_history: list[VerificationResult] = []
         self._max_history = 100
         
         # Event handlers mapping
-        self._handlers: Dict[OutboxEventType, Callable[[OutboxEvent], None]] = {
+        self._handlers: dict[OutboxEventType, Callable[[OutboxEvent], None]] = {
             # AgentGit handlers
             OutboxEventType.CHECKPOINT_CREATE: self._handle_checkpoint_create,
             OutboxEventType.CHECKPOINT_VERIFY: self._handle_checkpoint_verify,
@@ -1090,7 +1091,7 @@ class OutboxProcessor:
     
     def _cleanup_orphaned_files_post_restore(
         self,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         target_checkpoint_id: Any,
         execution_id: str,
     ) -> None:
@@ -1191,7 +1192,7 @@ class OutboxProcessor:
         execution_id: str,
         checkpoint_id: str,
         result: Any,  # FileCleanupResult
-        backup_dir: Optional[str] = None,
+        backup_dir: str | None = None,
     ) -> None:
         """
         Emit FILE_CLEANUP_COMPLETED outbox event for audit trail (v1.9).
@@ -1313,7 +1314,7 @@ class OutboxProcessor:
     # Statistics and Monitoring
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """
         Get verification statistics.
         
@@ -1322,7 +1323,7 @@ class OutboxProcessor:
         """
         return dict(self._stats)
     
-    def get_extended_stats(self) -> Dict[str, Any]:
+    def get_extended_stats(self) -> dict[str, Any]:
         """
         Get extended statistics including verification history summary.
         
@@ -1347,7 +1348,7 @@ class OutboxProcessor:
         limit: int = 20,
         success_only: bool = False,
         failed_only: bool = False,
-    ) -> List[VerificationResult]:
+    ) -> list[VerificationResult]:
         """
         Get verification history.
         
@@ -1368,7 +1369,7 @@ class OutboxProcessor:
         
         return results
     
-    def get_failed_verifications(self, limit: int = 10) -> List[VerificationResult]:
+    def get_failed_verifications(self, limit: int = 10) -> list[VerificationResult]:
         """
         Get recent failed verifications for debugging.
         

@@ -18,41 +18,34 @@ ACID Compliance Focus:
 Run with: pytest tests/test_outbox_transaction_consistency/test_branching_rollback.py -v
 """
 
-import pytest
 import threading
 import time
 import uuid
-from datetime import datetime
-from typing import Dict, Any, List
-from unittest.mock import Mock, MagicMock
+from typing import Any
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-
-# Import real domain types
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
-
-# Import test helpers
-from tests.test_outbox_transaction_consistency.helpers import (
-    BranchState,
-    RollbackState,
-    create_branch_state,
-    create_rollback_state,
-    branch_node_a,
-    branch_node_b,
-    branch_node_c,
-    branch_node_d,
-    route_by_switch,
-)
+from langgraph.graph import END, StateGraph
 
 # Import centralized mocks
 from tests.mocks import MockMemento
 from tests.mocks.services import (
-    verify_outbox_consistency,
-    verify_transaction_atomicity,
     VerificationResult,
+    verify_transaction_atomicity,
 )
 
+# Import test helpers
+from tests.test_outbox_transaction_consistency.helpers import (
+    BranchState,
+    branch_node_a,
+    branch_node_b,
+    branch_node_c,
+    branch_node_d,
+    create_branch_state,
+    route_by_switch,
+)
+
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper Functions for Test Events
@@ -64,7 +57,7 @@ def create_branch_rollback_event(
     event_type_name: str,
     aggregate_type: str,
     aggregate_id: str,
-    payload: Dict[str, Any] = None,
+    payload: dict[str, Any] = None,
 ) -> OutboxEvent:
     """
     Create an OutboxEvent for branching/rollback testing.
@@ -309,7 +302,9 @@ class TestRollbackConsistency:
         outbox_repository,
     ):
         """Rollback to checkpoint should restore state and create event."""
-        from tests.test_outbox_transaction_consistency.helpers import create_simple_state
+        from tests.test_outbox_transaction_consistency.helpers import (
+            create_simple_state,
+        )
         
         # Execute full workflow
         config = {"configurable": {"thread_id": "rollback-test-1"}}
@@ -436,7 +431,7 @@ class TestRollbackConsistency:
             outbox_repository.add(event)
             operations.append(("outbox_event", True))
             
-        except Exception as e:
+        except Exception:
             operations.append(("error", False))
         
         result = verify_transaction_atomicity(operations)

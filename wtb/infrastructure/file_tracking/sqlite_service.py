@@ -42,18 +42,19 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from wtb.domain.interfaces.file_tracking import (
+    CheckpointLinkError,
+    CommitNotFoundError,
+    FileRestoreResult,
+    FileTrackingError,
+    FileTrackingLink,
+    FileTrackingResult,
     IFileTrackingService,
     TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
-    FileTrackingLink,
-    FileTrackingError,
+)
+from wtb.domain.interfaces.file_tracking import (
     FileNotFoundError as FTFileNotFoundError,
-    CommitNotFoundError,
-    CheckpointLinkError,
 )
 
 logger = logging.getLogger(__name__)
@@ -283,8 +284,8 @@ class SqliteFileTrackingService(IFileTrackingService):
     
     def track_files(
         self,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track specified files and create a commit.
@@ -364,8 +365,8 @@ class SqliteFileTrackingService(IFileTrackingService):
     def track_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files AND link to checkpoint in a single atomic transaction.
@@ -700,7 +701,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     def get_commit_for_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the file commit ID linked to a checkpoint.
         
@@ -724,7 +725,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     def get_tracked_files(
         self,
         commit_id: str,
-    ) -> List[TrackedFile]:
+    ) -> list[TrackedFile]:
         """
         Get list of tracked files for a commit.
         
@@ -786,7 +787,7 @@ class SqliteFileTrackingService(IFileTrackingService):
     def get_files_at_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get file paths that existed at a specific checkpoint.
         
@@ -848,7 +849,7 @@ class SqliteFileTrackingService(IFileTrackingService):
             cursor.execute("SELECT COUNT(*) as cnt FROM checkpoint_links")
             return cursor.fetchone()['cnt']
     
-    def get_storage_stats(self) -> Dict:
+    def get_storage_stats(self) -> dict:
         """Get storage statistics."""
         with self._lock:
             conn = self._get_connection()

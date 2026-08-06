@@ -5,10 +5,9 @@ Tests node variant management and graph modification capabilities
 without requiring LangGraph installation.
 """
 
-import pytest
-from typing import Dict, Any
 from datetime import datetime
 
+import pytest
 
 # These tests don't require LangGraph - they test the pure Python logic
 # Only skip if the module itself fails to import
@@ -17,13 +16,13 @@ _IMPORT_FAILED = False
 # Import module
 try:
     from wtb.application.services.langgraph_node_replacer import (
+        LANGGRAPH_AVAILABLE,
+        GraphEdgeInfo,
+        GraphNodeInfo,
+        GraphStructure,
         LangGraphNodeReplacer,
         LangGraphNodeVariant,
-        GraphStructure,
-        GraphNodeInfo,
-        GraphEdgeInfo,
         VariantSet,
-        LANGGRAPH_AVAILABLE,
     )
 except ImportError:
     _IMPORT_FAILED = True

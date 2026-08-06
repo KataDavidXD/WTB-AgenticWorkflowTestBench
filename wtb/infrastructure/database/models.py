@@ -5,22 +5,23 @@ These models define the WTB-owned tables in wtb.db.
 AgentGit tables remain unchanged in agentgit.db.
 """
 
+import json
+from datetime import datetime
+
 from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
     Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
     Integer,
     String,
     Text,
-    Float,
-    Boolean,
-    DateTime,
-    ForeignKey,
-    Index,
     UniqueConstraint,
-    CheckConstraint,
 )
-from sqlalchemy.orm import relationship, declarative_base
-from datetime import datetime
-import json
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 

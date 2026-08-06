@@ -1,16 +1,13 @@
-import pytest
-from typing import TypedDict, Annotated, List, Dict, Any
 import operator
-from datetime import datetime
+from typing import Annotated, TypedDict
 
-from langgraph.graph import StateGraph, END
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 
 from wtb.infrastructure.stores.langgraph_checkpoint_store import (
     LangGraphCheckpointStore,
-    LangGraphCheckpointConfig
 )
-from wtb.domain.models.checkpoint import CheckpointId
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Definitions

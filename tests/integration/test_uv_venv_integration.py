@@ -10,13 +10,11 @@ Tests REAL infrastructure:
 Requires: Docker container 'uv_venv_manager' running on localhost:50051
 """
 
-import os
 import sys
 import uuid
-import tempfile
-import pytest
 from pathlib import Path
-from typing import Optional
+
+import pytest
 
 GRPC_ADDRESS = "localhost:50051"
 
@@ -25,8 +23,11 @@ def _grpc_available() -> bool:
     """Check if gRPC and uv_venv_manager service are reachable."""
     try:
         import grpc
+
         from wtb.infrastructure.environment.uv_manager.grpc_generated import (
             env_manager_pb2 as pb2,
+        )
+        from wtb.infrastructure.environment.uv_manager.grpc_generated import (
             env_manager_pb2_grpc as pb2_grpc,
         )
         ch = grpc.insecure_channel(GRPC_ADDRESS)
@@ -115,14 +116,20 @@ class TestVenvSpecHashing:
 class TestVenvCacheManager:
 
     def test_empty_cache_has_zero_entries(self, tmp_path):
-        from wtb.infrastructure.environment.venv_cache import VenvCacheManager, VenvCacheConfig
+        from wtb.infrastructure.environment.venv_cache import (
+            VenvCacheConfig,
+            VenvCacheManager,
+        )
         config = VenvCacheConfig(cache_dir=tmp_path / "cache")
         mgr = VenvCacheManager(config)
         stats = mgr.get_stats()
         assert stats.total_entries == 0
 
     def test_cache_miss_returns_none(self, tmp_path):
-        from wtb.infrastructure.environment.venv_cache import VenvCacheManager, VenvCacheConfig
+        from wtb.infrastructure.environment.venv_cache import (
+            VenvCacheConfig,
+            VenvCacheManager,
+        )
         config = VenvCacheConfig(cache_dir=tmp_path / "cache")
         mgr = VenvCacheManager(config)
         result = mgr.get("nonexistent_hash")
@@ -131,7 +138,11 @@ class TestVenvCacheManager:
         assert stats.misses >= 1
 
     def test_put_and_get_cache_entry(self, tmp_path):
-        from wtb.infrastructure.environment.venv_cache import VenvCacheManager, VenvCacheConfig, VenvSpec
+        from wtb.infrastructure.environment.venv_cache import (
+            VenvCacheConfig,
+            VenvCacheManager,
+            VenvSpec,
+        )
         config = VenvCacheConfig(cache_dir=tmp_path / "cache")
         mgr = VenvCacheManager(config)
 
@@ -146,7 +157,11 @@ class TestVenvCacheManager:
         assert entry is not None
 
     def test_index_persists_across_instances(self, tmp_path):
-        from wtb.infrastructure.environment.venv_cache import VenvCacheManager, VenvCacheConfig, VenvSpec
+        from wtb.infrastructure.environment.venv_cache import (
+            VenvCacheConfig,
+            VenvCacheManager,
+            VenvSpec,
+        )
         config = VenvCacheConfig(cache_dir=tmp_path / "cache")
 
         venv_dir = tmp_path / "source_venv"
@@ -162,7 +177,10 @@ class TestVenvCacheManager:
         assert entry is not None
 
     def test_cache_stats_structure(self, tmp_path):
-        from wtb.infrastructure.environment.venv_cache import VenvCacheManager, VenvCacheConfig
+        from wtb.infrastructure.environment.venv_cache import (
+            VenvCacheConfig,
+            VenvCacheManager,
+        )
         config = VenvCacheConfig(cache_dir=tmp_path / "cache")
         mgr = VenvCacheManager(config)
         stats = mgr.get_stats()
@@ -412,20 +430,26 @@ class TestGrpcEnvironmentProviderReal:
 class TestInProcessProvider:
 
     def test_create_returns_inprocess_type(self):
-        from wtb.infrastructure.environment.providers import InProcessEnvironmentProvider
+        from wtb.infrastructure.environment.providers import (
+            InProcessEnvironmentProvider,
+        )
         provider = InProcessEnvironmentProvider()
         env = provider.create_environment("v1", {"pip": ["numpy"]})
         assert env["type"] == "inprocess"
 
     def test_cleanup_removes_environment(self):
-        from wtb.infrastructure.environment.providers import InProcessEnvironmentProvider
+        from wtb.infrastructure.environment.providers import (
+            InProcessEnvironmentProvider,
+        )
         provider = InProcessEnvironmentProvider()
         provider.create_environment("v1", {})
         provider.cleanup_environment("v1")
         assert provider.get_runtime_env("v1") is None
 
     def test_get_runtime_env_returns_none(self):
-        from wtb.infrastructure.environment.providers import InProcessEnvironmentProvider
+        from wtb.infrastructure.environment.providers import (
+            InProcessEnvironmentProvider,
+        )
         provider = InProcessEnvironmentProvider()
         provider.create_environment("v1", {})
         assert provider.get_runtime_env("v1") is None

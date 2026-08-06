@@ -3,8 +3,9 @@
 Base Async Repository Implementation.
 """
 
-from typing import TypeVar, Generic, Optional, List, Type
-from sqlalchemy import select, func, delete
+from typing import Generic, TypeVar
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 T = TypeVar('T')
@@ -20,7 +21,7 @@ class BaseAsyncRepository(Generic[T, ORM]):
     - _to_orm(domain) -> ORM: Convert domain model to ORM model
     """
     
-    def __init__(self, session: AsyncSession, orm_class: Type[ORM]):
+    def __init__(self, session: AsyncSession, orm_class: type[ORM]):
         self._session = session
         self._orm_class = orm_class
     
@@ -32,12 +33,12 @@ class BaseAsyncRepository(Generic[T, ORM]):
         """Convert domain model to ORM model. Override in subclass."""
         raise NotImplementedError
     
-    async def aget(self, id: str) -> Optional[T]:
+    async def aget(self, id: str) -> T | None:
         """Get entity by ID asynchronously."""
         orm = await self._session.get(self._orm_class, id)
         return self._to_domain(orm) if orm else None
     
-    async def alist(self, limit: int = 100, offset: int = 0) -> List[T]:
+    async def alist(self, limit: int = 100, offset: int = 0) -> list[T]:
         """List entities with pagination asynchronously."""
         stmt = select(self._orm_class).limit(limit).offset(offset)
         result = await self._session.execute(stmt)

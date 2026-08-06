@@ -25,20 +25,22 @@ Usage:
 Updated: 2026-01-28
 """
 
-import threading
+import builtins
 import hashlib
-from datetime import datetime
-from typing import Dict, List, Optional, Any
+import threading
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+from wtb.domain.interfaces.repositories import (
+    IExecutionRepository,
+    INodeVariantRepository,
+    IOutboxRepository,
+    IWorkflowRepository,
+)
 
 # Import REAL domain types and interfaces
 from wtb.domain.models.outbox import OutboxEvent, OutboxStatus
-from wtb.domain.interfaces.repositories import (
-    IOutboxRepository,
-    IExecutionRepository,
-    IWorkflowRepository,
-    INodeVariantRepository,
-)
 
 
 class MockOutboxRepository(IOutboxRepository):
@@ -60,8 +62,8 @@ class MockOutboxRepository(IOutboxRepository):
     """
     
     def __init__(self):
-        self._events: Dict[str, OutboxEvent] = {}  # keyed by event_id
-        self._events_by_pk: Dict[int, OutboxEvent] = {}  # keyed by id (pk)
+        self._events: dict[str, OutboxEvent] = {}  # keyed by event_id
+        self._events_by_pk: dict[int, OutboxEvent] = {}  # keyed by id (pk)
         self._lock = threading.Lock()
         self._pk_counter = 0
     
@@ -77,15 +79,15 @@ class MockOutboxRepository(IOutboxRepository):
             self._events_by_pk[event.id] = event
             return event
     
-    def get_by_id(self, event_id: str) -> Optional[OutboxEvent]:
+    def get_by_id(self, event_id: str) -> OutboxEvent | None:
         """Get event by event_id (UUID)."""
         return self._events.get(event_id)
     
-    def get_by_pk(self, id: int) -> Optional[OutboxEvent]:
+    def get_by_pk(self, id: int) -> OutboxEvent | None:
         """Get event by database primary key."""
         return self._events_by_pk.get(id)
     
-    def get_pending(self, limit: int = 100) -> List[OutboxEvent]:
+    def get_pending(self, limit: int = 100) -> list[OutboxEvent]:
         """Get pending events for processing, ordered by created_at."""
         pending = [
             e for e in self._events.values() 
@@ -94,7 +96,7 @@ class MockOutboxRepository(IOutboxRepository):
         pending.sort(key=lambda e: e.created_at)
         return pending[:limit]
     
-    def get_failed_for_retry(self, limit: int = 50) -> List[OutboxEvent]:
+    def get_failed_for_retry(self, limit: int = 50) -> list[OutboxEvent]:
         """Get failed events that can be retried."""
         retryable = [
             e for e in self._events.values() 
@@ -128,21 +130,21 @@ class MockOutboxRepository(IOutboxRepository):
             
             return len(to_delete)
     
-    def list_all(self, limit: int = 100) -> List[OutboxEvent]:
+    def list_all(self, limit: int = 100) -> list[OutboxEvent]:
         """List all events (for admin/debugging)."""
         events = list(self._events.values())
         events.sort(key=lambda e: e.created_at)
         return events[:limit]
     
     # Additional test helper methods
-    def get_processed(self) -> List[OutboxEvent]:
+    def get_processed(self) -> list[OutboxEvent]:
         """Get all processed events (test helper)."""
         return [
             e for e in self._events.values() 
             if e.status == OutboxStatus.PROCESSED
         ]
     
-    def get_failed(self) -> List[OutboxEvent]:
+    def get_failed(self) -> list[OutboxEvent]:
         """Get all failed events (test helper)."""
         return [
             e for e in self._events.values() 
@@ -169,8 +171,8 @@ class MockCheckpoint:
     checkpoint_id: int
     thread_id: str
     step: int
-    state: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    state: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
 
@@ -184,7 +186,7 @@ class MockCheckpointRepository:
     """
     
     def __init__(self):
-        self._checkpoints: Dict[int, MockCheckpoint] = {}
+        self._checkpoints: dict[int, MockCheckpoint] = {}
         self._lock = threading.Lock()
     
     def add_checkpoint(
@@ -192,8 +194,8 @@ class MockCheckpointRepository:
         checkpoint_id: int, 
         thread_id: str = "test",
         step: int = 0,
-        state: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        state: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> MockCheckpoint:
         """Add a checkpoint."""
         with self._lock:
@@ -207,18 +209,18 @@ class MockCheckpointRepository:
             self._checkpoints[checkpoint_id] = checkpoint
             return checkpoint
     
-    def get_by_id(self, checkpoint_id: int) -> Optional[MockCheckpoint]:
+    def get_by_id(self, checkpoint_id: int) -> MockCheckpoint | None:
         """Get checkpoint by ID."""
         return self._checkpoints.get(checkpoint_id)
     
-    def list_by_thread(self, thread_id: str) -> List[MockCheckpoint]:
+    def list_by_thread(self, thread_id: str) -> list[MockCheckpoint]:
         """List checkpoints by thread ID, ordered by step."""
         return sorted(
             [c for c in self._checkpoints.values() if c.thread_id == thread_id],
             key=lambda c: c.step,
         )
     
-    def list_all(self) -> List[MockCheckpoint]:
+    def list_all(self) -> list[MockCheckpoint]:
         """List all checkpoints."""
         return list(self._checkpoints.values())
     
@@ -260,13 +262,13 @@ class MockCommit:
     Represents a commit of file changes for testing file tracking.
     """
     commit_id: str
-    mementos: List[MockMemento] = field(default_factory=list)
-    execution_id: Optional[str] = None
+    mementos: list[MockMemento] = field(default_factory=list)
+    execution_id: str | None = None
     message: str = "test commit"
     created_at: datetime = field(default_factory=datetime.now)
     
     @property
-    def _mementos(self) -> List[MockMemento]:
+    def _mementos(self) -> list[MockMemento]:
         return self.mementos
     
     @property
@@ -282,14 +284,14 @@ class MockCommitRepository:
     """
     
     def __init__(self):
-        self._commits: Dict[str, MockCommit] = {}
+        self._commits: dict[str, MockCommit] = {}
         self._lock = threading.Lock()
     
     def add_commit(
         self, 
         commit_id: str, 
-        mementos: Optional[List[MockMemento]] = None,
-        execution_id: Optional[str] = None,
+        mementos: list[MockMemento] | None = None,
+        execution_id: str | None = None,
         message: str = "test commit",
     ) -> MockCommit:
         """Add a commit."""
@@ -303,15 +305,15 @@ class MockCommitRepository:
             self._commits[commit_id] = commit
             return commit
     
-    def get_by_id(self, commit_id: str) -> Optional[MockCommit]:
+    def get_by_id(self, commit_id: str) -> MockCommit | None:
         """Get commit by ID."""
         return self._commits.get(commit_id)
     
-    def find_by_id(self, commit_id: str) -> Optional[MockCommit]:
+    def find_by_id(self, commit_id: str) -> MockCommit | None:
         """Alias for get_by_id (compatibility)."""
         return self.get_by_id(commit_id)
     
-    def list_by_execution(self, execution_id: str) -> List[MockCommit]:
+    def list_by_execution(self, execution_id: str) -> list[MockCommit]:
         """List commits by execution ID."""
         return [c for c in self._commits.values() if c.execution_id == execution_id]
     
@@ -329,7 +331,7 @@ class MockCommitRepository:
                 return True
             return False
     
-    def list_all(self) -> List[MockCommit]:
+    def list_all(self) -> list[MockCommit]:
         """List all commits."""
         return list(self._commits.values())
     
@@ -347,7 +349,7 @@ class MockBlobRepository:
     """
     
     def __init__(self):
-        self._blobs: Dict[str, bytes] = {}
+        self._blobs: dict[str, bytes] = {}
         self._lock = threading.Lock()
     
     def add_blob(self, content_hash: str, content: bytes = b"test") -> str:
@@ -368,7 +370,7 @@ class MockBlobRepository:
             content_hash = content_hash.value
         return content_hash in self._blobs
     
-    def get(self, content_hash: str) -> Optional[bytes]:
+    def get(self, content_hash: str) -> bytes | None:
         """Get blob content."""
         if hasattr(content_hash, 'value'):
             content_hash = content_hash.value
@@ -382,7 +384,7 @@ class MockBlobRepository:
                 return True
             return False
     
-    def list_all(self) -> List[str]:
+    def list_all(self) -> list[str]:
         """List all blob hashes."""
         return list(self._blobs.keys())
     
@@ -400,14 +402,14 @@ class MockExecutionRepository(IExecutionRepository):
     """
     
     def __init__(self):
-        self._executions: Dict[str, Any] = {}
+        self._executions: dict[str, Any] = {}
         self._lock = threading.Lock()
     
-    def get(self, id: str) -> Optional[Any]:
+    def get(self, id: str) -> Any | None:
         """Get execution by ID."""
         return self._executions.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[Any]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[Any]:
         """List executions with pagination."""
         all_executions = list(self._executions.values())
         return all_executions[offset:offset + limit]
@@ -436,21 +438,21 @@ class MockExecutionRepository(IExecutionRepository):
                 return True
             return False
     
-    def find_by_workflow(self, workflow_id: str) -> List[Any]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[Any]:
         """Find executions by workflow ID."""
         return [
             e for e in self._executions.values() 
             if hasattr(e, 'workflow_id') and e.workflow_id == workflow_id
         ]
     
-    def find_by_status(self, status: Any) -> List[Any]:
+    def find_by_status(self, status: Any) -> builtins.list[Any]:
         """Find executions by status."""
         return [
             e for e in self._executions.values() 
             if hasattr(e, 'status') and e.status == status
         ]
     
-    def find_running(self) -> List[Any]:
+    def find_running(self) -> builtins.list[Any]:
         """Find running executions."""
         from wtb.domain.models.workflow import ExecutionStatus
         return self.find_by_status(ExecutionStatus.RUNNING)
@@ -467,14 +469,14 @@ class MockWorkflowRepository(IWorkflowRepository):
     """
     
     def __init__(self):
-        self._workflows: Dict[str, Any] = {}
+        self._workflows: dict[str, Any] = {}
         self._lock = threading.Lock()
     
-    def get(self, id: str) -> Optional[Any]:
+    def get(self, id: str) -> Any | None:
         """Get workflow by ID."""
         return self._workflows.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[Any]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[Any]:
         """List workflows with pagination."""
         all_workflows = list(self._workflows.values())
         return all_workflows[offset:offset + limit]
@@ -503,14 +505,14 @@ class MockWorkflowRepository(IWorkflowRepository):
                 return True
             return False
     
-    def find_by_name(self, name: str) -> Optional[Any]:
+    def find_by_name(self, name: str) -> Any | None:
         """Find workflow by name."""
         for wf in self._workflows.values():
             if hasattr(wf, 'name') and wf.name == name:
                 return wf
         return None
     
-    def find_by_version(self, name: str, version: str) -> Optional[Any]:
+    def find_by_version(self, name: str, version: str) -> Any | None:
         """Find workflow by name and version."""
         for wf in self._workflows.values():
             if (hasattr(wf, 'name') and wf.name == name and 
@@ -518,7 +520,7 @@ class MockWorkflowRepository(IWorkflowRepository):
                 return wf
         return None
     
-    def list_all(self) -> List[Any]:
+    def list_all(self) -> builtins.list[Any]:
         """List all workflows."""
         return list(self._workflows.values())
     
@@ -534,14 +536,14 @@ class MockNodeVariantRepository(INodeVariantRepository):
     """
     
     def __init__(self):
-        self._variants: Dict[str, Any] = {}
+        self._variants: dict[str, Any] = {}
         self._lock = threading.Lock()
     
-    def get(self, id: str) -> Optional[Any]:
+    def get(self, id: str) -> Any | None:
         """Get variant by ID."""
         return self._variants.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[Any]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[Any]:
         """List variants with pagination."""
         all_variants = list(self._variants.values())
         return all_variants[offset:offset + limit]
@@ -570,14 +572,14 @@ class MockNodeVariantRepository(INodeVariantRepository):
                 return True
             return False
     
-    def find_by_workflow(self, workflow_id: str) -> List[Any]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[Any]:
         """Find variants by workflow ID."""
         return [
             v for v in self._variants.values() 
             if hasattr(v, 'workflow_id') and v.workflow_id == workflow_id
         ]
     
-    def find_by_node(self, workflow_id: str, node_id: str) -> List[Any]:
+    def find_by_node(self, workflow_id: str, node_id: str) -> builtins.list[Any]:
         """Find variants by workflow and node ID."""
         return [
             v for v in self._variants.values() 
@@ -585,7 +587,7 @@ class MockNodeVariantRepository(INodeVariantRepository):
                 hasattr(v, 'node_id') and v.node_id == node_id)
         ]
     
-    def find_active(self, workflow_id: str) -> List[Any]:
+    def find_active(self, workflow_id: str) -> builtins.list[Any]:
         """Find active variants by workflow ID."""
         return [
             v for v in self._variants.values() 

@@ -6,7 +6,7 @@ resolve ``__main__``) can import them by module path.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 
 def create_linear_graph():
@@ -21,13 +21,13 @@ def create_linear_graph():
         result: str
         _variant_config: dict
 
-    def node_a(state: Dict[str, Any]) -> dict:
+    def node_a(state: dict[str, Any]) -> dict:
         return {
             "messages": state.get("messages", []) + ["A"],
             "count": state.get("count", 0) + 1,
         }
 
-    def node_b(state: Dict[str, Any]) -> dict:
+    def node_b(state: dict[str, Any]) -> dict:
         variant = (state.get("_variant_config") or {}).get("node_b")
         marker = f"B:{variant}" if variant and variant != "default" else "B"
         return {
@@ -35,7 +35,7 @@ def create_linear_graph():
             "count": state.get("count", 0) + 1,
         }
 
-    def node_c(state: Dict[str, Any]) -> dict:
+    def node_c(state: dict[str, Any]) -> dict:
         msgs = state.get("messages", []) + ["C"]
         return {
             "messages": msgs,

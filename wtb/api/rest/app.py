@@ -11,26 +11,24 @@ Creates and configures the main FastAPI application with:
 """
 
 from contextlib import asynccontextmanager
-from typing import Optional, Callable
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from wtb.api.rest.dependencies import AppState, get_app_state
 from wtb.api.rest.models import ErrorResponse
 from wtb.api.rest.routes import (
-    workflows_router,
-    executions_router,
     audit_router,
     batch_tests_router,
+    executions_router,
     health_router,
+    workflows_router,
 )
-from wtb.api.rest.dependencies import get_app_state, AppState
-
 
 # Global app instance
-_app: Optional[FastAPI] = None
+_app: FastAPI | None = None
 
 
 def create_app(
@@ -38,9 +36,9 @@ def create_app(
     version: str = "1.0.0",
     debug: bool = False,
     enable_cors: bool = True,
-    cors_origins: Optional[list] = None,
+    cors_origins: list | None = None,
     enable_opentelemetry: bool = False,
-    app_state: Optional[AppState] = None,
+    app_state: AppState | None = None,
 ) -> FastAPI:
     """
     Create and configure the FastAPI application.
@@ -67,7 +65,6 @@ def create_app(
             state.initialize()
         
         # Import WebSocket handler
-        from wtb.api.websocket.handlers import ConnectionManager, get_connection_manager
         
         yield
         
@@ -183,7 +180,7 @@ See `/docs` for detailed API documentation.
     app.include_router(batch_tests_router)
     
     # WebSocket endpoint
-    from wtb.api.websocket.handlers import websocket_endpoint, get_connection_manager
+    from wtb.api.websocket.handlers import get_connection_manager, websocket_endpoint
     
     @app.websocket("/ws")
     async def websocket_route(websocket):
@@ -195,8 +192,8 @@ See `/docs` for detailed API documentation.
     async def metrics_endpoint():
         """Prometheus metrics endpoint."""
         try:
-            from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
             from fastapi.responses import Response
+            from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
             return Response(
                 content=generate_latest(),
                 media_type=CONTENT_TYPE_LATEST,

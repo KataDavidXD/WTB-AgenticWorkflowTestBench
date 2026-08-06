@@ -18,13 +18,13 @@ import logging
 import operator
 import os
 import uuid
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, Optional
 
 from wtb.domain.interfaces.execution_controller import IExecutionController
-from wtb.domain.interfaces.state_adapter import IStateAdapter, CheckpointTrigger
 from wtb.domain.interfaces.node_executor import INodeExecutor, NodeExecutionResult
 from wtb.domain.interfaces.repositories import IExecutionRepository, IWorkflowRepository
+from wtb.domain.interfaces.state_adapter import CheckpointTrigger, IStateAdapter
 from wtb.domain.models import (
     Execution,
     ExecutionState,
@@ -34,8 +34,8 @@ from wtb.domain.models import (
 )
 
 if TYPE_CHECKING:
-    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
     from wtb.domain.interfaces.file_tracking import IFileTrackingService
+    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ _SAFE_BIN_OPS = {
 }
 
 
-def _safe_eval_node(node: ast.AST, ctx: Dict[str, Any]) -> Any:
+def _safe_eval_node(node: ast.AST, ctx: dict[str, Any]) -> Any:
     """Recursively evaluate an AST node against *ctx* without exec/eval."""
     if isinstance(node, ast.Expression):
         return _safe_eval_node(node.body, ctx)
@@ -133,7 +133,7 @@ def _safe_eval_node(node: ast.AST, ctx: Dict[str, Any]) -> Any:
     )
 
 
-def safe_eval_condition(expr: str, context: Dict[str, Any]) -> bool:
+def safe_eval_condition(expr: str, context: dict[str, Any]) -> bool:
     """Evaluate a condition expression safely without eval()."""
     tree = ast.parse(expr, mode="eval")
     return bool(_safe_eval_node(tree.body, context))
@@ -153,7 +153,7 @@ class DefaultNodeExecutor(INodeExecutor):
     def execute(
         self,
         node: WorkflowNode,
-        context: Dict[str, Any]
+        context: dict[str, Any]
     ) -> NodeExecutionResult:
         """Execute a workflow node."""
         start_time = datetime.now()
@@ -186,7 +186,7 @@ class DefaultNodeExecutor(INodeExecutor):
                 duration_ms=duration,
             )
     
-    def _execute_action(self, node: WorkflowNode, context: Dict[str, Any]) -> Any:
+    def _execute_action(self, node: WorkflowNode, context: dict[str, Any]) -> Any:
         """Execute an action node."""
         result = {
             "node_id": node.id,
@@ -199,7 +199,7 @@ class DefaultNodeExecutor(INodeExecutor):
         
         return result
     
-    def _evaluate_decision(self, node: WorkflowNode, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _evaluate_decision(self, node: WorkflowNode, context: dict[str, Any]) -> dict[str, Any]:
         """Evaluate a decision node using safe AST-based evaluator."""
         condition = node.config.get("condition", "True")
         
@@ -247,10 +247,10 @@ class ExecutionController(IExecutionController):
         execution_repository: IExecutionRepository,
         workflow_repository: IWorkflowRepository,
         state_adapter: IStateAdapter,
-        node_executor: Optional[INodeExecutor] = None,
+        node_executor: INodeExecutor | None = None,
         unit_of_work: Optional["IUnitOfWork"] = None,
         file_tracking_service: Optional["IFileTrackingService"] = None,
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
     ):
         """
         Initialize the execution controller.
@@ -345,10 +345,10 @@ class ExecutionController(IExecutionController):
     def create_execution(
         self, 
         workflow: TestWorkflow,
-        initial_state: Optional[Dict[str, Any]] = None,
-        breakpoints: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        initial_state: dict[str, Any] | None = None,
+        breakpoints: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        execution_id: str | None = None,
     ) -> Execution:
         """Create a new execution for a workflow."""
         # Validate workflow
@@ -389,7 +389,7 @@ class ExecutionController(IExecutionController):
         
         return execution
     
-    def run(self, execution_id: str, graph: Optional[Any] = None) -> Execution:
+    def run(self, execution_id: str, graph: Any | None = None) -> Execution:
         """
         Start or continue execution.
         
@@ -404,7 +404,7 @@ class ExecutionController(IExecutionController):
     def _run_execution(
         self,
         execution: Execution,
-        graph: Optional[Any] = None,
+        graph: Any | None = None,
         *,
         session_activated: bool = False,
     ) -> Execution:
@@ -447,7 +447,7 @@ class ExecutionController(IExecutionController):
         execution: Execution,
         *,
         refresh: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return a stable, durable token for one explicit graphless resume."""
         if getattr(
             self._state_adapter,
@@ -764,7 +764,7 @@ class ExecutionController(IExecutionController):
             f"for execution {execution.id}"
         )
 
-    def _write_output_files(self, output_files_data: Dict[str, Any]) -> List[str]:
+    def _write_output_files(self, output_files_data: dict[str, Any]) -> list[str]:
         """Materialize _output_files under output_dir and return absolute paths."""
         import json
         from pathlib import Path
@@ -775,7 +775,7 @@ class ExecutionController(IExecutionController):
         output_dir = (
             Path(self._output_dir) if self._output_dir else Path("outputs")
         ).resolve()
-        validated_outputs: List[tuple[Path, Any, bool]] = []
+        validated_outputs: list[tuple[Path, Any, bool]] = []
         for filename, content in output_files_data.items():
             if not isinstance(filename, str) or not filename.strip():
                 raise ValueError(f"Invalid output file path: {filename!r}")
@@ -810,7 +810,7 @@ class ExecutionController(IExecutionController):
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        written_paths: List[str] = []
+        written_paths: list[str] = []
         for file_path, content, is_binary in validated_outputs:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             if is_binary:
@@ -823,9 +823,9 @@ class ExecutionController(IExecutionController):
 
     def _track_paths_for_checkpoint(
         self,
-        checkpoint_id: Optional[str],
-        file_paths: List[str],
-        message: Optional[str] = None,
+        checkpoint_id: str | None,
+        file_paths: list[str],
+        message: str | None = None,
     ):
         """Track file paths and link the CAS commit to checkpoint_id."""
         if not self._file_tracking or not file_paths:
@@ -845,7 +845,7 @@ class ExecutionController(IExecutionController):
                 link_fn(checkpoint_id, result.commit_id)
         return result
 
-    def _get_commit_for_checkpoint(self, checkpoint_id: Optional[str]) -> Optional[str]:
+    def _get_commit_for_checkpoint(self, checkpoint_id: str | None) -> str | None:
         if not checkpoint_id or not self._file_tracking:
             return None
         get_commit = getattr(self._file_tracking, "get_commit_for_checkpoint", None)
@@ -871,8 +871,8 @@ class ExecutionController(IExecutionController):
 
     def _require_checkpoint_file_commit(
         self,
-        checkpoint_id: Optional[str],
-    ) -> Optional[str]:
+        checkpoint_id: str | None,
+    ) -> str | None:
         """Require checkpoint_id to have a CAS file commit."""
         if not checkpoint_id or not self._file_tracking or not self._file_tracking.is_available():
             return None
@@ -905,7 +905,7 @@ class ExecutionController(IExecutionController):
         if recovery_terminal:
             return execution
 
-        resume_claim_id: Optional[str] = None
+        resume_claim_id: str | None = None
         if execution.status == ExecutionStatus.PAUSED:
             resume_claim_token = self._prepare_node_resume_claim_token(execution)
             if resume_claim_token is not None:
@@ -1079,7 +1079,7 @@ class ExecutionController(IExecutionController):
     def resume(
         self, 
         execution_id: str, 
-        modified_state: Optional[Dict[str, Any]] = None
+        modified_state: dict[str, Any] | None = None
     ) -> Execution:
         """Resume paused execution."""
         execution = self._get_execution(execution_id)
@@ -1229,8 +1229,8 @@ class ExecutionController(IExecutionController):
         checkpoint_id: str,
         source_state: ExecutionState,
         *,
-        has_output_files: Optional[bool] = None,
-    ) -> Optional[Dict[str, Any]]:
+        has_output_files: bool | None = None,
+    ) -> dict[str, Any] | None:
         """Restore checkpoint files via required CAS checkpoint link."""
         if has_output_files is None:
             has_output_files = self._checkpoint_has_output_files(source_state)
@@ -1282,14 +1282,14 @@ class ExecutionController(IExecutionController):
         self,
         execution_id: str,
         checkpoint_id: str,
-        new_initial_state: Optional[Dict[str, Any]] = None,
+        new_initial_state: dict[str, Any] | None = None,
     ) -> Execution:
         """Atomically fork while always restoring the source adapter session."""
         source_execution = self._get_execution(execution_id)
         source_session_id = source_execution.session_id
         fork_execution_id = str(uuid.uuid4())
-        forked_execution: Optional[Execution] = None
-        operation_error: Optional[Exception] = None
+        forked_execution: Execution | None = None
+        operation_error: Exception | None = None
 
         try:
             forked_execution = self._fork_impl(
@@ -1351,7 +1351,7 @@ class ExecutionController(IExecutionController):
         self,
         execution_id: str,
         checkpoint_id: str,
-        new_initial_state: Optional[Dict[str, Any]] = None,
+        new_initial_state: dict[str, Any] | None = None,
         *,
         fork_execution_id: str,
     ) -> Execution:
@@ -1392,8 +1392,8 @@ class ExecutionController(IExecutionController):
             and self._file_tracking.is_available()
         ):
             self._require_checkpoint_file_commit(checkpoint_id)
-        fork_as_node: Optional[str] = None
-        initial_input_state: Optional[Dict[str, Any]] = None
+        fork_as_node: str | None = None
+        initial_input_state: dict[str, Any] | None = None
         graph_execution = self._state_adapter.supports_graph_execution()
         if graph_execution:
             checkpoint_history = self._state_adapter.get_checkpoint_history()
@@ -1611,7 +1611,7 @@ class ExecutionController(IExecutionController):
         execution: Execution,
         node_id: str,
         name: str,
-        state: Optional[ExecutionState] = None,
+        state: ExecutionState | None = None,
     ) -> str:
         """Create a checkpoint via state adapter. Returns checkpoint_id (string)."""
         checkpoint_id = self._state_adapter.save_checkpoint(
@@ -1631,7 +1631,7 @@ class ExecutionController(IExecutionController):
         workflow: TestWorkflow,
         execution: Execution,
         last_result: Any
-    ) -> Optional[str]:
+    ) -> str | None:
         """Determine the next node based on edges and conditions."""
         current_node_id = execution.state.current_node_id
         if not current_node_id:
@@ -1657,7 +1657,7 @@ class ExecutionController(IExecutionController):
     def _evaluate_condition(
         self, 
         condition: str,
-        variables: Dict[str, Any],
+        variables: dict[str, Any],
         last_result: Any
     ) -> bool:
         """Evaluate an edge condition using safe AST-based evaluator."""
@@ -1679,7 +1679,7 @@ class ExecutionController(IExecutionController):
         """Check if the adapter supports event streaming."""
         return self._state_adapter.supports_streaming()
     
-    def get_checkpoint_history(self, execution_id: str) -> List[Dict[str, Any]]:
+    def get_checkpoint_history(self, execution_id: str) -> list[dict[str, Any]]:
         """Get full checkpoint history for time-travel."""
         execution = self._get_execution(execution_id)
         
@@ -1691,7 +1691,7 @@ class ExecutionController(IExecutionController):
     def update_execution_state(
         self, 
         execution_id: str, 
-        values: Dict[str, Any]
+        values: dict[str, Any]
     ) -> bool:
         """Update execution state mid-execution (human-in-the-loop)."""
         execution = self._get_execution(execution_id)

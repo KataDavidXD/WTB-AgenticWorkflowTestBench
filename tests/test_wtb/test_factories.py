@@ -8,34 +8,33 @@ Tests:
 - InMemoryUnitOfWork
 """
 
-import pytest
-from datetime import datetime
 from threading import Event, Thread
 from unittest.mock import MagicMock, patch
 
-from wtb.config import WTBConfig, get_config, set_config, reset_config
-from wtb.infrastructure.database import (
-    UnitOfWorkFactory,
-    InMemoryUnitOfWork,
-    SQLAlchemyUnitOfWork,
-)
-from wtb.infrastructure.adapters import InMemoryStateAdapter
+import pytest
+
 from wtb.application import ExecutionControllerFactory, NodeReplacerFactory
 from wtb.application.factories import (
     BatchCoordinatorFactory,
     ManagedController,
     WTBTestBenchFactory,
 )
+from wtb.config import WTBConfig, get_config, reset_config, set_config
 from wtb.domain.models import (
-    TestWorkflow,
-    WorkflowNode,
-    WorkflowEdge,
+    CheckpointFileLink,
     Execution,
     ExecutionStatus,
     NodeBoundary,
-    CheckpointFileLink,
+    TestWorkflow,
+    WorkflowNode,
 )
 from wtb.domain.models.file_processing import CommitId, FileCommit
+from wtb.infrastructure.adapters import InMemoryStateAdapter
+from wtb.infrastructure.database import (
+    InMemoryUnitOfWork,
+    SQLAlchemyUnitOfWork,
+    UnitOfWorkFactory,
+)
 
 
 class TestWTBConfig:

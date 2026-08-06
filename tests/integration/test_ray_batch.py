@@ -5,11 +5,12 @@ Tests the RayBatchTestRunner with actual Ray when available.
 Skips gracefully when Ray is not installed.
 """
 
-import pytest
 import os
 import socket
 import tempfile
-from typing import Dict, Any, Optional, List
+from typing import Any
+
+import pytest
 
 from wtb.domain.models.batch_test import (
     BatchTest,
@@ -18,8 +19,8 @@ from wtb.domain.models.batch_test import (
 )
 from wtb.domain.models.workflow import (
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
 
 try:
@@ -36,8 +37,10 @@ pytestmark = pytest.mark.skipif(
 
 def _try_import_runner():
     from wtb.application.services.ray_batch_runner import (
-        RayBatchTestRunner,
         RAY_AVAILABLE as WTB_RAY,
+    )
+    from wtb.application.services.ray_batch_runner import (
+        RayBatchTestRunner,
     )
     if not WTB_RAY:
         pytest.skip("Ray not available in wtb")
@@ -59,8 +62,8 @@ def _make_workflow() -> TestWorkflow:
 
 def _make_batch_test(
     workflow_id: str = "wf-ray",
-    combinations: Optional[List[VariantCombination]] = None,
-    initial_state: Optional[Dict[str, Any]] = None,
+    combinations: list[VariantCombination] | None = None,
+    initial_state: dict[str, Any] | None = None,
 ) -> BatchTest:
     if combinations is None:
         combinations = [

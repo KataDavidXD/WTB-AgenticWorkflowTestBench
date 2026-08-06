@@ -26,23 +26,21 @@ Usage:
         print(f"Discrepancies: {result.discrepancies}")
 """
 
+import copy
+import logging
+import statistics
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from enum import Enum
-import logging
-import copy
-import statistics
+from typing import Any
 
-from wtb.domain.models.batch_test import (
-    BatchTest,
-    BatchTestResult,
-    BatchTestStatus,
-    VariantCombination,
-)
 from wtb.domain.interfaces.batch_runner import (
     IBatchTestRunner,
-    BatchRunnerError,
+)
+from wtb.domain.models.batch_test import (
+    BatchTest,
+    BatchTestStatus,
+    VariantCombination,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,7 +74,7 @@ class ParityDiscrepancy:
     ray_value: Any
     description: str
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "type": self.type.value,
@@ -109,20 +107,20 @@ class ParityCheckResult:
     threadpool_status: BatchTestStatus
     ray_status: BatchTestStatus
     is_equivalent: bool
-    discrepancies: List[ParityDiscrepancy] = field(default_factory=list)
+    discrepancies: list[ParityDiscrepancy] = field(default_factory=list)
     threadpool_duration_ms: float = 0.0
     ray_duration_ms: float = 0.0
     speedup_factor: float = 1.0
     comparison_timestamp: datetime = field(default_factory=datetime.now)
-    metrics_compared: List[str] = field(default_factory=list)
-    tolerance_used: Dict[str, float] = field(default_factory=dict)
+    metrics_compared: list[str] = field(default_factory=list)
+    tolerance_used: dict[str, float] = field(default_factory=dict)
     
     @property
     def discrepancy_count(self) -> int:
         """Number of discrepancies found."""
         return len(self.discrepancies)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "batch_test_id": self.batch_test_id,
@@ -168,7 +166,7 @@ class ParityCheckerConfig:
     metric_tolerance: float = 0.01  # 1% relative tolerance
     absolute_tolerance: float = 1e-6  # For near-zero values
     ignore_timing_metrics: bool = True
-    ignored_metrics: List[str] = field(default_factory=lambda: ["latency_ms", "duration_ms"])
+    ignored_metrics: list[str] = field(default_factory=lambda: ["latency_ms", "duration_ms"])
     require_same_success: bool = True
     max_discrepancies: int = 100
     
@@ -224,7 +222,7 @@ class ParityChecker:
         self,
         threadpool_runner: IBatchTestRunner,
         ray_runner: IBatchTestRunner,
-        config: Optional[ParityCheckerConfig] = None,
+        config: ParityCheckerConfig | None = None,
     ):
         """
         Initialize parity checker.
@@ -268,7 +266,7 @@ class ParityChecker:
             threadpool_batch = batch_test
             ray_batch = self._clone_batch_test(batch_test, suffix="-ray")
         
-        discrepancies: List[ParityDiscrepancy] = []
+        discrepancies: list[ParityDiscrepancy] = []
         
         # Run ThreadPool
         threadpool_start = datetime.now()
@@ -420,10 +418,10 @@ class ParityChecker:
     def _compare_metrics(
         self,
         variant_name: str,
-        threadpool_metrics: Dict[str, Any],
-        ray_metrics: Dict[str, Any],
+        threadpool_metrics: dict[str, Any],
+        ray_metrics: dict[str, Any],
         metrics_compared: set,
-    ) -> List[ParityDiscrepancy]:
+    ) -> list[ParityDiscrepancy]:
         """Compare metrics between two results."""
         discrepancies = []
         
@@ -507,7 +505,7 @@ class ParityChecker:
         self,
         batch_test: BatchTest,
         num_runs: int = 5,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run multiple parity checks for statistical comparison.
         
@@ -523,7 +521,7 @@ class ParityChecker:
         """
         logger.info(f"Running statistical comparison with {num_runs} runs")
         
-        results: List[ParityCheckResult] = []
+        results: list[ParityCheckResult] = []
         
         for i in range(num_runs):
             logger.info(f"Statistical run {i + 1}/{num_runs}")

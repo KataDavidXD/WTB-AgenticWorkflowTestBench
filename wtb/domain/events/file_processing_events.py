@@ -31,11 +31,9 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 from wtb.domain.events.execution_events import WTBEvent
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # File Commit Events
@@ -61,9 +59,9 @@ class FileCommitCreatedEvent(WTBEvent):
     commit_id: str = ""
     file_count: int = 0
     total_size_bytes: int = 0
-    message: Optional[str] = None
+    message: str | None = None
     file_paths: tuple = field(default_factory=tuple)
-    execution_id: Optional[str] = None
+    execution_id: str | None = None
     
     @property
     def event_type(self) -> str:
@@ -73,7 +71,7 @@ class FileCommitCreatedEvent(WTBEvent):
     def total_size_mb(self) -> float:
         return self.total_size_bytes / (1024 * 1024)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -104,7 +102,7 @@ class FileCommitDeletedEvent(WTBEvent):
     def event_type(self) -> str:
         return "file_commit.deleted"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -131,7 +129,7 @@ class FileCommitVerifiedEvent(WTBEvent):
     def event_type(self) -> str:
         return "file_commit.verified"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -163,13 +161,13 @@ class FileRestoredEvent(WTBEvent):
     files_restored: int = 0
     total_size_bytes: int = 0
     restored_paths: tuple = field(default_factory=tuple)
-    checkpoint_id: Optional[int] = None
+    checkpoint_id: int | None = None
     
     @property
     def event_type(self) -> str:
         return "file.restored"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -199,7 +197,7 @@ class FileRestoreFailedEvent(WTBEvent):
     def event_type(self) -> str:
         return "file.restore_failed"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -241,7 +239,7 @@ class FileCleanupCompletedEvent(WTBEvent):
     files_skipped: int = 0
     deleted_paths: tuple = field(default_factory=tuple)
     backed_up_paths: tuple = field(default_factory=tuple)
-    backup_dir: Optional[str] = None
+    backup_dir: str | None = None
     dry_run: bool = False
     errors: tuple = field(default_factory=tuple)
     
@@ -253,7 +251,7 @@ class FileCleanupCompletedEvent(WTBEvent):
     def total_processed(self) -> int:
         return self.files_deleted + self.files_backed_up + self.files_skipped
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -297,7 +295,7 @@ class CheckpointFileLinkCreatedEvent(WTBEvent):
     def event_type(self) -> str:
         return "checkpoint_file_link.created"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -331,7 +329,7 @@ class CheckpointFileLinkVerifiedEvent(WTBEvent):
     def event_type(self) -> str:
         return "checkpoint_file_link.verified"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -366,7 +364,7 @@ class BlobCreatedEvent(WTBEvent):
     def event_type(self) -> str:
         return "blob.created"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -392,7 +390,7 @@ class BlobDeletedEvent(WTBEvent):
     def event_type(self) -> str:
         return "blob.deleted"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -420,13 +418,13 @@ class FileTrackingStartedEvent(WTBEvent):
     """
     operation_id: str = ""
     file_paths: tuple = field(default_factory=tuple)
-    checkpoint_id: Optional[int] = None
+    checkpoint_id: int | None = None
     
     @property
     def event_type(self) -> str:
         return "file_tracking.started"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -454,7 +452,7 @@ class FileTrackingCompletedEvent(WTBEvent):
     def event_type(self) -> str:
         return "file_tracking.completed"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -476,13 +474,13 @@ class FileTrackingFailedEvent(WTBEvent):
     """
     operation_id: str = ""
     error_message: str = ""
-    file_path: Optional[str] = None
+    file_path: str | None = None
     
     @property
     def event_type(self) -> str:
         return "file_tracking.failed"
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),

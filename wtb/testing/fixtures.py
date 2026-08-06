@@ -10,17 +10,16 @@ Architecture Decision:
   3. Follows DIP: tests depend on abstractions from wtb.testing
 """
 
-from typing import TypedDict, Annotated, Optional
 import operator
+from typing import Annotated, TypedDict
 
-from wtb.domain.models.workflow import ExecutionState
 from wtb.domain.interfaces.state_adapter import (
-    IStateAdapter,
-    CheckpointTrigger,
     CheckpointInfo,
+    CheckpointTrigger,
+    IStateAdapter,
     NodeBoundaryInfo,
 )
-
+from wtb.domain.models.workflow import ExecutionState
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Minimal Graph for Testing LangGraph Adapter
@@ -35,7 +34,7 @@ class MinimalState(TypedDict):
     """
     value: int
     messages: Annotated[list, operator.add]
-    route: Optional[str]  # For conditional routing
+    route: str | None  # For conditional routing
 
 
 def _node_a(state: MinimalState) -> dict:
@@ -78,7 +77,7 @@ def create_minimal_graph():
         >>> adapter.set_workflow_graph(create_minimal_graph())
     """
     try:
-        from langgraph.graph import StateGraph, END
+        from langgraph.graph import END, StateGraph
     except ImportError:
         raise ImportError(
             "langgraph is required for create_minimal_graph(). "
@@ -118,7 +117,7 @@ def create_conditional_graph():
         >>> assert "c_executed" in result["messages"]
     """
     try:
-        from langgraph.graph import StateGraph, END
+        from langgraph.graph import END, StateGraph
     except ImportError:
         raise ImportError(
             "langgraph is required for create_conditional_graph(). "

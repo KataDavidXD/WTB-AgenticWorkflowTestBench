@@ -18,37 +18,34 @@ import asyncio
 import logging
 import os
 import uuid
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
 
 import aiofiles
 import aiofiles.os
-from sqlalchemy import select, func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wtb.domain.models.file_processing import (
-    FileCommit,
-    FileMemento,
-    BlobId,
-    CommitId,
-    CheckpointFileLink,
-)
 from wtb.domain.interfaces.async_repositories import (
     IAsyncBlobRepository,
-    IAsyncFileCommitRepository,
     IAsyncCheckpointFileLinkRepository,
+    IAsyncFileCommitRepository,
+)
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
 )
 from wtb.infrastructure.database.file_processing_orm import (
+    CheckpointFileLinkORM,
     FileBlobORM,
     FileCommitORM,
     FileMementoORM,
-    CheckpointFileLinkORM,
 )
 from wtb.infrastructure.database.mappers import (
     BlobStorageCore,
-    FileCommitMapper,
     CheckpointFileLinkMapper,
+    FileCommitMapper,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,7 +148,7 @@ class AsyncSQLAlchemyBlobRepository(IAsyncBlobRepository):
         logger.debug(f"Saved blob {BlobStorageCore.get_short_id(blob_id.value)}... ({len(content)} bytes)")
         return blob_id
     
-    async def aget(self, blob_id: BlobId) -> Optional[bytes]:
+    async def aget(self, blob_id: BlobId) -> bytes | None:
         """Retrieve content by blob ID asynchronously."""
         blob_orm = await self._session.get(FileBlobORM, blob_id.value)
         if not blob_orm:
@@ -230,7 +227,7 @@ class AsyncSQLAlchemyBlobRepository(IAsyncBlobRepository):
         
         logger.debug(f"Restored blob {blob_id.short}... to {output_path}")
     
-    async def alist_all_hashes(self) -> List[BlobId]:
+    async def alist_all_hashes(self) -> list[BlobId]:
         """List all blob hashes in storage."""
         stmt = select(FileBlobORM.content_hash)
         result = await self._session.execute(stmt)
@@ -286,7 +283,7 @@ class AsyncSQLAlchemyBlobRepository(IAsyncBlobRepository):
         
         return file_path
     
-    async def _read_content_async(self, storage_location: str) -> Optional[bytes]:
+    async def _read_content_async(self, storage_location: str) -> bytes | None:
         """Read content from filesystem asynchronously."""
         path = Path(storage_location)
         try:
@@ -410,7 +407,7 @@ class AsyncSQLAlchemyFileCommitRepository(IAsyncFileCommitRepository):
         
         logger.debug(f"Saved commit {commit.commit_id.short}... ({commit.file_count} files)")
     
-    async def aget_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+    async def aget_by_id(self, commit_id: CommitId) -> FileCommit | None:
         """Get commit by ID with mementos loaded."""
         stmt = (
             select(FileCommitORM)
@@ -432,7 +429,7 @@ class AsyncSQLAlchemyFileCommitRepository(IAsyncFileCommitRepository):
         
         return self._orm_to_domain(commit_orm, load_mementos=True)
     
-    async def aget_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+    async def aget_by_id_without_mementos(self, commit_id: CommitId) -> FileCommit | None:
         """Get commit without loading mementos."""
         commit_orm = await self._session.get(FileCommitORM, commit_id.value)
         if not commit_orm:
@@ -440,7 +437,7 @@ class AsyncSQLAlchemyFileCommitRepository(IAsyncFileCommitRepository):
         
         return self._orm_to_domain(commit_orm, load_mementos=False)
     
-    async def aget_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+    async def aget_by_execution_id(self, execution_id: str) -> list[FileCommit]:
         """Get commits for an execution."""
         stmt = (
             select(FileCommitORM)
@@ -450,7 +447,7 @@ class AsyncSQLAlchemyFileCommitRepository(IAsyncFileCommitRepository):
         result = await self._session.execute(stmt)
         return [self._orm_to_domain(orm, load_mementos=False) for orm in result.scalars().all()]
     
-    async def aget_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
+    async def aget_by_checkpoint_id(self, checkpoint_id: str) -> FileCommit | None:
         """Get commit linked to checkpoint."""
         # Convert checkpoint_id to int if necessary (ORM uses int for now based on previous file)
         # But wait, CheckpointFileLinkORM uses checkpoint_id: str?
@@ -536,14 +533,14 @@ class AsyncSQLAlchemyCheckpointFileLinkRepository(IAsyncCheckpointFileLinkReposi
             )
             self._session.add(link_orm)
     
-    async def aget_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
+    async def aget_by_checkpoint(self, checkpoint_id: str) -> CheckpointFileLink | None:
         """Get link by checkpoint ID."""
         link_orm = await self._session.get(CheckpointFileLinkORM, str(checkpoint_id))
         if not link_orm:
             return None
         return self._orm_to_domain(link_orm)
     
-    async def aget_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
+    async def aget_by_commit(self, commit_id: CommitId) -> list[CheckpointFileLink]:
         """Get all links for a commit."""
         stmt = (
             select(CheckpointFileLinkORM)

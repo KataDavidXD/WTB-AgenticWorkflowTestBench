@@ -11,33 +11,29 @@ Test Categories:
 4. Cross-system consistency (checkpoint-file links)
 """
 
-import pytest
-import tempfile
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
+import pytest
+
 from wtb.domain.events.file_processing_events import (
+    CheckpointFileLinkCreatedEvent,
     FileCommitCreatedEvent,
     FileRestoredEvent,
-    CheckpointFileLinkCreatedEvent,
-    FileTrackingStartedEvent,
-    FileTrackingCompletedEvent,
+)
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
 )
 from wtb.infrastructure.database.repositories.file_processing_repository import (
     InMemoryBlobRepository,
-    InMemoryFileCommitRepository,
     InMemoryCheckpointFileLinkRepository,
+    InMemoryFileCommitRepository,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

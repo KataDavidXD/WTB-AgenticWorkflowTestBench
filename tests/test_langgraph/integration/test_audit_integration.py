@@ -14,32 +14,28 @@ SOLID Compliance:
 Run with: pytest tests/test_langgraph/integration/test_audit_integration.py -v
 """
 
-import pytest
-from typing import Dict, Any, List
 from datetime import datetime
-from unittest.mock import Mock, MagicMock
 
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    WTBAuditTrail,
-    WTBAuditEventType,
-    WTBAuditSeverity,
-    WTBAuditEntry,
-    AuditEventListener,
-)
+import pytest
+
 from wtb.domain.events import (
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
-    NodeCompletedEvent,
-    NodeFailedEvent,
+    ExecutionStartedEvent,
     LangGraphAuditEvent,
     LangGraphAuditEventType,
+    NodeCompletedEvent,
+    NodeFailedEvent,
+    NodeStartedEvent,
     create_audit_event_from_langgraph,
     create_checkpoint_audit_event,
 )
-
+from wtb.infrastructure.events import (
+    AuditEventListener,
+    WTBAuditEntry,
+    WTBAuditEventType,
+    WTBAuditSeverity,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Audit Trail Tests

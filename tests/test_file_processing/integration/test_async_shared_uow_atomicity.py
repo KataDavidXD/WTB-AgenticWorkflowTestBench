@@ -1,7 +1,6 @@
 """Regression tests for async file tracking transaction boundaries."""
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

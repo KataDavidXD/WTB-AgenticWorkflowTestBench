@@ -2,8 +2,8 @@
 
 from threading import Event, Thread
 
-from wtb.domain.models.workflow import TestWorkflow as WorkflowModel
 from wtb.domain.models.file_processing import BlobId
+from wtb.domain.models.workflow import TestWorkflow as WorkflowModel
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 
 

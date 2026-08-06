@@ -10,46 +10,46 @@ Benefits:
 - Same interface as SQLAlchemyUnitOfWork (LSP compliant)
 """
 
-from typing import Any, Dict, List, Optional
+import builtins
 from copy import deepcopy
 from datetime import datetime
 from threading import RLock
+from typing import Any
 
-from wtb.domain.interfaces.unit_of_work import IUnitOfWork
-from wtb.domain.interfaces.repositories import (
-    IWorkflowRepository,
-    IExecutionRepository,
-    INodeVariantRepository,
-    IBatchTestRepository,
-    IEvaluationResultRepository,
-    INodeBoundaryRepository,
-    IOutboxRepository,
-    IAuditLogRepository,
-)
 from wtb.domain.interfaces.file_processing_repository import (
-    ICheckpointFileLinkRepository,
     IBlobRepository,
+    ICheckpointFileLinkRepository,
     IFileCommitRepository,
 )
-from wtb.domain.models.file_processing import (
-    FileCommit,
-    BlobId,
-    CommitId,
+from wtb.domain.interfaces.repositories import (
+    IAuditLogRepository,
+    IBatchTestRepository,
+    IEvaluationResultRepository,
+    IExecutionRepository,
+    INodeBoundaryRepository,
+    INodeVariantRepository,
+    IOutboxRepository,
+    IWorkflowRepository,
 )
+from wtb.domain.interfaces.unit_of_work import IUnitOfWork
 from wtb.domain.models import (
-    TestWorkflow,
     Execution,
     ExecutionStatus,
-    NodeVariant,
     NodeBoundary,
+    NodeVariant,
     OutboxEvent,
     OutboxStatus,
+    TestWorkflow,
 )
-from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
+from wtb.domain.models.audit import AuditEntry
 from wtb.domain.models.batch_test import BatchTest, BatchTestStatus
 from wtb.domain.models.evaluation import EvaluationResult
-from wtb.domain.models.audit import AuditEntry
-
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # In-Memory Repository Implementations
@@ -60,13 +60,13 @@ class InMemoryWorkflowRepository(IWorkflowRepository):
     """In-memory workflow repository."""
     
     def __init__(self):
-        self._store: Dict[str, TestWorkflow] = {}
+        self._store: dict[str, TestWorkflow] = {}
     
-    def get(self, id: str) -> Optional[TestWorkflow]:
+    def get(self, id: str) -> TestWorkflow | None:
         workflow = self._store.get(id)
         return deepcopy(workflow) if workflow else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[TestWorkflow]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[TestWorkflow]:
         workflows = list(self._store.values())[offset:offset + limit]
         return [deepcopy(w) for w in workflows]
     
@@ -89,19 +89,19 @@ class InMemoryWorkflowRepository(IWorkflowRepository):
             return True
         return False
     
-    def find_by_name(self, name: str) -> Optional[TestWorkflow]:
+    def find_by_name(self, name: str) -> TestWorkflow | None:
         for w in self._store.values():
             if w.name == name:
                 return deepcopy(w)
         return None
     
-    def find_by_version(self, name: str, version: str) -> Optional[TestWorkflow]:
+    def find_by_version(self, name: str, version: str) -> TestWorkflow | None:
         for w in self._store.values():
             if w.name == name and w.version == version:
                 return deepcopy(w)
         return None
     
-    def list_all(self) -> List[TestWorkflow]:
+    def list_all(self) -> builtins.list[TestWorkflow]:
         """List all workflows without pagination."""
         return [deepcopy(w) for w in self._store.values()]
 
@@ -110,13 +110,13 @@ class InMemoryExecutionRepository(IExecutionRepository):
     """In-memory execution repository."""
     
     def __init__(self):
-        self._store: Dict[str, Execution] = {}
+        self._store: dict[str, Execution] = {}
     
-    def get(self, id: str) -> Optional[Execution]:
+    def get(self, id: str) -> Execution | None:
         execution = self._store.get(id)
         return deepcopy(execution) if execution else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[Execution]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[Execution]:
         executions = list(self._store.values())[offset:offset + limit]
         return [deepcopy(e) for e in executions]
     
@@ -139,15 +139,15 @@ class InMemoryExecutionRepository(IExecutionRepository):
             return True
         return False
     
-    def find_by_workflow(self, workflow_id: str) -> List[Execution]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[Execution]:
         return [deepcopy(e) for e in self._store.values() 
                 if e.workflow_id == workflow_id]
     
-    def find_by_status(self, status: ExecutionStatus) -> List[Execution]:
+    def find_by_status(self, status: ExecutionStatus) -> builtins.list[Execution]:
         return [deepcopy(e) for e in self._store.values() 
                 if e.status == status]
     
-    def find_running(self) -> List[Execution]:
+    def find_running(self) -> builtins.list[Execution]:
         return self.find_by_status(ExecutionStatus.RUNNING)
 
 
@@ -155,13 +155,13 @@ class InMemoryNodeVariantRepository(INodeVariantRepository):
     """In-memory node variant repository."""
     
     def __init__(self):
-        self._store: Dict[str, NodeVariant] = {}
+        self._store: dict[str, NodeVariant] = {}
     
-    def get(self, id: str) -> Optional[NodeVariant]:
+    def get(self, id: str) -> NodeVariant | None:
         variant = self._store.get(id)
         return deepcopy(variant) if variant else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[NodeVariant]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[NodeVariant]:
         variants = list(self._store.values())[offset:offset + limit]
         return [deepcopy(v) for v in variants]
     
@@ -184,15 +184,15 @@ class InMemoryNodeVariantRepository(INodeVariantRepository):
             return True
         return False
     
-    def find_by_workflow(self, workflow_id: str) -> List[NodeVariant]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[NodeVariant]:
         return [deepcopy(v) for v in self._store.values() 
                 if v.workflow_id == workflow_id]
     
-    def find_by_node(self, workflow_id: str, node_id: str) -> List[NodeVariant]:
+    def find_by_node(self, workflow_id: str, node_id: str) -> builtins.list[NodeVariant]:
         return [deepcopy(v) for v in self._store.values() 
                 if v.workflow_id == workflow_id and v.original_node_id == node_id]
     
-    def find_active(self, workflow_id: str) -> List[NodeVariant]:
+    def find_active(self, workflow_id: str) -> builtins.list[NodeVariant]:
         return [deepcopy(v) for v in self._store.values() 
                 if v.workflow_id == workflow_id and v.is_active]
 
@@ -201,13 +201,13 @@ class InMemoryBatchTestRepository(IBatchTestRepository):
     """In-memory batch test repository."""
     
     def __init__(self):
-        self._store: Dict[str, BatchTest] = {}
+        self._store: dict[str, BatchTest] = {}
     
-    def get(self, id: str) -> Optional[BatchTest]:
+    def get(self, id: str) -> BatchTest | None:
         batch_test = self._store.get(id)
         return deepcopy(batch_test) if batch_test else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[BatchTest]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[BatchTest]:
         batch_tests = list(self._store.values())[offset:offset + limit]
         return [deepcopy(bt) for bt in batch_tests]
     
@@ -230,11 +230,11 @@ class InMemoryBatchTestRepository(IBatchTestRepository):
             return True
         return False
     
-    def find_by_workflow(self, workflow_id: str) -> List[BatchTest]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[BatchTest]:
         return [deepcopy(bt) for bt in self._store.values() 
                 if bt.workflow_id == workflow_id]
     
-    def find_pending(self) -> List[BatchTest]:
+    def find_pending(self) -> builtins.list[BatchTest]:
         return [deepcopy(bt) for bt in self._store.values() 
                 if bt.status == BatchTestStatus.PENDING]
 
@@ -243,13 +243,13 @@ class InMemoryEvaluationResultRepository(IEvaluationResultRepository):
     """In-memory evaluation result repository."""
     
     def __init__(self):
-        self._store: Dict[str, EvaluationResult] = {}
+        self._store: dict[str, EvaluationResult] = {}
     
-    def get(self, id: str) -> Optional[EvaluationResult]:
+    def get(self, id: str) -> EvaluationResult | None:
         result = self._store.get(id)
         return deepcopy(result) if result else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[EvaluationResult]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[EvaluationResult]:
         results = list(self._store.values())[offset:offset + limit]
         return [deepcopy(r) for r in results]
     
@@ -272,11 +272,11 @@ class InMemoryEvaluationResultRepository(IEvaluationResultRepository):
             return True
         return False
     
-    def find_by_execution(self, execution_id: str) -> List[EvaluationResult]:
+    def find_by_execution(self, execution_id: str) -> builtins.list[EvaluationResult]:
         return [deepcopy(r) for r in self._store.values() 
                 if r.execution_id == execution_id]
     
-    def find_by_evaluator(self, evaluator_name: str) -> List[EvaluationResult]:
+    def find_by_evaluator(self, evaluator_name: str) -> builtins.list[EvaluationResult]:
         return [deepcopy(r) for r in self._store.values() 
                 if r.evaluator_name == evaluator_name]
 
@@ -290,14 +290,14 @@ class InMemoryNodeBoundaryRepository(INodeBoundaryRepository):
     """
     
     def __init__(self):
-        self._store: Dict[int, NodeBoundary] = {}
+        self._store: dict[int, NodeBoundary] = {}
         self._next_id: int = 1
     
-    def get(self, id: str) -> Optional[NodeBoundary]:
+    def get(self, id: str) -> NodeBoundary | None:
         boundary = self._store.get(int(id))
         return deepcopy(boundary) if boundary else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[NodeBoundary]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[NodeBoundary]:
         boundaries = list(self._store.values())[offset:offset + limit]
         return [deepcopy(b) for b in boundaries]
     
@@ -324,19 +324,19 @@ class InMemoryNodeBoundaryRepository(INodeBoundaryRepository):
         return False
     
     # New DDD-compliant methods (2026-01-15)
-    def find_by_execution(self, execution_id: str) -> List[NodeBoundary]:
+    def find_by_execution(self, execution_id: str) -> builtins.list[NodeBoundary]:
         """Find all boundaries for an execution."""
         return [deepcopy(b) for b in self._store.values() 
                 if b.execution_id == execution_id]
     
-    def find_by_execution_and_node(self, execution_id: str, node_id: str) -> Optional[NodeBoundary]:
+    def find_by_execution_and_node(self, execution_id: str, node_id: str) -> NodeBoundary | None:
         """Find boundary for a specific node in an execution."""
         for b in self._store.values():
             if b.execution_id == execution_id and b.node_id == node_id:
                 return deepcopy(b)
         return None
     
-    def find_completed_by_execution(self, execution_id: str) -> List[NodeBoundary]:
+    def find_completed_by_execution(self, execution_id: str) -> builtins.list[NodeBoundary]:
         """Find completed boundaries for an execution."""
         return [deepcopy(b) for b in self._store.values()
                 if b.execution_id == execution_id 
@@ -352,18 +352,18 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
     """In-memory checkpoint file link repository (2026-01-27 consolidated)."""
     
     def __init__(self):
-        self._store: Dict[int, CheckpointFileLink] = {}
+        self._store: dict[int, CheckpointFileLink] = {}
     
     def add(self, link: CheckpointFileLink) -> None:
         """Add a checkpoint-file link (upsert behavior)."""
         self._store[link.checkpoint_id] = deepcopy(link)
     
-    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> CheckpointFileLink | None:
         """Get link by checkpoint ID."""
         link = self._store.get(checkpoint_id)
         return deepcopy(link) if link else None
     
-    def get_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
+    def get_by_commit(self, commit_id: CommitId) -> list[CheckpointFileLink]:
         """Get all links for a commit."""
         return [deepcopy(link) for link in self._store.values() 
                 if link.commit_id.value == commit_id.value]
@@ -375,7 +375,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
             return True
         return False
     
-    def list_all(self, limit: int = 10000) -> List[CheckpointFileLink]:
+    def list_all(self, limit: int = 10000) -> list[CheckpointFileLink]:
         """List all checkpoint file links."""
         links = list(self._store.values())
         return [deepcopy(link) for link in links[:limit]]
@@ -390,7 +390,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
             del self._store[cp_id]
         return len(to_delete)
     
-    def list_all(self, limit: int = 100) -> List[CheckpointFileLink]:
+    def list_all(self, limit: int = 100) -> list[CheckpointFileLink]:
         """List all links (extension method, not in interface)."""
         links = list(self._store.values())
         return [deepcopy(link) for link in links[:limit]]
@@ -400,7 +400,7 @@ class InMemoryOutboxRepository(IOutboxRepository):
     """In-memory outbox repository for testing."""
     
     def __init__(self):
-        self._store: Dict[int, OutboxEvent] = {}
+        self._store: dict[int, OutboxEvent] = {}
         self._next_id: int = 1
     
     def add(self, event: OutboxEvent) -> OutboxEvent:
@@ -409,17 +409,17 @@ class InMemoryOutboxRepository(IOutboxRepository):
         self._store[event.id] = deepcopy(event)
         return event
     
-    def get_by_id(self, event_id: str) -> Optional[OutboxEvent]:
+    def get_by_id(self, event_id: str) -> OutboxEvent | None:
         for event in self._store.values():
             if event.event_id == event_id:
                 return deepcopy(event)
         return None
     
-    def get_by_pk(self, id: int) -> Optional[OutboxEvent]:
+    def get_by_pk(self, id: int) -> OutboxEvent | None:
         event = self._store.get(id)
         return deepcopy(event) if event else None
     
-    def get_pending(self, limit: int = 100) -> List[OutboxEvent]:
+    def get_pending(self, limit: int = 100) -> list[OutboxEvent]:
         pending = [
             deepcopy(e) for e in self._store.values() 
             if e.status == OutboxStatus.PENDING
@@ -428,7 +428,7 @@ class InMemoryOutboxRepository(IOutboxRepository):
         pending.sort(key=lambda e: e.created_at)
         return pending[:limit]
     
-    def get_failed_for_retry(self, limit: int = 50) -> List[OutboxEvent]:
+    def get_failed_for_retry(self, limit: int = 50) -> list[OutboxEvent]:
         retryable = [
             deepcopy(e) for e in self._store.values()
             if e.status == OutboxStatus.FAILED and e.can_retry()
@@ -456,7 +456,7 @@ class InMemoryOutboxRepository(IOutboxRepository):
             del self._store[id]
         return len(to_delete)
     
-    def list_all(self, limit: int = 100) -> List[OutboxEvent]:
+    def list_all(self, limit: int = 100) -> list[OutboxEvent]:
         events = list(self._store.values())
         events.sort(key=lambda e: e.created_at, reverse=True)
         return [deepcopy(e) for e in events[:limit]]
@@ -466,13 +466,13 @@ class InMemoryAuditLogRepository(IAuditLogRepository):
     """In-memory audit log repository."""
     
     def __init__(self):
-        self._store: List[AuditEntry] = []
+        self._store: list[AuditEntry] = []
     
-    def get(self, id: str) -> Optional[AuditEntry]:
+    def get(self, id: str) -> AuditEntry | None:
         # Not typically used for logs, but implemented for interface
         return None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[AuditEntry]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[AuditEntry]:
         return [deepcopy(e) for e in self._store[offset:offset + limit]]
     
     def exists(self, id: str) -> bool:
@@ -488,13 +488,13 @@ class InMemoryAuditLogRepository(IAuditLogRepository):
     def delete(self, id: str) -> bool:
         raise NotImplementedError("Audit logs are immutable")
     
-    def append_logs(self, execution_id: str, logs: List[AuditEntry]) -> None:
+    def append_logs(self, execution_id: str, logs: builtins.list[AuditEntry]) -> None:
         for log in logs:
             if not log.execution_id:
                 log.execution_id = execution_id
             self._store.append(deepcopy(log))
     
-    def find_by_execution(self, execution_id: str) -> List[AuditEntry]:
+    def find_by_execution(self, execution_id: str) -> builtins.list[AuditEntry]:
         return [
             deepcopy(e) for e in self._store 
             if e.execution_id == execution_id
@@ -505,14 +505,14 @@ class InMemoryBlobRepository(IBlobRepository):
     """In-memory blob repository for testing."""
     
     def __init__(self):
-        self._store: Dict[str, bytes] = {}
+        self._store: dict[str, bytes] = {}
     
     def save(self, content: bytes) -> BlobId:
         blob_id = BlobId.from_content(content)
         self._store[blob_id.value] = content
         return blob_id
     
-    def get(self, blob_id: BlobId) -> Optional[bytes]:
+    def get(self, blob_id: BlobId) -> bytes | None:
         return self._store.get(blob_id.value)
     
     def exists(self, blob_id: BlobId) -> bool:
@@ -533,7 +533,7 @@ class InMemoryBlobRepository(IBlobRepository):
         with open(output_path, "wb") as f:
             f.write(content)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         total = sum(len(v) for v in self._store.values())
         return {
             "blob_count": len(self._store),
@@ -546,19 +546,19 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
     """In-memory file commit repository for testing."""
     
     def __init__(self):
-        self._store: Dict[str, FileCommit] = {}
+        self._store: dict[str, FileCommit] = {}
     
     def save(self, commit: FileCommit) -> None:
         self._store[str(commit.id)] = deepcopy(commit)
     
-    def get_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id(self, commit_id: CommitId) -> FileCommit | None:
         c = self._store.get(str(commit_id))
         return deepcopy(c) if c else None
     
-    def get_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id_without_mementos(self, commit_id: CommitId) -> FileCommit | None:
         return self.get_by_id(commit_id)
     
-    def get_all(self, limit: int = 100, offset: int = 0) -> List[FileCommit]:
+    def get_all(self, limit: int = 100, offset: int = 0) -> list[FileCommit]:
         commits = sorted(
             self._store.values(),
             key=lambda c: c.timestamp if hasattr(c, "timestamp") else "",
@@ -566,13 +566,13 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
         )
         return [deepcopy(c) for c in commits[offset:offset + limit]]
     
-    def get_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+    def get_by_execution_id(self, execution_id: str) -> list[FileCommit]:
         return [
             deepcopy(c) for c in self._store.values()
             if getattr(c, "execution_id", None) == execution_id
         ]
     
-    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> FileCommit | None:
         for c in self._store.values():
             if getattr(c, "checkpoint_id", None) == checkpoint_id:
                 return deepcopy(c)
@@ -647,14 +647,14 @@ class InMemoryUnitOfWork(IUnitOfWork):
         self._transaction_depth = 0
         self._committed_state = self._capture_repository_state()
 
-    def _capture_repository_state(self) -> Dict[str, Any]:
+    def _capture_repository_state(self) -> dict[str, Any]:
         """Copy the atomically committed state of every repository."""
         return {
             name: deepcopy(getattr(getattr(self, name), "_store"))
             for name in self._REPOSITORY_NAMES
         }
 
-    def _restore_repository_state(self, snapshot: Dict[str, Any]) -> None:
+    def _restore_repository_state(self, snapshot: dict[str, Any]) -> None:
         """Restore contents while preserving injected repository objects."""
         for name in self._REPOSITORY_NAMES:
             repository = getattr(self, name)

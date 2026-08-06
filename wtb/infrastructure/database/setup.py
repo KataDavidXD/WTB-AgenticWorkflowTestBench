@@ -14,13 +14,9 @@ Usage:
     setup_all_databases()
 """
 
-import os
 import sys
-from pathlib import Path
-from typing import Optional
-from datetime import datetime
 
-from sqlalchemy import text, inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from .config import get_database_config, redirect_agentgit_database

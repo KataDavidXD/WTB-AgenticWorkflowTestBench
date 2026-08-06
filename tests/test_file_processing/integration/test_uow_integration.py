@@ -1,11 +1,18 @@
-import pytest
+import os
 import shutil
 import tempfile
-import os
-from pathlib import Path
-from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
-from wtb.domain.models.file_processing import FileCommit, FileMemento, CheckpointFileLink, BlobId
+
+import pytest
+
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    FileCommit,
+    FileMemento,
+)
+from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork
+
 
 @pytest.fixture
 def temp_blob_storage():
@@ -34,9 +41,9 @@ def test_uow_interface_compliance(uow):
         
         # Verify types (optional, but good sanity check)
         from wtb.domain.interfaces.file_processing_repository import (
-            IBlobRepository, 
+            IBlobRepository,
+            ICheckpointFileLinkRepository,
             IFileCommitRepository,
-            ICheckpointFileLinkRepository
         )
         assert isinstance(uow.blobs, IBlobRepository)
         assert isinstance(uow.file_commits, IFileCommitRepository)

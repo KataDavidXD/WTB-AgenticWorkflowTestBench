@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import socket
 from pathlib import Path
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, TypedDict
 
 import pytest
 from langgraph.graph import END, StateGraph
 
-from wtb.sdk import ExecutionConfig, RayConfig, WTBTestBench, WorkflowProject
+from wtb.sdk import ExecutionConfig, RayConfig, WorkflowProject, WTBTestBench
 
 
 class FileState(TypedDict, total=False):
@@ -22,7 +22,7 @@ class FileState(TypedDict, total=False):
 
 
 def create_file_control_graph():
-    def draft(state: FileState) -> Dict[str, Any]:
+    def draft(state: FileState) -> dict[str, Any]:
         suffix = state.get("suffix", "base")
         output = f"version-1:{suffix}"
         return {
@@ -31,7 +31,7 @@ def create_file_control_graph():
             "_output_files": {"result.txt": output},
         }
 
-    def finalize(state: FileState) -> Dict[str, Any]:
+    def finalize(state: FileState) -> dict[str, Any]:
         suffix = state.get("suffix", "base")
         variant = (state.get("_variant_config") or {}).get("finalize", "default")
         output = f"version-2:{suffix}:{variant}"
@@ -50,7 +50,7 @@ def create_file_control_graph():
     return graph
 
 
-def _initial_state(suffix: str = "base") -> Dict[str, Any]:
+def _initial_state(suffix: str = "base") -> dict[str, Any]:
     return {"messages": [], "suffix": suffix, "result": "", "_output_files": {}}
 
 
@@ -75,7 +75,7 @@ def _checkpoint_with_result(
     bench: WTBTestBench,
     execution_id: str,
     expected: str,
-    batch_result: Optional[Any] = None,
+    batch_result: Any | None = None,
 ):
     checkpoints = (
         bench.get_batch_result_checkpoints(batch_result)
@@ -217,7 +217,7 @@ def test_batch_mode_real_file_rollback_resume_fork(tmp_path):
 
 
 @pytest.mark.parametrize("grpc_url", [None, "localhost:50051"])
-def test_ray_modes_real_file_rollback_resume_fork(tmp_path, grpc_url: Optional[str]):
+def test_ray_modes_real_file_rollback_resume_fork(tmp_path, grpc_url: str | None):
     if grpc_url is not None:
         pytest.importorskip("grpc")
 

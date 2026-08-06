@@ -4,43 +4,40 @@ Unit Tests for REST API Models (Pydantic Schemas).
 Tests validation, serialization, and model behavior.
 """
 
-import pytest
 from datetime import datetime
+
+import pytest
 from pydantic import ValidationError
 
 from wtb.api.rest.models import (
-    # Enums
-    ExecutionStatusEnum,
-    AuditEventTypeEnum,
-    AuditSeverityEnum,
-    BatchTestStatusEnum,
-    # Common models
-    ErrorResponse,
-    HealthResponse,
-    PaginationMeta,
-    # Workflow models
-    WorkflowNodeSchema,
-    WorkflowEdgeSchema,
-    WorkflowCreateRequest,
-    WorkflowResponse,
-    # Execution models
-    ExecutionCreateRequest,
-    ExecutionResponse,
-    ExecutionStateSchema,
-    PauseRequest,
-    ResumeRequest,
-    RollbackRequest,
-    StateModifyRequest,
-    ControlResponse,
-    # Checkpoint models
-    CheckpointResponse,
     # Audit models
     AuditEventResponse,
+    AuditEventTypeEnum,
+    AuditSeverityEnum,
     AuditSummaryResponse,
     # Batch test models
     BatchTestCreateRequest,
     BatchTestResponse,
+    BatchTestStatusEnum,
+    CheckpointResponse,
+    # Common models
+    ErrorResponse,
+    ExecutionCreateRequest,
+    ExecutionResponse,
+    ExecutionStateSchema,
+    # Enums
+    ExecutionStatusEnum,
+    HealthResponse,
+    PaginationMeta,
+    PauseRequest,
+    ResumeRequest,
+    RollbackRequest,
+    StateModifyRequest,
     VariantCombinationRequest,
+    WorkflowCreateRequest,
+    WorkflowEdgeSchema,
+    # Workflow models
+    WorkflowNodeSchema,
 )
 
 

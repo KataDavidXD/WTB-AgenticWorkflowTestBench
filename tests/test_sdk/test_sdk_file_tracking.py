@@ -11,29 +11,25 @@ Tests file tracking integration:
 Run with: pytest tests/test_sdk/test_sdk_file_tracking.py -v
 """
 
-import pytest
-import os
 import uuid
-import time
 from pathlib import Path
-from typing import Dict, Any, List
-from datetime import datetime
 
-from wtb.sdk import WTBTestBench, WorkflowProject
-from wtb.sdk.workflow_project import (
-    FileTrackingConfig as SDKFileTrackingConfig,
-    WorkspaceIsolationConfig,
+import pytest
+
+from tests.test_sdk.conftest import (
+    LANGGRAPH_AVAILABLE,
+    create_file_state,
+    create_initial_state,
 )
 from wtb.config import FileTrackingConfig
 from wtb.domain.models import ExecutionStatus
-from wtb.application.factories import WTBTestBenchFactory
-
-from tests.test_sdk.conftest import (
-    create_initial_state,
-    create_file_state,
-    LANGGRAPH_AVAILABLE,
+from wtb.sdk import WorkflowProject
+from wtb.sdk.workflow_project import (
+    FileTrackingConfig as SDKFileTrackingConfig,
 )
-
+from wtb.sdk.workflow_project import (
+    WorkspaceIsolationConfig,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FileTrackingConfig Tests

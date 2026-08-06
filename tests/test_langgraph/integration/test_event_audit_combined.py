@@ -12,43 +12,25 @@ SOLID/ACID Compliance verified through combined operations.
 Run with: pytest tests/test_langgraph/integration/test_event_audit_combined.py -v
 """
 
-import pytest
-from typing import Dict, Any, List
-from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch
 import threading
+from datetime import datetime
+from unittest.mock import MagicMock
 
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    WTBAuditTrail,
-    WTBAuditEventType,
-    AuditEventListener,
-    LangGraphEventBridge,
-    StreamModeConfig,
-    InMemoryMetricsCollector,
-    create_event_bridge_for_testing,
-)
+from wtb.config import LangGraphEventConfig, WTBConfig
 from wtb.domain.events import (
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
+    ExecutionStartedEvent,
     NodeCompletedEvent,
     NodeFailedEvent,
-    LangGraphAuditEvent,
-    LangGraphAuditEventType,
+    NodeStartedEvent,
 )
 from wtb.domain.events.checkpoint_events import CheckpointCreated
-from wtb.config import WTBConfig, LangGraphEventConfig
-
-from tests.test_langgraph.helpers import (
-    create_initial_simple_state,
-    create_initial_branch_state,
+from wtb.infrastructure.events import (
+    AuditEventListener,
+    LangGraphEventBridge,
+    WTBAuditEventType,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Full Integration Setup Tests

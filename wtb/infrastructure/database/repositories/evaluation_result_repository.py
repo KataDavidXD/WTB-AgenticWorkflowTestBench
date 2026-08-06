@@ -1,11 +1,12 @@
 """Evaluation result repository implementation."""
 
 import json
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import IEvaluationResultRepository
 from wtb.domain.models import EvaluationResult, MetricValue
+
 from ..models import EvaluationResultORM
 from .base import BaseRepository
 
@@ -62,7 +63,7 @@ class EvaluationResultRepository(BaseRepository[EvaluationResult, EvaluationResu
             metadata_=json.dumps(domain.metadata),
         )
     
-    def find_by_execution(self, execution_id: str) -> List[EvaluationResult]:
+    def find_by_execution(self, execution_id: str) -> list[EvaluationResult]:
         """Find evaluation results for an execution."""
         orms = (
             self._session.query(EvaluationResultORM)
@@ -72,7 +73,7 @@ class EvaluationResultRepository(BaseRepository[EvaluationResult, EvaluationResu
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_by_evaluator(self, evaluator_name: str) -> List[EvaluationResult]:
+    def find_by_evaluator(self, evaluator_name: str) -> list[EvaluationResult]:
         """Find results from a specific evaluator."""
         orms = (
             self._session.query(EvaluationResultORM)

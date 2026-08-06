@@ -18,45 +18,43 @@ Author: Senior Architect
 Date: 2026-01-15
 """
 
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock, patch
-from typing import Dict, Any, Optional
 import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import pytest
 
 from wtb.api.rest.models import (
-    # Enums
-    ExecutionStatusEnum,
+    AuditEventResponse,
     AuditEventTypeEnum,
     AuditSeverityEnum,
+    AuditSummaryResponse,
     BatchTestStatusEnum,
-    # Request models
-    ExecutionCreateRequest,
-    PauseRequest,
-    ResumeRequest,
-    RollbackRequest,
-    StateModifyRequest,
     BranchCreateRequest,
+    BranchResponse,
+    CheckpointListResponse,
+    CheckpointResponse,
+    ControlResponse,
     ExecuteSingleNodeRequest,
     # Response models
     ExecutionResponse,
     ExecutionStateSchema,
-    ControlResponse,
+    # Enums
+    ExecutionStatusEnum,
+    # Request models
+    PauseRequest,
+    ResumeRequest,
+    RollbackRequest,
     RollbackResponse,
-    CheckpointResponse,
-    CheckpointListResponse,
-    BranchResponse,
-    AuditEventResponse,
-    AuditSummaryResponse,
+    StateModifyRequest,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
-def mock_execution_data() -> Dict[str, Any]:
+def mock_execution_data() -> dict[str, Any]:
     """Create mock execution data for testing."""
     return {
         "id": str(uuid.uuid4()),
@@ -84,7 +82,7 @@ def mock_execution_data() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def mock_checkpoint_data() -> Dict[str, Any]:
+def mock_checkpoint_data() -> dict[str, Any]:
     """Create mock checkpoint data."""
     return {
         "id": f"cp-{uuid.uuid4().hex[:8]}",
@@ -102,7 +100,7 @@ def mock_checkpoint_data() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def mock_audit_entry() -> Dict[str, Any]:
+def mock_audit_entry() -> dict[str, Any]:
     """Create mock audit entry."""
     return {
         "id": str(uuid.uuid4()),

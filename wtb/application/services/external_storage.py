@@ -7,11 +7,11 @@ remain on disk under ``data/ray_actors/<actor_id>/``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from collections.abc import Mapping
-from pathlib import Path
-from typing import Any, Optional
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 
 def _default_ray_storage_root() -> Path:
@@ -26,7 +26,7 @@ def _default_ray_storage_root() -> Path:
     return Path(__file__).resolve().parents[3] / "data" / "ray_actors"
 
 
-def _expand_path(value: Optional[str]) -> Optional[Path]:
+def _expand_path(value: str | None) -> Path | None:
     if value is None:
         return None
     text = str(value).strip()
@@ -62,7 +62,7 @@ class ActorLocalStoragePaths:
 
 def resolve_actor_local_storage_paths(
     actor_id: str,
-    storage_root: Optional[str | Path] = None,
+    storage_root: str | Path | None = None,
 ) -> ActorLocalStoragePaths:
     """Return the actor-local storage bundle for a Ray worker."""
     normalized_actor_id = str(actor_id).strip()
@@ -82,9 +82,9 @@ def resolve_actor_local_storage_paths(
 
 
 def resolve_execution_storage_paths(
-    execution_metadata: Optional[Mapping[str, Any]] = None,
-    storage_root: Optional[str | Path] = None,
-    fallback_actor_id: Optional[str] = None,
+    execution_metadata: Mapping[str, Any] | None = None,
+    storage_root: str | Path | None = None,
+    fallback_actor_id: str | None = None,
 ) -> ActorLocalStoragePaths:
     """Rehydrate storage paths from execution metadata.
 

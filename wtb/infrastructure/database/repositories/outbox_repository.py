@@ -6,15 +6,15 @@ Implements IOutboxRepository for persistent outbox event storage.
 Updated: 2026-01-28 - Refactored to use OutboxMapper for shared logic (ISSUE-FS-002)
 """
 
-from typing import Optional, List
 from datetime import datetime
-from sqlalchemy.orm import Session
-from sqlalchemy import and_
 
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
+from sqlalchemy import and_
+from sqlalchemy.orm import Session
+
 from wtb.domain.interfaces.repositories import IOutboxRepository
-from wtb.infrastructure.database.models import OutboxEventORM
+from wtb.domain.models.outbox import OutboxEvent, OutboxStatus
 from wtb.infrastructure.database.mappers import OutboxMapper
+from wtb.infrastructure.database.models import OutboxEventORM
 
 
 class SQLAlchemyOutboxRepository(IOutboxRepository):
@@ -46,7 +46,7 @@ class SQLAlchemyOutboxRepository(IOutboxRepository):
         self._session.flush()
         return self._to_domain(orm)
     
-    def get_by_id(self, event_id: str) -> Optional[OutboxEvent]:
+    def get_by_id(self, event_id: str) -> OutboxEvent | None:
         """Get event by event_id (UUID)."""
         orm = (
             self._session.query(OutboxEventORM)
@@ -55,7 +55,7 @@ class SQLAlchemyOutboxRepository(IOutboxRepository):
         )
         return self._to_domain(orm) if orm else None
     
-    def get_by_pk(self, id: int) -> Optional[OutboxEvent]:
+    def get_by_pk(self, id: int) -> OutboxEvent | None:
         """Get event by database primary key."""
         orm = (
             self._session.query(OutboxEventORM)
@@ -64,7 +64,7 @@ class SQLAlchemyOutboxRepository(IOutboxRepository):
         )
         return self._to_domain(orm) if orm else None
     
-    def get_pending(self, limit: int = 100) -> List[OutboxEvent]:
+    def get_pending(self, limit: int = 100) -> list[OutboxEvent]:
         """Get pending events for processing, ordered by created_at."""
         orms = (
             self._session.query(OutboxEventORM)
@@ -75,7 +75,7 @@ class SQLAlchemyOutboxRepository(IOutboxRepository):
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def get_failed_for_retry(self, limit: int = 50) -> List[OutboxEvent]:
+    def get_failed_for_retry(self, limit: int = 50) -> list[OutboxEvent]:
         """Get failed events that can be retried."""
         orms = (
             self._session.query(OutboxEventORM)
@@ -125,7 +125,7 @@ class SQLAlchemyOutboxRepository(IOutboxRepository):
         )
         return count
     
-    def list_all(self, limit: int = 100) -> List[OutboxEvent]:
+    def list_all(self, limit: int = 100) -> list[OutboxEvent]:
         """List all events (for admin/debugging)."""
         orms = (
             self._session.query(OutboxEventORM)

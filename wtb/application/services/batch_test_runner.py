@@ -34,16 +34,26 @@ Usage:
 
 import base64
 import copy
+import logging
 import math
-from concurrent.futures import ThreadPoolExecutor, Future, FIRST_COMPLETED, wait
-from threading import Lock
-from typing import Dict, Any, List, Optional, Callable, TYPE_CHECKING
-from datetime import datetime
-from dataclasses import dataclass
 import time
 import uuid
-import logging
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
+from datetime import datetime
+from threading import Lock
+from typing import TYPE_CHECKING, Any
 
+from wtb.domain.interfaces.batch_runner import (
+    BatchRunnerError,
+    BatchRunnerExecutionError,
+    BatchRunnerProgress,
+    BatchRunnerStatus,
+    IBatchTestRunner,
+)
+from wtb.domain.interfaces.state_adapter import IStateAdapter
+from wtb.domain.interfaces.unit_of_work import IUnitOfWork
 from wtb.domain.models.batch_test import (
     BatchTest,
     BatchTestResult,
@@ -51,16 +61,7 @@ from wtb.domain.models.batch_test import (
     VariantCombination,
     normalize_finite_metrics,
 )
-from wtb.domain.models.workflow import Execution, ExecutionStatus, TestWorkflow
-from wtb.domain.interfaces.batch_runner import (
-    IBatchTestRunner,
-    BatchRunnerStatus,
-    BatchRunnerProgress,
-    BatchRunnerError,
-    BatchRunnerExecutionError,
-)
-from wtb.domain.interfaces.state_adapter import IStateAdapter
-from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+from wtb.domain.models.workflow import Execution, ExecutionStatus
 
 if TYPE_CHECKING:
     from wtb.application.factories import ManagedController
@@ -75,7 +76,7 @@ logger = logging.getLogger(__name__)
 class _RunningTest:
     """Internal state for a running batch test."""
     batch_test_id: str
-    futures: List[Future]
+    futures: list[Future]
     started_at: datetime
     completed: int = 0
     failed: int = 0
@@ -86,8 +87,8 @@ class _RunningTest:
 class _VariantTaskState:
     """Monotonic start time for per-variant timeout accounting."""
     execution_id: str
-    started_at: Optional[float] = None
-    finished_at: Optional[float] = None
+    started_at: float | None = None
+    finished_at: float | None = None
 
 
 class ThreadPoolBatchTestRunner(IBatchTestRunner):
@@ -141,12 +142,12 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
     
     def __init__(
         self,
-        controller_factory: Optional[Callable[[], "ManagedController"]] = None,
-        uow_factory: Optional[Callable[[], IUnitOfWork]] = None,
-        state_adapter_factory: Optional[Callable[[], IStateAdapter]] = None,
+        controller_factory: Callable[[], "ManagedController"] | None = None,
+        uow_factory: Callable[[], IUnitOfWork] | None = None,
+        state_adapter_factory: Callable[[], IStateAdapter] | None = None,
         max_workers: int = 4,
         execution_timeout_seconds: float = 300.0,
-        config: Optional[Any] = None,
+        config: Any | None = None,
     ):
         """
         Initialize the runner.
@@ -172,8 +173,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         self._execution_timeout = execution_timeout_seconds
         self._config = config
         
-        self._executor: Optional[ThreadPoolExecutor] = None
-        self._running_tests: Dict[str, _RunningTest] = {}
+        self._executor: ThreadPoolExecutor | None = None
+        self._running_tests: dict[str, _RunningTest] = {}
         self._lock = Lock()
         self._lifecycle_lock = Lock()
         self._shutdown = False
@@ -365,13 +366,13 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
     def _start_and_submit_batch(
         self,
         batch_test: BatchTest,
-        batch_workflow: Optional[Any],
-        batch_metadata: Dict[str, Any],
-        isolated_initial_states: List[Dict[str, Any]],
+        batch_workflow: Any | None,
+        batch_metadata: dict[str, Any],
+        isolated_initial_states: list[dict[str, Any]],
     ) -> tuple[
         _RunningTest,
-        Dict[Future, VariantCombination],
-        Dict[Future, _VariantTaskState],
+        dict[Future, VariantCombination],
+        dict[Future, _VariantTaskState],
     ]:
         """Atomically open the executor gate and submit one complete batch."""
         with self._lifecycle_lock:
@@ -391,8 +392,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             with self._lock:
                 self._running_tests[batch_test.id] = running_test
 
-            futures_to_combo: Dict[Future, VariantCombination] = {}
-            future_states: Dict[Future, _VariantTaskState] = {}
+            futures_to_combo: dict[Future, VariantCombination] = {}
+            future_states: dict[Future, _VariantTaskState] = {}
             try:
                 for combo, isolated_initial_state in zip(
                     batch_test.variant_combinations,
@@ -433,10 +434,10 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         task_state: _VariantTaskState,
         workflow_id: str,
         combo: VariantCombination,
-        initial_state: Dict[str, Any],
-        workflow_graph: Optional[Any],
-        batch_workflow: Optional[Any],
-        batch_metadata: Dict[str, Any],
+        initial_state: dict[str, Any],
+        workflow_graph: Any | None,
+        batch_workflow: Any | None,
+        batch_metadata: dict[str, Any],
     ) -> BatchTestResult:
         """Record the actual worker start before executing a variant."""
         task_state.started_at = time.monotonic()
@@ -457,11 +458,11 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         self,
         workflow_id: str,
         combo: VariantCombination,
-        initial_state: Dict[str, Any],
-        workflow_graph: Optional[Any] = None,
-        batch_workflow: Optional[Any] = None,
-        batch_metadata: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        initial_state: dict[str, Any],
+        workflow_graph: Any | None = None,
+        batch_workflow: Any | None = None,
+        batch_metadata: dict[str, Any] | None = None,
+        execution_id: str | None = None,
     ) -> BatchTestResult:
         """
         Execute a single variant combination.
@@ -603,11 +604,11 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         self,
         workflow_id: str,
         combo: VariantCombination,
-        initial_state: Dict[str, Any],
-        workflow_graph: Optional[Any],
+        initial_state: dict[str, Any],
+        workflow_graph: Any | None,
         start_time: float,
-        batch_workflow: Optional[Any] = None,
-        execution_id: Optional[str] = None,
+        batch_workflow: Any | None = None,
+        execution_id: str | None = None,
     ) -> BatchTestResult:
         """
         Execute variant using v1.7 controller factory pattern.
@@ -672,11 +673,11 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         self,
         workflow_id: str,
         combo: VariantCombination,
-        initial_state: Dict[str, Any],
+        initial_state: dict[str, Any],
         start_time: float,
         execution_id: str,
-        workflow_graph: Optional[Any] = None,
-        batch_workflow: Optional[Any] = None,
+        workflow_graph: Any | None = None,
+        batch_workflow: Any | None = None,
     ) -> BatchTestResult:
         """
         Execute variant using legacy uow_factory + state_adapter_factory.
@@ -694,7 +695,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         
         with uow:
             # Import here to avoid circular imports
-            from .execution_controller import ExecutionController, DefaultNodeExecutor
+            from .execution_controller import DefaultNodeExecutor, ExecutionController
             
             workflow = batch_workflow
             if workflow is None:
@@ -751,7 +752,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 error_message=error_msg,
             )
     
-    def _extract_metrics(self, execution: Execution) -> Dict[str, float]:
+    def _extract_metrics(self, execution: Execution) -> dict[str, float]:
         """
         Extract metrics from completed execution.
         
@@ -761,7 +762,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
         Returns:
             Dictionary of metrics
         """
-        metrics: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
         
         # Extract from execution state
         if execution.state and execution.state.workflow_variables:
@@ -794,7 +795,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 return BatchRunnerStatus.RUNNING
         return BatchRunnerStatus.IDLE
     
-    def get_progress(self, batch_test_id: str) -> Optional[BatchRunnerProgress]:
+    def get_progress(self, batch_test_id: str) -> BatchRunnerProgress | None:
         """Get progress for a running batch test."""
         with self._lock:
             running = self._running_tests.get(batch_test_id)
@@ -839,7 +840,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
     
     def create_rollback_coordinator(
         self,
-        config: Optional[Any] = None,
+        config: Any | None = None,
     ) -> "BatchExecutionCoordinator":
         """
         Create a BatchExecutionCoordinator that shares this runner's DB.

@@ -7,12 +7,12 @@ based on configuration or mode.
 Supports dependency injection and configuration-based switching.
 """
 
-from typing import Optional
 
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+
+from .config import get_database_config
 from .inmemory_unit_of_work import InMemoryUnitOfWork
 from .unit_of_work import SQLAlchemyUnitOfWork
-from .config import get_database_config
 
 
 class UnitOfWorkFactory:
@@ -49,7 +49,7 @@ class UnitOfWorkFactory:
         return InMemoryUnitOfWork()
     
     @staticmethod
-    def create_sqlalchemy(db_url: Optional[str] = None, echo: bool = False) -> SQLAlchemyUnitOfWork:
+    def create_sqlalchemy(db_url: str | None = None, echo: bool = False) -> SQLAlchemyUnitOfWork:
         """
         Create SQLAlchemy UoW for production.
         
@@ -68,7 +68,7 @@ class UnitOfWorkFactory:
     @staticmethod
     def create(
         mode: str = "inmemory",
-        db_url: Optional[str] = None,
+        db_url: str | None = None,
         echo: bool = False
     ) -> IUnitOfWork:
         """
@@ -132,7 +132,7 @@ class UnitOfWorkFactory:
         return UnitOfWorkFactory.create_sqlalchemy(echo=True)
     
     @staticmethod
-    def create_for_production(db_url: Optional[str] = None) -> SQLAlchemyUnitOfWork:
+    def create_for_production(db_url: str | None = None) -> SQLAlchemyUnitOfWork:
         """
         Convenience method for production.
         

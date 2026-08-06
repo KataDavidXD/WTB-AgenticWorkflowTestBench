@@ -30,16 +30,16 @@ Usage:
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 from wtb.config import FileTrackingConfig
 from wtb.domain.interfaces.file_tracking import (
+    FileRestoreResult,
+    FileTrackingError,
+    FileTrackingLink,
+    FileTrackingResult,
     IFileTrackingService,
     TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
-    FileTrackingLink,
-    FileTrackingError,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class RayFileTrackerService(IFileTrackingService):
         _initialized: Flag to track initialization state
     """
     
-    def __init__(self, config_dict: Dict[str, Any]):
+    def __init__(self, config_dict: dict[str, Any]):
         """
         Initialize with serializable config dict.
         
@@ -78,9 +78,9 @@ class RayFileTrackerService(IFileTrackingService):
             config_dict: FileTrackingConfig.to_dict() output
         """
         self._config_dict = config_dict
-        self._service: Optional[IFileTrackingService] = None
+        self._service: IFileTrackingService | None = None
         self._initialized = False
-        self._initialization_error: Optional[str] = None
+        self._initialization_error: str | None = None
     
     def _ensure_initialized(self):
         """
@@ -105,11 +105,14 @@ class RayFileTrackerService(IFileTrackingService):
                 return
             
             if config.postgres_url:
-                from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
+                from wtb.infrastructure.file_tracking.filetracker_service import (
+                    FileTrackerService,
+                )
 
                 self._service = FileTrackerService(config)
             else:
                 from pathlib import Path
+
                 from wtb.infrastructure.file_tracking.sqlite_service import (
                     SqliteFileTrackingService,
                 )
@@ -134,8 +137,8 @@ class RayFileTrackerService(IFileTrackingService):
     
     def track_files(
         self,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track specified files and create a commit.
@@ -155,8 +158,8 @@ class RayFileTrackerService(IFileTrackingService):
     def track_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files AND link to checkpoint in single operation.
@@ -256,7 +259,7 @@ class RayFileTrackerService(IFileTrackingService):
     def get_commit_for_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the file commit ID linked to a checkpoint.
         """
@@ -276,7 +279,7 @@ class RayFileTrackerService(IFileTrackingService):
     def get_tracked_files(
         self,
         commit_id: str,
-    ) -> List[TrackedFile]:
+    ) -> list[TrackedFile]:
         """
         Get list of tracked files for a commit.
         """
@@ -290,7 +293,7 @@ class RayFileTrackerService(IFileTrackingService):
         
         return self._service.get_tracked_files(commit_id)
     
-    def get_files_at_checkpoint(self, checkpoint_id: str) -> List[str]:
+    def get_files_at_checkpoint(self, checkpoint_id: str) -> list[str]:
         """Get file paths that existed at a specific checkpoint."""
         if not self.enabled:
             return []
@@ -332,8 +335,8 @@ class RayFileTrackerService(IFileTrackingService):
 
 
 def create_file_tracking_service(
-    config: Optional[FileTrackingConfig] = None,
-    config_dict: Optional[Dict[str, Any]] = None,
+    config: FileTrackingConfig | None = None,
+    config_dict: dict[str, Any] | None = None,
 ) -> IFileTrackingService:
     """
     Factory function to create appropriate file tracking service.
@@ -363,7 +366,9 @@ def create_file_tracking_service(
         if not config.enabled:
             return MockFileTrackingService()
         
-        from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
+        from wtb.infrastructure.file_tracking.filetracker_service import (
+            FileTrackerService,
+        )
         return FileTrackerService(config)
     
     # Default to mock

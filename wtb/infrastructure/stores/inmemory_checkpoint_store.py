@@ -10,11 +10,13 @@ Design Philosophy:
 - Thread-safe with threading.Lock
 """
 
-from typing import Dict, List, Optional
-from threading import Lock
 from copy import deepcopy
+from threading import Lock
 
-from wtb.domain.interfaces.checkpoint_store import ICheckpointStore, ICheckpointStoreFactory
+from wtb.domain.interfaces.checkpoint_store import (
+    ICheckpointStore,
+    ICheckpointStoreFactory,
+)
 from wtb.domain.models.checkpoint import (
     Checkpoint,
     CheckpointId,
@@ -43,9 +45,9 @@ class InMemoryCheckpointStore(ICheckpointStore):
         """Initialize in-memory storage."""
         self._lock = Lock()
         # Storage: execution_id -> list of checkpoints
-        self._checkpoints: Dict[str, List[Checkpoint]] = {}
+        self._checkpoints: dict[str, list[Checkpoint]] = {}
         # Index: checkpoint_id -> (execution_id, index)
-        self._index: Dict[str, tuple[str, int]] = {}
+        self._index: dict[str, tuple[str, int]] = {}
     
     def save(self, checkpoint: Checkpoint) -> None:
         """
@@ -73,7 +75,7 @@ class InMemoryCheckpointStore(ICheckpointStore):
                 self._checkpoints[execution_id].append(cp_copy)
                 self._index[cp_id_str] = (execution_id, idx)
     
-    def load(self, checkpoint_id: CheckpointId) -> Optional[Checkpoint]:
+    def load(self, checkpoint_id: CheckpointId) -> Checkpoint | None:
         """Load a checkpoint by ID."""
         with self._lock:
             cp_id_str = str(checkpoint_id)
@@ -83,7 +85,7 @@ class InMemoryCheckpointStore(ICheckpointStore):
             exec_id, idx = self._index[cp_id_str]
             return deepcopy(self._checkpoints[exec_id][idx])
     
-    def load_by_execution(self, execution_id: str) -> List[Checkpoint]:
+    def load_by_execution(self, execution_id: str) -> list[Checkpoint]:
         """Load all checkpoints for an execution."""
         with self._lock:
             checkpoints = self._checkpoints.get(execution_id, [])
@@ -101,7 +103,7 @@ class InMemoryCheckpointStore(ICheckpointStore):
             checkpoints=checkpoints,
         )
     
-    def load_latest(self, execution_id: str) -> Optional[Checkpoint]:
+    def load_latest(self, execution_id: str) -> Checkpoint | None:
         """Load the most recent checkpoint for an execution."""
         with self._lock:
             checkpoints = self._checkpoints.get(execution_id, [])
@@ -172,7 +174,7 @@ class InMemoryCheckpointStore(ICheckpointStore):
             self._checkpoints.clear()
             self._index.clear()
     
-    def get_all_execution_ids(self) -> List[str]:
+    def get_all_execution_ids(self) -> list[str]:
         """Get all execution IDs with checkpoints (for testing)."""
         with self._lock:
             return list(self._checkpoints.keys())
@@ -188,7 +190,7 @@ class InMemoryCheckpointStoreFactory(ICheckpointStoreFactory):
     
     def __init__(self):
         """Initialize factory with shared store instance."""
-        self._store: Optional[InMemoryCheckpointStore] = None
+        self._store: InMemoryCheckpointStore | None = None
     
     def create(self) -> ICheckpointStore:
         """

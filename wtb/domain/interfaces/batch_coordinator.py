@@ -55,16 +55,16 @@ Usage:
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Callable, TYPE_CHECKING
+from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
-    from wtb.domain.models.workflow import Execution
-    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
-    from wtb.domain.interfaces.state_adapter import IStateAdapter
-    from wtb.domain.interfaces.file_tracking import IFileTrackingService
     from wtb.domain.interfaces.execution_controller import IExecutionController
+    from wtb.domain.interfaces.file_tracking import IFileTrackingService
+    from wtb.domain.interfaces.state_adapter import IStateAdapter
+    from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+    from wtb.domain.models.workflow import Execution
 
 
 class OperationType(Enum):
@@ -98,8 +98,8 @@ class BatchOperationRequest:
     execution_id: str
     checkpoint_id: str
     operation: OperationType = OperationType.ROLLBACK
-    new_state: Optional[Dict[str, Any]] = None
-    graph: Optional[Any] = None  # CompiledStateGraph for *_AND_RUN operations
+    new_state: dict[str, Any] | None = None
+    graph: Any | None = None  # CompiledStateGraph for *_AND_RUN operations
 
 
 @dataclass
@@ -124,11 +124,11 @@ class BatchOperationResult:
     operation: OperationType
     success: bool
     result_execution: Optional["Execution"] = None
-    new_execution_id: Optional[str] = None  # For fork: new execution ID
+    new_execution_id: str | None = None  # For fork: new execution ID
     files_restored: int = 0
-    error: Optional[str] = None
+    error: str | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "execution_id": self.execution_id,
@@ -248,7 +248,7 @@ class IBatchExecutionCoordinator(ABC):
         self,
         execution_id: str,
         checkpoint_id: str,
-        new_state: Optional[Dict[str, Any]] = None,
+        new_state: dict[str, Any] | None = None,
     ) -> "Execution":
         """
         Fork execution from checkpoint (non-destructive).
@@ -308,7 +308,7 @@ class IBatchExecutionCoordinator(ABC):
         execution_id: str,
         checkpoint_id: str,
         graph: Any,
-        new_state: Optional[Dict[str, Any]] = None,
+        new_state: dict[str, Any] | None = None,
     ) -> "Execution":
         """
         Fork and run new execution (atomic).
@@ -334,9 +334,9 @@ class IBatchExecutionCoordinator(ABC):
     @abstractmethod
     def batch_operate(
         self,
-        requests: List[BatchOperationRequest],
+        requests: list[BatchOperationRequest],
         stop_on_error: bool = False,
-    ) -> List[BatchOperationResult]:
+    ) -> list[BatchOperationResult]:
         """
         Execute batch operations.
         
@@ -366,7 +366,7 @@ class IBatchExecutionCoordinator(ABC):
     def get_checkpoints(
         self,
         execution_id: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve checkpoint history using execution-specific storage.
 
@@ -389,8 +389,8 @@ class IBatchExecutionCoordinator(ABC):
     
     def batch_rollback(
         self,
-        items: List[tuple],  # [(exec_id, checkpoint_id), ...]
-    ) -> List[BatchOperationResult]:
+        items: list[tuple],  # [(exec_id, checkpoint_id), ...]
+    ) -> list[BatchOperationResult]:
         """
         Convenience: batch rollback multiple executions.
         
@@ -412,8 +412,8 @@ class IBatchExecutionCoordinator(ABC):
     
     def batch_fork(
         self,
-        items: List[tuple],  # [(exec_id, checkpoint_id, new_state?), ...]
-    ) -> List[BatchOperationResult]:
+        items: list[tuple],  # [(exec_id, checkpoint_id, new_state?), ...]
+    ) -> list[BatchOperationResult]:
         """
         Convenience: batch fork multiple executions.
         

@@ -32,9 +32,8 @@ Usage:
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List
 from pathlib import Path
-
+from typing import Any
 
 # ═══════════════════════════════════════════════════════════════
 # Ray Configuration
@@ -56,7 +55,7 @@ class LangGraphEventConfig:
         filter_internal: Filter internal LangGraph nodes
     """
     enabled: bool = True
-    stream_modes: List[str] = field(default_factory=lambda: ["updates"])
+    stream_modes: list[str] = field(default_factory=lambda: ["updates"])
     include_inputs: bool = False
     include_outputs: bool = True
     emit_audit_events: bool = True
@@ -101,7 +100,7 @@ class LangGraphEventConfig:
             filter_internal=True,
         )
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "enabled": self.enabled,
@@ -114,7 +113,7 @@ class LangGraphEventConfig:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LangGraphEventConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "LangGraphEventConfig":
         """Deserialize from dictionary."""
         return cls(
             enabled=data.get("enabled", True),
@@ -148,8 +147,8 @@ class RayConfig:
     memory_per_task_gb: float = 2.0
     max_pending_tasks: int = 100
     max_retries: int = 3
-    runtime_env: Optional[Dict[str, Any]] = None
-    object_store_memory_gb: Optional[float] = None
+    runtime_env: dict[str, Any] | None = None
+    object_store_memory_gb: float | None = None
     task_timeout_seconds: float = 3600.0  # 1 hour default
     
     @classmethod
@@ -193,7 +192,7 @@ class RayConfig:
             task_timeout_seconds=60.0,
         )
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "ray_address": self.ray_address,
@@ -235,11 +234,11 @@ class FileTrackingConfig:
     - Patterns support for automatic file discovery
     """
     enabled: bool = False
-    postgres_url: Optional[str] = None
+    postgres_url: str | None = None
     storage_path: str = "./file_storage"
-    wtb_db_url: Optional[str] = None
-    auto_track_patterns: List[str] = field(default_factory=lambda: ["*.csv", "*.pkl", "*.json", "*.parquet"])
-    excluded_patterns: List[str] = field(default_factory=lambda: ["*.tmp", "*.log", "*.pyc", "__pycache__/*"])
+    wtb_db_url: str | None = None
+    auto_track_patterns: list[str] = field(default_factory=lambda: ["*.csv", "*.pkl", "*.json", "*.parquet"])
+    excluded_patterns: list[str] = field(default_factory=lambda: ["*.tmp", "*.log", "*.pyc", "__pycache__/*"])
     max_file_size_mb: float = 100.0
     
     @classmethod
@@ -300,7 +299,7 @@ class FileTrackingConfig:
             wtb_db_url=wtb_db_url,
         )
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize to dictionary.
         
@@ -320,7 +319,7 @@ class FileTrackingConfig:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FileTrackingConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "FileTrackingConfig":
         """
         Deserialize from dictionary.
         
@@ -385,7 +384,7 @@ class WTBConfig:
     wtb_storage_mode: str = "inmemory"
     
     # Database URL (for sqlalchemy mode)
-    wtb_db_url: Optional[str] = None
+    wtb_db_url: str | None = None
     
     # AgentGit database path
     agentgit_db_path: str = "data/agentgit.db"
@@ -393,7 +392,7 @@ class WTBConfig:
     # State adapter mode: "inmemory" or "langgraph"
     state_adapter_mode: str = "inmemory"
     # Explicit SQLite path shared by main and batch LangGraph adapters
-    langgraph_checkpoint_path: Optional[str] = None
+    langgraph_checkpoint_path: str | None = None
 
     
     # Base data directory
@@ -401,25 +400,25 @@ class WTBConfig:
     
     # FileTracker settings
     filetracker_enabled: bool = False
-    filetracker_storage_path: Optional[str] = None
+    filetracker_storage_path: str | None = None
     
     # IDE sync settings
     ide_sync_enabled: bool = False
-    ide_sync_url: Optional[str] = None
+    ide_sync_url: str | None = None
     
     # Ray batch testing
     ray_enabled: bool = False
-    ray_config: Optional[RayConfig] = None
+    ray_config: RayConfig | None = None
     
     # File tracking integration
-    file_tracking_config: Optional[FileTrackingConfig] = None
+    file_tracking_config: FileTrackingConfig | None = None
     
     # Environment provider
     environment_provider: str = "inprocess"  # "ray", "grpc", "inprocess"
-    grpc_env_manager_url: Optional[str] = None
+    grpc_env_manager_url: str | None = None
     
     # LangGraph event configuration
-    langgraph_event_config: Optional[LangGraphEventConfig] = None
+    langgraph_event_config: LangGraphEventConfig | None = None
     
     # Logging
     log_sql: bool = False
@@ -590,7 +589,7 @@ class WTBConfig:
         agentgit_db_path: str = "data/agentgit.db",
         data_dir: str = "data",
         num_ray_workers: int = 10,
-        filetracker_postgres_url: Optional[str] = None,
+        filetracker_postgres_url: str | None = None,
         file_storage_path: str = "/data/file_storage",
     ) -> "WTBConfig":
         """
@@ -671,7 +670,7 @@ class WTBConfig:
 
 
 # Global config instance (lazily initialized)
-_global_config: Optional[WTBConfig] = None
+_global_config: WTBConfig | None = None
 
 
 def get_config() -> WTBConfig:

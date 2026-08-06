@@ -4,9 +4,9 @@ Integration Tests for REST API Endpoints.
 Tests the full HTTP request/response cycle using TestClient.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch
 
 # Skip if FastAPI not installed
 pytest.importorskip("fastapi")

@@ -1,21 +1,23 @@
 
-import aiofiles
-import aiofiles.os
+import logging
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
-from typing import List, Optional, Callable, Dict, Any
-import logging
 
-from wtb.domain.interfaces.async_file_tracking import IAsyncFileTrackingService, FileTrackingResult
+import aiofiles
+import aiofiles.os
+
+from wtb.domain.interfaces.async_file_tracking import (
+    FileTrackingResult,
+    IAsyncFileTrackingService,
+)
 from wtb.domain.interfaces.async_unit_of_work import IAsyncUnitOfWork
 from wtb.domain.models.file_processing import (
-    FileMemento,
-    FileCommit,
     CheckpointFileLink,
-    BlobId,
-    CommitId,
     DuplicateFileError,
+    FileCommit,
+    FileMemento,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,10 +51,10 @@ class AsyncFileTrackerService(IAsyncFileTrackingService):
 
     async def _aprepare_files(
         self,
-        file_paths: List[str],
-    ) -> List[tuple[Path, bytes]]:
+        file_paths: list[str],
+    ) -> list[tuple[Path, bytes]]:
         """Validate and read every input before opening the storage UoW."""
-        validated_paths: List[Path] = []
+        validated_paths: list[Path] = []
         seen_paths = set()
 
         for file_path in file_paths:
@@ -91,9 +93,9 @@ class AsyncFileTrackerService(IAsyncFileTrackingService):
     
     async def atrack_files(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
-        checkpoint_id: Optional[str] = None,
+        checkpoint_id: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files asynchronously with content-addressable storage.
@@ -113,9 +115,9 @@ class AsyncFileTrackerService(IAsyncFileTrackingService):
     async def _atrack_prepared_files_in_uow(
         self,
         uow: IAsyncUnitOfWork,
-        prepared_files: List[tuple[Path, bytes]],
+        prepared_files: list[tuple[Path, bytes]],
         message: str,
-        checkpoint_id: Optional[str] = None,
+        checkpoint_id: str | None = None,
     ) -> FileTrackingResult:
         """Persist prepared files through the supplied UoW without committing it."""
         mementos = []
@@ -157,7 +159,7 @@ class AsyncFileTrackerService(IAsyncFileTrackingService):
         self,
         uow: IAsyncUnitOfWork,
         checkpoint_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
     ) -> FileTrackingResult:
         """Track and link files in a caller-owned transaction."""
@@ -229,7 +231,7 @@ class AsyncFileTrackerService(IAsyncFileTrackingService):
     async def atrack_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
     ) -> FileTrackingResult:
         """

@@ -13,20 +13,15 @@ Test Categories:
 Note: Tests marked with @pytest.mark.ray require Ray to be installed.
 """
 
+from typing import Any
+
 import pytest
-import os
-import tempfile
-from unittest.mock import Mock, patch, MagicMock
-from typing import Dict, Any, List
 
 from wtb.config import FileTrackingConfig, RayConfig
-from wtb.domain.interfaces.file_tracking import (
-    FileTrackingResult,
-    FileRestoreResult,
-    FileTrackingError,
+from wtb.infrastructure.file_tracking import (
+    MockFileTrackingService,
+    RayFileTrackerService,
 )
-from wtb.infrastructure.file_tracking import RayFileTrackerService, MockFileTrackingService
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -34,7 +29,7 @@ from wtb.infrastructure.file_tracking import RayFileTrackerService, MockFileTrac
 
 
 @pytest.fixture
-def filetracker_config_dict() -> Dict[str, Any]:
+def filetracker_config_dict() -> dict[str, Any]:
     """Create a FileTrackingConfig as dict for Ray transmission."""
     return {
         "enabled": True,
@@ -48,7 +43,7 @@ def filetracker_config_dict() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def disabled_config_dict() -> Dict[str, Any]:
+def disabled_config_dict() -> dict[str, Any]:
     """Create disabled FileTrackingConfig as dict."""
     return {
         "enabled": False,
@@ -133,7 +128,9 @@ class TestCreateFileTrackingService:
     
     def test_create_with_disabled_config(self):
         """Test factory creates mock service when disabled."""
-        from wtb.infrastructure.file_tracking.ray_filetracker_service import create_file_tracking_service
+        from wtb.infrastructure.file_tracking.ray_filetracker_service import (
+            create_file_tracking_service,
+        )
         
         config = FileTrackingConfig.for_testing()
         service = create_file_tracking_service(config=config)
@@ -142,7 +139,9 @@ class TestCreateFileTrackingService:
     
     def test_create_with_dict_disabled(self):
         """Test factory creates mock service with disabled dict."""
-        from wtb.infrastructure.file_tracking.ray_filetracker_service import create_file_tracking_service
+        from wtb.infrastructure.file_tracking.ray_filetracker_service import (
+            create_file_tracking_service,
+        )
         
         config_dict = {"enabled": False}
         service = create_file_tracking_service(config_dict=config_dict)
@@ -151,7 +150,9 @@ class TestCreateFileTrackingService:
     
     def test_create_with_dict_enabled(self):
         """Test factory creates Ray service with enabled dict."""
-        from wtb.infrastructure.file_tracking.ray_filetracker_service import create_file_tracking_service
+        from wtb.infrastructure.file_tracking.ray_filetracker_service import (
+            create_file_tracking_service,
+        )
         
         config_dict = {"enabled": True, "postgres_url": "postgresql://test"}
         service = create_file_tracking_service(config_dict=config_dict)
@@ -160,7 +161,9 @@ class TestCreateFileTrackingService:
     
     def test_create_with_no_args_returns_mock(self):
         """Test factory returns mock with no arguments."""
-        from wtb.infrastructure.file_tracking.ray_filetracker_service import create_file_tracking_service
+        from wtb.infrastructure.file_tracking.ray_filetracker_service import (
+            create_file_tracking_service,
+        )
         
         service = create_file_tracking_service()
         
@@ -227,7 +230,10 @@ class TestRayBatchRunnerFileTrackerIntegration:
     def test_runner_accepts_filetracker_config(self):
         """Test that runner accepts filetracker_config parameter."""
         # This test verifies the API without running Ray
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RAY_AVAILABLE
+        from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
+            RayBatchTestRunner,
+        )
         
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -251,7 +257,10 @@ class TestRayBatchRunnerFileTrackerIntegration:
     
     def test_runner_disabled_filetracker(self):
         """Test runner with disabled FileTracker."""
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RAY_AVAILABLE
+        from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
+            RayBatchTestRunner,
+        )
         
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -267,7 +276,10 @@ class TestRayBatchRunnerFileTrackerIntegration:
     
     def test_runner_filetracker_disabled_in_config(self):
         """Test runner with explicitly disabled FileTracker in config."""
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RAY_AVAILABLE
+        from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
+            RayBatchTestRunner,
+        )
         
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")

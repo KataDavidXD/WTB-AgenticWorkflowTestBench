@@ -12,10 +12,10 @@ ACID Compliance:
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Literal
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Enums
@@ -81,7 +81,7 @@ class ErrorResponse(BaseModel):
     """Standard error response."""
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Human-readable error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     model_config = ConfigDict(from_attributes=True)
@@ -92,7 +92,7 @@ class HealthResponse(BaseModel):
     status: Literal["healthy", "degraded", "unhealthy"]
     version: str = Field(..., description="API version")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    components: Dict[str, str] = Field(
+    components: dict[str, str] = Field(
         default_factory=dict, 
         description="Component health status"
     )
@@ -115,46 +115,46 @@ class WorkflowNodeSchema(BaseModel):
     id: str = Field(..., description="Node ID")
     name: str = Field(..., description="Node name")
     type: str = Field(..., description="Node type (action, decision, start, end)")
-    tool_name: Optional[str] = Field(None, description="Tool name for action nodes")
-    config: Optional[Dict[str, Any]] = Field(None, description="Node configuration")
+    tool_name: str | None = Field(None, description="Tool name for action nodes")
+    config: dict[str, Any] | None = Field(None, description="Node configuration")
 
 
 class WorkflowEdgeSchema(BaseModel):
     """Edge definition in a workflow."""
     source_id: str = Field(..., description="Source node ID")
     target_id: str = Field(..., description="Target node ID")
-    condition: Optional[str] = Field(None, description="Edge condition expression")
+    condition: str | None = Field(None, description="Edge condition expression")
 
 
 class WorkflowCreateRequest(BaseModel):
     """Request to create a workflow."""
     name: str = Field(..., min_length=1, max_length=100, description="Workflow name")
-    description: Optional[str] = Field(None, max_length=500)
-    nodes: List[WorkflowNodeSchema] = Field(..., min_length=1)
-    edges: List[WorkflowEdgeSchema] = Field(default_factory=list)
+    description: str | None = Field(None, max_length=500)
+    nodes: list[WorkflowNodeSchema] = Field(..., min_length=1)
+    edges: list[WorkflowEdgeSchema] = Field(default_factory=list)
     entry_point: str = Field(..., description="Entry node ID")
-    metadata: Optional[Dict[str, Any]] = Field(None)
+    metadata: dict[str, Any] | None = Field(None)
 
 
 class WorkflowUpdateRequest(BaseModel):
     """Request to update a workflow."""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    nodes: Optional[List[WorkflowNodeSchema]] = None
-    edges: Optional[List[WorkflowEdgeSchema]] = None
-    entry_point: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    name: str | None = Field(None, min_length=1, max_length=100)
+    description: str | None = Field(None, max_length=500)
+    nodes: list[WorkflowNodeSchema] | None = None
+    edges: list[WorkflowEdgeSchema] | None = None
+    entry_point: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class WorkflowResponse(BaseModel):
     """Workflow response."""
     id: str = Field(..., description="Workflow ID")
     name: str
-    description: Optional[str] = None
-    nodes: List[WorkflowNodeSchema]
-    edges: List[WorkflowEdgeSchema]
+    description: str | None = None
+    nodes: list[WorkflowNodeSchema]
+    edges: list[WorkflowEdgeSchema]
     entry_point: str
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
     version: int = Field(default=1, description="Workflow version")
@@ -164,7 +164,7 @@ class WorkflowResponse(BaseModel):
 
 class WorkflowListResponse(BaseModel):
     """List of workflows response."""
-    workflows: List[WorkflowResponse]
+    workflows: list[WorkflowResponse]
     pagination: PaginationMeta
 
 
@@ -175,15 +175,15 @@ class WorkflowListResponse(BaseModel):
 class ExecutionCreateRequest(BaseModel):
     """Request to create/start an execution."""
     workflow_id: str = Field(..., description="Workflow to execute")
-    initial_state: Optional[Dict[str, Any]] = Field(
+    initial_state: dict[str, Any] | None = Field(
         None, 
         description="Initial state variables"
     )
-    breakpoints: Optional[List[str]] = Field(
+    breakpoints: list[str] | None = Field(
         None, 
         description="Node IDs to break at"
     )
-    config: Optional[Dict[str, Any]] = Field(
+    config: dict[str, Any] | None = Field(
         None,
         description="Execution configuration"
     )
@@ -194,57 +194,57 @@ class ExecutionConfigSchema(BaseModel):
     enable_file_tracking: bool = Field(default=True)
     enable_audit: bool = Field(default=True)
     checkpoint_interval: int = Field(default=0, description="0 = every node")
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class ExecutionStateSchema(BaseModel):
     """Current execution state."""
-    current_node_id: Optional[str] = None
-    workflow_variables: Dict[str, Any] = Field(default_factory=dict)
-    execution_path: List[str] = Field(default_factory=list)
-    node_results: Dict[str, Any] = Field(default_factory=dict)
+    current_node_id: str | None = None
+    workflow_variables: dict[str, Any] = Field(default_factory=dict)
+    execution_path: list[str] = Field(default_factory=list)
+    node_results: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExecutionResponse(BaseModel):
     """Execution response."""
     id: str = Field(..., description="Execution ID")
     workflow_id: str
-    workflow_name: Optional[str] = None
+    workflow_name: str | None = None
     status: ExecutionStatusEnum
     state: ExecutionStateSchema
-    breakpoints: List[str] = Field(default_factory=list)
-    current_node_id: Optional[str] = None
-    error: Optional[str] = None
-    error_node_id: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_ms: Optional[float] = None
+    breakpoints: list[str] = Field(default_factory=list)
+    current_node_id: str | None = None
+    error: str | None = None
+    error_node_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
     checkpoint_count: int = Field(default=0)
     nodes_executed: int = Field(default=0)
-    thread_id: Optional[str] = Field(None, description="LangGraph thread ID")
+    thread_id: str | None = Field(None, description="LangGraph thread ID")
     
     model_config = ConfigDict(from_attributes=True)
 
 
 class ExecutionListResponse(BaseModel):
     """List of executions response."""
-    executions: List[ExecutionResponse]
+    executions: list[ExecutionResponse]
     pagination: PaginationMeta
 
 
 class PauseRequest(BaseModel):
     """Request to pause an execution."""
-    reason: Optional[str] = Field(None, max_length=500, description="Pause reason")
-    at_node: Optional[str] = Field(None, description="Node ID to pause at")
+    reason: str | None = Field(None, max_length=500, description="Pause reason")
+    at_node: str | None = Field(None, description="Node ID to pause at")
 
 
 class ResumeRequest(BaseModel):
     """Request to resume an execution."""
-    modified_state: Optional[Dict[str, Any]] = Field(
+    modified_state: dict[str, Any] | None = Field(
         None,
         description="State modifications before resume"
     )
-    from_node: Optional[str] = Field(
+    from_node: str | None = Field(
         None,
         description="Node ID to resume from"
     )
@@ -263,27 +263,27 @@ class RollbackResponse(BaseModel):
     """Rollback operation response."""
     success: bool
     to_checkpoint: str
-    new_session_id: Optional[str] = Field(
+    new_session_id: str | None = Field(
         None, 
         description="New session ID if branch created"
     )
     tools_reversed: int = Field(default=0)
     files_restored: int = Field(default=0)
-    restored_state: Optional[Dict[str, Any]] = None
+    restored_state: dict[str, Any] | None = None
 
 
 class StateModifyRequest(BaseModel):
     """Request to modify execution state (human-in-the-loop)."""
-    changes: Dict[str, Any] = Field(..., description="State changes to apply")
-    reason: Optional[str] = Field(None, max_length=500, description="Modification reason")
+    changes: dict[str, Any] = Field(..., description="State changes to apply")
+    reason: str | None = Field(None, max_length=500, description="Modification reason")
 
 
 class ControlResponse(BaseModel):
     """Generic control operation response."""
     success: bool
     status: ExecutionStatusEnum
-    checkpoint_id: Optional[str] = None
-    message: Optional[str] = None
+    checkpoint_id: str | None = None
+    message: str | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -294,19 +294,19 @@ class CheckpointResponse(BaseModel):
     """Checkpoint response."""
     id: str = Field(..., description="Checkpoint ID")
     execution_id: str
-    node_id: Optional[str] = None
+    node_id: str | None = None
     trigger_type: str = Field(..., description="auto, manual, breakpoint")
     created_at: datetime
-    state_snapshot: Optional[Dict[str, Any]] = None
+    state_snapshot: dict[str, Any] | None = None
     has_file_commit: bool = Field(default=False)
-    file_commit_id: Optional[str] = None
+    file_commit_id: str | None = None
     
     model_config = ConfigDict(from_attributes=True)
 
 
 class CheckpointListResponse(BaseModel):
     """List of checkpoints response."""
-    checkpoints: List[CheckpointResponse]
+    checkpoints: list[CheckpointResponse]
     execution_id: str
     total: int
 
@@ -322,50 +322,50 @@ class AuditEventResponse(BaseModel):
     event_type: AuditEventTypeEnum
     severity: AuditSeverityEnum
     message: str
-    execution_id: Optional[str] = None
-    node_id: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    execution_id: str | None = None
+    node_id: str | None = None
+    details: dict[str, Any] | None = None
+    error: str | None = None
+    duration_ms: float | None = None
     
     model_config = ConfigDict(from_attributes=True)
 
 
 class AuditEventListResponse(BaseModel):
     """List of audit events response."""
-    events: List[AuditEventResponse]
+    events: list[AuditEventResponse]
     pagination: PaginationMeta
 
 
 class AuditSummaryResponse(BaseModel):
     """Audit summary statistics."""
     total_events: int
-    execution_id: Optional[str] = None
+    execution_id: str | None = None
     time_range: str
-    events_by_type: Dict[str, int] = Field(default_factory=dict)
-    events_by_severity: Dict[str, int] = Field(default_factory=dict)
+    events_by_type: dict[str, int] = Field(default_factory=dict)
+    events_by_severity: dict[str, int] = Field(default_factory=dict)
     error_rate: float = Field(default=0.0, description="Error rate percentage")
     checkpoint_count: int = Field(default=0)
     rollback_count: int = Field(default=0)
     nodes_executed: int = Field(default=0)
     nodes_failed: int = Field(default=0)
-    avg_node_duration_ms: Optional[float] = None
+    avg_node_duration_ms: float | None = None
 
 
 class AuditTimelineEntry(BaseModel):
     """Timeline entry for visualization."""
     timestamp: datetime
     event_type: str
-    node_id: Optional[str] = None
-    duration_ms: Optional[float] = None
+    node_id: str | None = None
+    duration_ms: float | None = None
     status: str  # started, completed, failed, skipped
 
 
 class AuditTimelineResponse(BaseModel):
     """Execution timeline for visualization."""
     execution_id: str
-    entries: List[AuditTimelineEntry]
-    total_duration_ms: Optional[float] = None
+    entries: list[AuditTimelineEntry]
+    total_duration_ms: float | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -375,11 +375,11 @@ class AuditTimelineResponse(BaseModel):
 class VariantCombinationRequest(BaseModel):
     """A variant combination for batch testing."""
     name: str = Field(..., description="Combination name")
-    node_variants: Dict[str, str] = Field(
+    node_variants: dict[str, str] = Field(
         default_factory=dict,
         description="Map of node_id to variant_id"
     )
-    workflow_variant: Optional[str] = Field(
+    workflow_variant: str | None = Field(
         None,
         description="Workflow-level variant name"
     )
@@ -388,20 +388,20 @@ class VariantCombinationRequest(BaseModel):
 class BatchTestCreateRequest(BaseModel):
     """Request to create/run a batch test."""
     workflow_id: str = Field(..., description="Workflow to test")
-    variants: List[VariantCombinationRequest] = Field(
+    variants: list[VariantCombinationRequest] = Field(
         ...,
         min_length=1,
         description="Variant combinations to test"
     )
-    initial_state: Optional[Dict[str, Any]] = Field(
+    initial_state: dict[str, Any] | None = Field(
         None,
         description="Initial state for all variants"
     )
-    test_cases: Optional[List[Dict[str, Any]]] = Field(
+    test_cases: list[dict[str, Any]] | None = Field(
         None,
         description="Multiple test cases to run"
     )
-    parallelism: Optional[int] = Field(
+    parallelism: int | None = Field(
         None,
         ge=1,
         description="Number of parallel workers (0=auto)"
@@ -414,21 +414,21 @@ class VariantResultSchema(BaseModel):
     """Result for a single variant execution."""
     variant_name: str
     status: Literal["completed", "failed", "cancelled"]
-    metrics: Dict[str, float] = Field(default_factory=dict)
+    metrics: dict[str, float] = Field(default_factory=dict)
     overall_score: float = Field(default=0.0)
     duration_ms: float = Field(default=0.0)
-    error: Optional[str] = None
+    error: str | None = None
     checkpoint_count: int = Field(default=0)
     nodes_executed: int = Field(default=0)
-    file_commit_id: Optional[str] = None
+    file_commit_id: str | None = None
 
 
 class ComparisonMatrixResponse(BaseModel):
     """Comparison matrix for batch test results."""
-    metric_names: List[str]
-    variants: List[VariantResultSchema]
-    best_variant: Optional[str] = None
-    best_score: Optional[float] = None
+    metric_names: list[str]
+    variants: list[VariantResultSchema]
+    best_variant: str | None = None
+    best_score: float | None = None
 
 
 class BatchTestProgressSchema(BaseModel):
@@ -438,26 +438,26 @@ class BatchTestProgressSchema(BaseModel):
     completed: int
     failed: int
     pending: int
-    current_variant: Optional[str] = None
+    current_variant: str | None = None
     current_progress_percent: float = Field(default=0.0)
-    eta_seconds: Optional[float] = None
+    eta_seconds: float | None = None
 
 
 class BatchTestResponse(BaseModel):
     """Batch test response."""
     id: str = Field(..., description="Batch test ID")
     workflow_id: str
-    workflow_name: Optional[str] = None
+    workflow_name: str | None = None
     status: BatchTestStatusEnum
     variant_count: int
     variants_completed: int = Field(default=0)
     variants_failed: int = Field(default=0)
     created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_ms: Optional[float] = None
-    comparison_matrix: Optional[ComparisonMatrixResponse] = None
-    best_variant: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    comparison_matrix: ComparisonMatrixResponse | None = None
+    best_variant: str | None = None
     use_ray: bool = Field(default=True)
     
     model_config = ConfigDict(from_attributes=True)
@@ -465,7 +465,7 @@ class BatchTestResponse(BaseModel):
 
 class BatchTestListResponse(BaseModel):
     """List of batch tests response."""
-    batch_tests: List[BatchTestResponse]
+    batch_tests: list[BatchTestResponse]
     pagination: PaginationMeta
 
 
@@ -479,16 +479,16 @@ class NodeExecutionStatusSchema(BaseModel):
     node_name: str
     node_type: str
     status: Literal["pending", "running", "completed", "failed", "skipped"]
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_ms: Optional[float] = None
-    error: Optional[str] = None
-    checkpoint_id: Optional[str] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    error: str | None = None
+    checkpoint_id: str | None = None
 
 
 class ExecuteSingleNodeRequest(BaseModel):
     """Request to execute a single node."""
-    input_state: Optional[Dict[str, Any]] = Field(
+    input_state: dict[str, Any] | None = Field(
         None,
         description="Input state override"
     )
@@ -496,8 +496,8 @@ class ExecuteSingleNodeRequest(BaseModel):
 
 class NodeBatchTestRequest(BaseModel):
     """Request to batch test a single node with variants."""
-    variants: List[str] = Field(..., min_length=1, description="Variant names to test")
-    input_state: Optional[Dict[str, Any]] = None
+    variants: list[str] = Field(..., min_length=1, description="Variant names to test")
+    input_state: dict[str, Any] | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -507,8 +507,8 @@ class NodeBatchTestRequest(BaseModel):
 class BranchCreateRequest(BaseModel):
     """Request to create a branch from checkpoint."""
     checkpoint_id: str = Field(..., description="Checkpoint to branch from")
-    name: Optional[str] = Field(None, max_length=100, description="Branch name")
-    description: Optional[str] = Field(None, max_length=500)
+    name: str | None = Field(None, max_length=100, description="Branch name")
+    description: str | None = Field(None, max_length=500)
 
 
 class BranchResponse(BaseModel):
@@ -516,8 +516,8 @@ class BranchResponse(BaseModel):
     id: str = Field(..., description="Branch ID")
     parent_execution_id: str
     from_checkpoint_id: str
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
     execution_id: str = Field(..., description="New execution ID for the branch")
     created_at: datetime
     
@@ -526,7 +526,7 @@ class BranchResponse(BaseModel):
 
 class BranchListResponse(BaseModel):
     """List of branches response."""
-    branches: List[BranchResponse]
+    branches: list[BranchResponse]
     parent_execution_id: str
     total: int
 
@@ -539,16 +539,16 @@ class VariantCreateRequest(BaseModel):
     """Request to register a variant."""
     node_id: str = Field(..., description="Node this variant applies to")
     name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
+    description: str | None = Field(None, max_length=500)
     implementation_path: str = Field(
         ..., 
         description="Module path to implementation (e.g., 'myapp.variants:func')"
     )
-    environment: Optional[Dict[str, Any]] = Field(
+    environment: dict[str, Any] | None = Field(
         None,
         description="Environment specification"
     )
-    resources: Optional[Dict[str, Any]] = Field(
+    resources: dict[str, Any] | None = Field(
         None,
         description="Resource allocation"
     )
@@ -559,10 +559,10 @@ class VariantResponse(BaseModel):
     id: str
     node_id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     implementation_path: str
-    environment: Optional[Dict[str, Any]] = None
-    resources: Optional[Dict[str, Any]] = None
+    environment: dict[str, Any] | None = None
+    resources: dict[str, Any] | None = None
     created_at: datetime
     
     model_config = ConfigDict(from_attributes=True)
@@ -570,7 +570,7 @@ class VariantResponse(BaseModel):
 
 class VariantListResponse(BaseModel):
     """List of variants response."""
-    variants: List[VariantResponse]
+    variants: list[VariantResponse]
     pagination: PaginationMeta
 
 
@@ -581,12 +581,12 @@ class VariantListResponse(BaseModel):
 class WebSocketMessage(BaseModel):
     """WebSocket message format."""
     type: str = Field(..., description="Message type")
-    execution_id: Optional[str] = None
-    data: Dict[str, Any] = Field(default_factory=dict)
+    execution_id: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 class WebSocketSubscribeRequest(BaseModel):
     """WebSocket subscription request."""
     action: Literal["subscribe", "unsubscribe"]
-    topics: List[str] = Field(..., description="Topics to subscribe/unsubscribe")
+    topics: list[str] = Field(..., description="Topics to subscribe/unsubscribe")

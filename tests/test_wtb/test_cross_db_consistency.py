@@ -5,28 +5,27 @@ Tests the Outbox Pattern and IntegrityChecker working together
 to ensure consistency across WTB, AgentGit, and FileTracker databases.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, MagicMock
+
+import pytest
 
 from wtb.domain.models import (
-    Execution,
-    ExecutionStatus,
-    ExecutionState,
-    NodeBoundary,
     CheckpointFileLink,
+    Execution,
+    ExecutionState,
+    ExecutionStatus,
     InvalidStateTransition,
+    NodeBoundary,
 )
 from wtb.domain.models.file_processing import CommitId
+from wtb.domain.models.integrity import (
+    IntegrityIssueType,
+    IntegritySeverity,
+)
 from wtb.domain.models.outbox import (
     OutboxEvent,
     OutboxEventType,
     OutboxStatus,
-)
-from wtb.domain.models.integrity import (
-    IntegrityReport,
-    IntegrityIssueType,
-    IntegritySeverity,
 )
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork

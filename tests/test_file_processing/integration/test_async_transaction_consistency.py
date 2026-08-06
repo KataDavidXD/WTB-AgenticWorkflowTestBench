@@ -31,28 +31,26 @@ Scenario E: Node Replacement with Isolated Environments
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
-import pytest
-import pytest_asyncio
+import asyncio
+import sqlite3
+import uuid
+from datetime import datetime
+from pathlib import Path
+
 import aiofiles
 import aiofiles.os
-import uuid
-import asyncio
-import tempfile
-import sqlite3
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any
+import pytest
+import pytest_asyncio
+from sqlalchemy import func, select
 
-from wtb.infrastructure.database.async_unit_of_work import AsyncSQLAlchemyUnitOfWork
-from wtb.infrastructure.file_tracking.async_filetracker_service import AsyncFileTrackerService
-from wtb.infrastructure.file_tracking.async_orphan_cleaner import AsyncBlobOrphanCleaner
-from wtb.domain.models.file_processing import (
-    FileCommit, FileMemento, BlobId, CommitId, CommitStatus, CheckpointFileLink
-)
+from wtb.domain.models.file_processing import BlobId, FileCommit, FileMemento
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
-from wtb.infrastructure.database.file_processing_orm import FileBlobORM, FileCommitORM
-from sqlalchemy import select, func
-
+from wtb.infrastructure.database.async_unit_of_work import AsyncSQLAlchemyUnitOfWork
+from wtb.infrastructure.database.file_processing_orm import FileBlobORM
+from wtb.infrastructure.file_tracking.async_filetracker_service import (
+    AsyncFileTrackerService,
+)
+from wtb.infrastructure.file_tracking.async_orphan_cleaner import AsyncBlobOrphanCleaner
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
@@ -70,9 +68,6 @@ async def async_uow_factory(tmp_path):
     
     # Initialize schema
     from wtb.infrastructure.database.models import Base
-    from wtb.infrastructure.database.file_processing_orm import (
-        FileBlobORM, FileCommitORM, FileMementoORM, CheckpointFileLinkORM
-    )
     
     # Create tables using async engine
     async_db_url = f"sqlite+aiosqlite:///{db_path}"
@@ -301,7 +296,7 @@ class TestScenarioA_Idempotency:
                     saved_id = await uow.blobs.asave(content)
                     await uow.acommit()
                     return saved_id
-            except Exception as e:
+            except Exception:
                 # Concurrent write conflict - expected in some cases
                 return None
         
@@ -745,9 +740,9 @@ class TestScenarioE_NodeEnvironmentIsolation:
         Requires:
             - Venv Manager running on localhost:50051
         """
-        from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
-        
         import socket
+
+        from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             result = sock.connect_ex(('localhost', 50051))

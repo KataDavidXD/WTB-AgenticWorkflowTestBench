@@ -17,37 +17,31 @@ ACID Compliance Focus:
 Run with: pytest tests/test_outbox_transaction_consistency/test_update_operations.py -v
 """
 
-import pytest
 import threading
 import time
 from datetime import datetime
-from typing import Dict, Any, List, Callable
-from unittest.mock import Mock, MagicMock, patch
+from typing import Any
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 
-# Import real domain types
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+# Import centralized mocks
+from tests.mocks.services import (
+    verify_transaction_atomicity,
+)
 
 # Import test helpers
 from tests.test_outbox_transaction_consistency.helpers import (
     SimpleState,
-    TransactionState,
     create_simple_state,
-    create_transaction_state,
     node_a,
     node_b,
     node_c,
     node_d,
 )
 
-# Import centralized mocks
-from tests.mocks.services import (
-    verify_outbox_consistency,
-    verify_transaction_atomicity,
-)
-
+# Import real domain types
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper Functions for Test Events
@@ -59,7 +53,7 @@ def create_update_event(
     event_type_name: str,
     aggregate_type: str,
     aggregate_id: str,
-    payload: Dict[str, Any] = None,
+    payload: dict[str, Any] = None,
 ) -> OutboxEvent:
     """
     Create an OutboxEvent for update operation testing.
@@ -194,7 +188,7 @@ class TestNodeUpdateTransactionConsistency:
             state_after_a = history[-2].values if len(history) > 1 else result
         
         # Simulate node_b update with new implementation
-        def updated_node_b(state: SimpleState) -> Dict[str, Any]:
+        def updated_node_b(state: SimpleState) -> dict[str, Any]:
             return {"messages": ["B_UPDATED"], "count": state["count"] + 1}
         
         # Create new workflow with updated node
@@ -453,7 +447,9 @@ class TestConfigurationUpdateConsistency:
         outbox_repository,
     ):
         """Config updates should affect new executions only."""
-        from tests.test_outbox_transaction_consistency.helpers import create_batch_test_state
+        from tests.test_outbox_transaction_consistency.helpers import (
+            create_batch_test_state,
+        )
         
         # Execute with original config
         config1 = {"configurable": {"thread_id": "config-exec-1"}}

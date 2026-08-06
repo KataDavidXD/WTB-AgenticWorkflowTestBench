@@ -9,21 +9,19 @@ Tests the SqliteFileTrackingService and MockFileTrackingService across all modes
 - Integration with ExecutionController (LangGraph + node-executor)
 """
 
-import os
 import tempfile
-import pytest
 from pathlib import Path
 
-from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
-from wtb.infrastructure.file_tracking.mock_service import MockFileTrackingService
+import pytest
+
 from wtb.domain.interfaces.file_tracking import (
-    FileTrackingResult,
+    CheckpointLinkError,
     FileRestoreResult,
     FileTrackingLink,
-    CheckpointLinkError,
-    CommitNotFoundError,
+    FileTrackingResult,
 )
-
+from wtb.infrastructure.file_tracking.mock_service import MockFileTrackingService
+from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
 
 # ═══════════════════════════════════════════════════════════════
 # SQLite CAS: Core Blob Storage
@@ -380,9 +378,9 @@ class TestCASControllerIntegration:
     def _try_import_langgraph(self):
         try:
             from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LangGraphStateAdapter,
-                LangGraphConfig,
                 LANGGRAPH_AVAILABLE,
+                LangGraphConfig,
+                LangGraphStateAdapter,
             )
             if not LANGGRAPH_AVAILABLE:
                 pytest.skip("LangGraph not available")
@@ -393,15 +391,18 @@ class TestCASControllerIntegration:
     def test_controller_with_mock_file_tracking(self):
         """ExecutionController accepts mock file tracking and tracks output files."""
         LangGraphStateAdapter, LangGraphConfig = self._try_import_langgraph()
-        from wtb.testing.fixtures import create_minimal_graph
-        from wtb.domain.models.workflow import (
-            ExecutionStatus, WorkflowNode, WorkflowEdge,
-        )
-        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
         from wtb.application.services.execution_controller import (
-            ExecutionController, DefaultNodeExecutor,
+            DefaultNodeExecutor,
+            ExecutionController,
+        )
+        from wtb.domain.models.workflow import (
+            ExecutionStatus,
+            WorkflowEdge,
+            WorkflowNode,
         )
         from wtb.domain.models.workflow import TestWorkflow as TWF
+        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
+        from wtb.testing.fixtures import create_minimal_graph
 
         config = LangGraphConfig.for_testing()
         adapter = LangGraphStateAdapter(config)
@@ -449,15 +450,20 @@ class TestCASControllerIntegration:
 class TestCASNodeExecutorIntegration:
 
     def test_node_executor_with_mock_tracking(self):
-        from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
-        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
         from wtb.application.services.execution_controller import (
-            ExecutionController, DefaultNodeExecutor,
+            DefaultNodeExecutor,
+            ExecutionController,
         )
         from wtb.domain.models.workflow import (
-            ExecutionStatus, WorkflowNode, WorkflowEdge,
+            ExecutionStatus,
+            WorkflowEdge,
+            WorkflowNode,
         )
         from wtb.domain.models.workflow import TestWorkflow as TWF
+        from wtb.infrastructure.adapters.inmemory_state_adapter import (
+            InMemoryStateAdapter,
+        )
+        from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 
         adapter = InMemoryStateAdapter()
         uow = InMemoryUnitOfWork()

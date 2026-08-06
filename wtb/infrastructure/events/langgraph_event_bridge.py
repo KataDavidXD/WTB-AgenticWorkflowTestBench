@@ -21,32 +21,29 @@ Usage:
     result = await bridge.bridge_execution(graph, initial_state, config, execution_id)
 """
 
-from typing import Optional, Dict, Any, List, Callable, AsyncIterator
-from datetime import datetime, timezone
-from dataclasses import dataclass, field
 import logging
-import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
 
-from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
-from wtb.infrastructure.events.stream_mode_config import StreamModeConfig
 from wtb.domain.events import (
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
+    ExecutionStartedEvent,
     NodeCompletedEvent,
     NodeFailedEvent,
+    NodeStartedEvent,
 )
 from wtb.domain.events.checkpoint_events import (
-    CheckpointCreated,
     create_checkpoint_created_event,
 )
 from wtb.domain.events.langgraph_events import (
     LangGraphAuditEvent,
-    LangGraphAuditEventType,
     create_audit_event_from_langgraph,
     create_checkpoint_audit_event,
 )
+from wtb.infrastructure.events.stream_mode_config import StreamModeConfig
+from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +56,13 @@ class NodeExecutionTracker:
     Maintains start times for active nodes to compute duration
     when node completes.
     """
-    _active_nodes: Dict[str, datetime] = field(default_factory=dict)
+    _active_nodes: dict[str, datetime] = field(default_factory=dict)
     
     def node_started(self, run_id: str) -> None:
         """Record node start time."""
         self._active_nodes[run_id] = datetime.now(timezone.utc)
     
-    def node_completed(self, run_id: str) -> Optional[int]:
+    def node_completed(self, run_id: str) -> int | None:
         """
         Record node completion and return duration.
         
@@ -112,7 +109,7 @@ class LangGraphEventBridge:
     def __init__(
         self,
         event_bus: WTBEventBus,
-        stream_config: Optional[StreamModeConfig] = None,
+        stream_config: StreamModeConfig | None = None,
         emit_audit_events: bool = True,
     ):
         """
@@ -150,11 +147,11 @@ class LangGraphEventBridge:
     async def bridge_execution(
         self,
         graph: Any,  # CompiledStateGraph
-        initial_state: Dict[str, Any],
-        config: Dict[str, Any],
+        initial_state: dict[str, Any],
+        config: dict[str, Any],
         execution_id: str,
         workflow_id: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute graph while bridging events to WTB EventBus.
         
@@ -257,11 +254,11 @@ class LangGraphEventBridge:
     def bridge_execution_sync(
         self,
         graph: Any,  # CompiledStateGraph
-        initial_state: Dict[str, Any],
-        config: Dict[str, Any],
+        initial_state: dict[str, Any],
+        config: dict[str, Any],
         execution_id: str,
         workflow_id: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute graph synchronously with event bridging.
         
@@ -348,7 +345,7 @@ class LangGraphEventBridge:
     def bridge_checkpoint_events(
         self,
         graph: Any,  # CompiledStateGraph
-        config: Dict[str, Any],
+        config: dict[str, Any],
         execution_id: str,
     ) -> int:
         """
@@ -407,10 +404,10 @@ class LangGraphEventBridge:
     
     def _transform_event(
         self,
-        lg_event: Dict[str, Any],
+        lg_event: dict[str, Any],
         execution_id: str,
         thread_id: str,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """
         Transform LangGraph event to WTB domain event.
         
@@ -496,7 +493,7 @@ class LangGraphEventBridge:
         self,
         execution_id: str,
         workflow_id: str,
-        initial_state: Dict[str, Any],
+        initial_state: dict[str, Any],
     ) -> None:
         """Publish execution started event."""
         self._event_bus.publish(ExecutionStartedEvent(
@@ -510,7 +507,7 @@ class LangGraphEventBridge:
         self,
         execution_id: str,
         workflow_id: str,
-        final_state: Dict[str, Any],
+        final_state: dict[str, Any],
         duration_ms: int,
         nodes_executed: int,
     ) -> None:
@@ -546,7 +543,7 @@ class LangGraphEventBridge:
     # Statistics
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """
         Get bridge statistics.
         
@@ -571,8 +568,8 @@ class LangGraphEventBridge:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def create_event_bridge(
-    event_bus: Optional[WTBEventBus] = None,
-    stream_config: Optional[StreamModeConfig] = None,
+    event_bus: WTBEventBus | None = None,
+    stream_config: StreamModeConfig | None = None,
     emit_audit_events: bool = True,
 ) -> LangGraphEventBridge:
     """

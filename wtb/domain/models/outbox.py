@@ -10,11 +10,11 @@ Design Philosophy:
 - Guarantees eventual consistency across all three databases
 """
 
+import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
-import uuid
+from typing import Any
 
 
 class OutboxEventType(Enum):
@@ -110,24 +110,24 @@ class OutboxEvent:
         with duplicate idempotency keys within the deduplication window.
     """
     
-    id: Optional[int] = None
+    id: int | None = None
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     event_type: OutboxEventType = OutboxEventType.CHECKPOINT_CREATE
     aggregate_type: str = ""
     aggregate_id: str = ""
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     
     # Idempotency key for duplicate detection (ISSUE-OB-002)
-    idempotency_key: Optional[str] = None
+    idempotency_key: str | None = None
     
     status: OutboxStatus = OutboxStatus.PENDING
     retry_count: int = 0
     max_retries: int = 5
     
     created_at: datetime = field(default_factory=datetime.now)
-    processed_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None  # For event publishing use case
-    last_error: Optional[str] = None
+    processed_at: datetime | None = None
+    published_at: datetime | None = None  # For event publishing use case
+    last_error: str | None = None
     
     def can_retry(self) -> bool:
         """Check if the event can be retried."""
@@ -163,7 +163,7 @@ class OutboxEvent:
         self.retry_count = 0
         self.last_error = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "id": self.id,
@@ -182,7 +182,7 @@ class OutboxEvent:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OutboxEvent":
+    def from_dict(cls, data: dict[str, Any]) -> "OutboxEvent":
         """Create from dictionary."""
         return cls(
             id=data.get("id"),
@@ -205,9 +205,9 @@ class OutboxEvent:
         cls,
         event_type: OutboxEventType,
         aggregate_id: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         aggregate_type: str = "",
-        idempotency_key: Optional[str] = None,
+        idempotency_key: str | None = None,
     ) -> "OutboxEvent":
         """
         Generic factory method for creating outbox events.

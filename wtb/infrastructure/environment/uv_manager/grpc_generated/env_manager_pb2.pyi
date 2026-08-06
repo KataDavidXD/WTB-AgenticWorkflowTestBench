@@ -1,8 +1,11 @@
-from google.protobuf.internal import containers as _containers
+from collections.abc import Iterable as _Iterable
+from collections.abc import Mapping as _Mapping
+from typing import ClassVar as _ClassVar
+from typing import Union as _Union
+
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
-from collections.abc import Iterable as _Iterable, Mapping as _Mapping
-from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
+from google.protobuf.internal import containers as _containers
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
@@ -14,7 +17,7 @@ class GetEnvStatusRequest(_message.Message):
     workflow_id: str
     node_id: str
     version_id: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ...) -> None: ...
 
 class EnvStatusResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "status", "env_path", "has_pyproject", "has_uv_lock", "has_venv", "metadata_json")
@@ -36,7 +39,7 @@ class EnvStatusResponse(_message.Message):
     has_uv_lock: bool
     has_venv: bool
     metadata_json: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., status: _Optional[str] = ..., env_path: _Optional[str] = ..., has_pyproject: bool = ..., has_uv_lock: bool = ..., has_venv: bool = ..., metadata_json: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., status: str | None = ..., env_path: str | None = ..., has_pyproject: bool = ..., has_uv_lock: bool = ..., has_venv: bool = ..., metadata_json: str | None = ...) -> None: ...
 
 class CreateEnvRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "python_version", "packages", "requirements_file_content", "requirements_file_name")
@@ -54,7 +57,7 @@ class CreateEnvRequest(_message.Message):
     packages: _containers.RepeatedScalarFieldContainer[str]
     requirements_file_content: bytes
     requirements_file_name: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., python_version: _Optional[str] = ..., packages: _Optional[_Iterable[str]] = ..., requirements_file_content: _Optional[bytes] = ..., requirements_file_name: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., python_version: str | None = ..., packages: _Iterable[str] | None = ..., requirements_file_content: bytes | None = ..., requirements_file_name: str | None = ...) -> None: ...
 
 class CreateEnvResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "env_path", "python_version", "status", "pyproject_toml")
@@ -72,7 +75,7 @@ class CreateEnvResponse(_message.Message):
     python_version: str
     status: str
     pyproject_toml: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., env_path: _Optional[str] = ..., python_version: _Optional[str] = ..., status: _Optional[str] = ..., pyproject_toml: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., env_path: str | None = ..., python_version: str | None = ..., status: str | None = ..., pyproject_toml: str | None = ...) -> None: ...
 
 class DeleteEnvRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id")
@@ -82,7 +85,7 @@ class DeleteEnvRequest(_message.Message):
     workflow_id: str
     node_id: str
     version_id: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ...) -> None: ...
 
 class DeleteEnvResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "status")
@@ -94,7 +97,7 @@ class DeleteEnvResponse(_message.Message):
     node_id: str
     version_id: str
     status: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., status: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., status: str | None = ...) -> None: ...
 
 class DepsRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "packages", "requirements_file_content", "requirements_file_name")
@@ -110,7 +113,7 @@ class DepsRequest(_message.Message):
     packages: _containers.RepeatedScalarFieldContainer[str]
     requirements_file_content: bytes
     requirements_file_name: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., packages: _Optional[_Iterable[str]] = ..., requirements_file_content: _Optional[bytes] = ..., requirements_file_name: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., packages: _Iterable[str] | None = ..., requirements_file_content: bytes | None = ..., requirements_file_name: str | None = ...) -> None: ...
 
 class DepsOperationResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "status", "stdout", "stderr", "exit_code")
@@ -128,7 +131,7 @@ class DepsOperationResponse(_message.Message):
     stdout: str
     stderr: str
     exit_code: int
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., status: _Optional[str] = ..., stdout: _Optional[str] = ..., stderr: _Optional[str] = ..., exit_code: _Optional[int] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., status: str | None = ..., stdout: str | None = ..., stderr: str | None = ..., exit_code: int | None = ...) -> None: ...
 
 class ListDepsRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id")
@@ -138,7 +141,7 @@ class ListDepsRequest(_message.Message):
     workflow_id: str
     node_id: str
     version_id: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ...) -> None: ...
 
 class ListDepsResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "dependencies", "locked_versions")
@@ -148,7 +151,7 @@ class ListDepsResponse(_message.Message):
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
         value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        def __init__(self, key: str | None = ..., value: str | None = ...) -> None: ...
     WORKFLOW_ID_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     VERSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -159,7 +162,7 @@ class ListDepsResponse(_message.Message):
     version_id: str
     dependencies: _containers.RepeatedScalarFieldContainer[str]
     locked_versions: _containers.ScalarMap[str, str]
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., dependencies: _Optional[_Iterable[str]] = ..., locked_versions: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., dependencies: _Iterable[str] | None = ..., locked_versions: _Mapping[str, str] | None = ...) -> None: ...
 
 class SyncEnvRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id")
@@ -169,7 +172,7 @@ class SyncEnvRequest(_message.Message):
     workflow_id: str
     node_id: str
     version_id: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ...) -> None: ...
 
 class SyncEnvResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "status", "stdout", "stderr", "exit_code")
@@ -187,7 +190,7 @@ class SyncEnvResponse(_message.Message):
     stdout: str
     stderr: str
     exit_code: int
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., status: _Optional[str] = ..., stdout: _Optional[str] = ..., stderr: _Optional[str] = ..., exit_code: _Optional[int] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., status: str | None = ..., stdout: str | None = ..., stderr: str | None = ..., exit_code: int | None = ...) -> None: ...
 
 class RunCodeRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "code", "timeout")
@@ -201,7 +204,7 @@ class RunCodeRequest(_message.Message):
     version_id: str
     code: str
     timeout: int
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., code: _Optional[str] = ..., timeout: _Optional[int] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., code: str | None = ..., timeout: int | None = ...) -> None: ...
 
 class RunCodeResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "stdout", "stderr", "exit_code")
@@ -217,7 +220,7 @@ class RunCodeResponse(_message.Message):
     stdout: str
     stderr: str
     exit_code: int
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., stdout: _Optional[str] = ..., stderr: _Optional[str] = ..., exit_code: _Optional[int] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., stdout: str | None = ..., stderr: str | None = ..., exit_code: int | None = ...) -> None: ...
 
 class ExportEnvRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id")
@@ -227,7 +230,7 @@ class ExportEnvRequest(_message.Message):
     workflow_id: str
     node_id: str
     version_id: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ...) -> None: ...
 
 class ExportEnvResponse(_message.Message):
     __slots__ = ("workflow_id", "node_id", "version_id", "pyproject_toml", "uv_lock")
@@ -241,13 +244,13 @@ class ExportEnvResponse(_message.Message):
     version_id: str
     pyproject_toml: str
     uv_lock: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., pyproject_toml: _Optional[str] = ..., uv_lock: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., pyproject_toml: str | None = ..., uv_lock: str | None = ...) -> None: ...
 
 class CleanupRequest(_message.Message):
     __slots__ = ("idle_hours",)
     IDLE_HOURS_FIELD_NUMBER: _ClassVar[int]
     idle_hours: int
-    def __init__(self, idle_hours: _Optional[int] = ...) -> None: ...
+    def __init__(self, idle_hours: int | None = ...) -> None: ...
 
 class CleanupResponse(_message.Message):
     __slots__ = ("deleted", "checked_at_unix")
@@ -255,7 +258,7 @@ class CleanupResponse(_message.Message):
     CHECKED_AT_UNIX_FIELD_NUMBER: _ClassVar[int]
     deleted: _containers.RepeatedScalarFieldContainer[str]
     checked_at_unix: int
-    def __init__(self, deleted: _Optional[_Iterable[str]] = ..., checked_at_unix: _Optional[int] = ...) -> None: ...
+    def __init__(self, deleted: _Iterable[str] | None = ..., checked_at_unix: int | None = ...) -> None: ...
 
 class GetOperationsRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id", "status", "limit", "offset")
@@ -269,7 +272,7 @@ class GetOperationsRequest(_message.Message):
     status: str
     limit: int
     offset: int
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., status: _Optional[str] = ..., limit: _Optional[int] = ..., offset: _Optional[int] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ..., status: str | None = ..., limit: int | None = ..., offset: int | None = ...) -> None: ...
 
 class OperationRecord(_message.Message):
     __slots__ = ("id", "workflow_id", "node_id", "version_id", "operation", "status", "started_at_unix", "finished_at_unix", "duration_ms", "stdout", "stderr", "exit_code", "error", "metadata_json")
@@ -301,7 +304,7 @@ class OperationRecord(_message.Message):
     exit_code: int
     error: str
     metadata_json: str
-    def __init__(self, id: _Optional[int] = ..., workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ..., version_id: _Optional[str] = ..., operation: _Optional[str] = ..., status: _Optional[str] = ..., started_at_unix: _Optional[int] = ..., finished_at_unix: _Optional[int] = ..., duration_ms: _Optional[int] = ..., stdout: _Optional[str] = ..., stderr: _Optional[str] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., metadata_json: _Optional[str] = ...) -> None: ...
+    def __init__(self, id: int | None = ..., workflow_id: str | None = ..., node_id: str | None = ..., version_id: str | None = ..., operation: str | None = ..., status: str | None = ..., started_at_unix: int | None = ..., finished_at_unix: int | None = ..., duration_ms: int | None = ..., stdout: str | None = ..., stderr: str | None = ..., exit_code: int | None = ..., error: str | None = ..., metadata_json: str | None = ...) -> None: ...
 
 class OperationListResponse(_message.Message):
     __slots__ = ("total", "limit", "offset", "items")
@@ -313,7 +316,7 @@ class OperationListResponse(_message.Message):
     limit: int
     offset: int
     items: _containers.RepeatedCompositeFieldContainer[OperationRecord]
-    def __init__(self, total: _Optional[int] = ..., limit: _Optional[int] = ..., offset: _Optional[int] = ..., items: _Optional[_Iterable[_Union[OperationRecord, _Mapping]]] = ...) -> None: ...
+    def __init__(self, total: int | None = ..., limit: int | None = ..., offset: int | None = ..., items: _Iterable[_Union[OperationRecord, _Mapping]] | None = ...) -> None: ...
 
 class DeleteOperationsRequest(_message.Message):
     __slots__ = ("workflow_id", "node_id")
@@ -321,7 +324,7 @@ class DeleteOperationsRequest(_message.Message):
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     workflow_id: str
     node_id: str
-    def __init__(self, workflow_id: _Optional[str] = ..., node_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., node_id: str | None = ...) -> None: ...
 
 class DeleteOperationsResponse(_message.Message):
     __slots__ = ("workflow_id", "deleted_count", "node_id", "deleted_node_ids")
@@ -333,4 +336,4 @@ class DeleteOperationsResponse(_message.Message):
     deleted_count: int
     node_id: str
     deleted_node_ids: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, workflow_id: _Optional[str] = ..., deleted_count: _Optional[int] = ..., node_id: _Optional[str] = ..., deleted_node_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, workflow_id: str | None = ..., deleted_count: int | None = ..., node_id: str | None = ..., deleted_node_ids: _Iterable[str] | None = ...) -> None: ...

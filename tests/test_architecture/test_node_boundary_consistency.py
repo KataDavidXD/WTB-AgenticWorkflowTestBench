@@ -10,10 +10,11 @@ Critical Issues Tested:
 3. Repository mapping correctness
 """
 
-import pytest
 from dataclasses import fields
 from datetime import datetime
-from typing import get_type_hints, Optional
+from typing import Optional, get_type_hints
+
+import pytest
 
 
 class TestNodeBoundaryDomainModel:
@@ -151,8 +152,9 @@ class TestNodeBoundaryORMAlignment:
     
     def test_orm_checkpoint_columns_are_string_type(self):
         """Verify checkpoint columns are String type (for UUIDs)."""
-        from wtb.infrastructure.database.models import NodeBoundaryORM
         from sqlalchemy import String
+
+        from wtb.infrastructure.database.models import NodeBoundaryORM
         
         entry_col = NodeBoundaryORM.__table__.c.entry_checkpoint_id
         exit_col = NodeBoundaryORM.__table__.c.exit_checkpoint_id
@@ -194,8 +196,8 @@ class TestNodeBoundaryRepositoryMapping:
     
     def test_repository_returns_correct_checkpoint_types(self):
         """Verify repository returns string checkpoint IDs, not CheckpointId objects."""
-        from wtb.domain.models.node_boundary import NodeBoundary
         from wtb.domain.models.checkpoint import CheckpointId
+        from wtb.domain.models.node_boundary import NodeBoundary
         
         # Create a boundary directly
         boundary = NodeBoundary(
@@ -216,8 +218,8 @@ class TestNodeBoundaryRepositoryMapping:
     
     def test_get_checkpoint_id_value_returns_value_object(self):
         """Test helper methods return CheckpointId value objects when needed."""
-        from wtb.domain.models.node_boundary import NodeBoundary
         from wtb.domain.models.checkpoint import CheckpointId
+        from wtb.domain.models.node_boundary import NodeBoundary
         
         boundary = NodeBoundary(
             id=1,

@@ -14,33 +14,22 @@ Design Reference: docs/issues/WORKSPACE_ISOLATION_DESIGN.md (Sections 4, 11)
 
 import json
 import os
-import shutil
-import sys
-import tempfile
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
-import uuid
 
 import pytest
 
+from wtb.domain.events.workspace_events import WorkspaceCreatedEvent
 from wtb.domain.models.workspace import (
     Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
-    compute_venv_spec_hash,
 )
-from wtb.domain.events.workspace_events import WorkspaceCreatedEvent
 from wtb.infrastructure.workspace.manager import (
     WorkspaceManager,
-    create_file_link,
 )
-from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test: Concurrent Workspace Creation

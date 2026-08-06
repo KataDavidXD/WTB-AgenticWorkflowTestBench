@@ -5,7 +5,8 @@ Provides domain-specific assertions that give better error context
 than generic pytest assertions.
 """
 
-from typing import Any, Optional, List, Set
+from typing import Any
+
 from wtb.domain.models import ExecutionStatus
 
 
@@ -16,8 +17,8 @@ class AssertionError(Exception):
 
 def assert_execution_completed(
     execution: Any,
-    expected_path: Optional[List[str]] = None,
-    expected_variables: Optional[dict] = None,
+    expected_path: list[str] | None = None,
+    expected_variables: dict | None = None,
 ) -> None:
     """
     Assert that execution completed successfully with optional state checks.
@@ -62,8 +63,8 @@ def assert_execution_completed(
 
 def assert_execution_failed(
     execution: Any,
-    expected_error_contains: Optional[str] = None,
-    expected_error_node: Optional[str] = None,
+    expected_error_contains: str | None = None,
+    expected_error_node: str | None = None,
 ) -> None:
     """
     Assert that execution failed with optional error checks.
@@ -101,7 +102,7 @@ def assert_execution_failed(
 
 def assert_execution_paused(
     execution: Any,
-    expected_node: Optional[str] = None,
+    expected_node: str | None = None,
     expected_breakpoint_hit: bool = False,
 ) -> None:
     """
@@ -139,9 +140,9 @@ def assert_execution_paused(
 
 
 def assert_checkpoints_exist(
-    checkpoints: List[Any],
+    checkpoints: list[Any],
     min_count: int = 1,
-    expected_nodes: Optional[Set[str]] = None,
+    expected_nodes: set[str] | None = None,
 ) -> None:
     """
     Assert checkpoints exist with optional content checks.

@@ -4,10 +4,10 @@ Evaluation Result Domain Model.
 Stores evaluation results from running evaluators on executions.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
-from datetime import datetime
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -17,10 +17,10 @@ class MetricValue:
     """
     name: str
     value: float
-    unit: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    unit: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "value": self.value,
@@ -29,7 +29,7 @@ class MetricValue:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MetricValue":
+    def from_dict(cls, data: dict[str, Any]) -> "MetricValue":
         return cls(
             name=data.get("name", ""),
             value=data.get("value", 0.0),
@@ -51,7 +51,7 @@ class EvaluationResult:
     
     # References
     execution_id: str = ""
-    batch_test_id: Optional[str] = None  # If part of a batch test
+    batch_test_id: str | None = None  # If part of a batch test
     
     # Evaluator Info
     evaluator_name: str = ""
@@ -60,24 +60,24 @@ class EvaluationResult:
     # Results
     overall_score: float = 0.0  # Normalized 0.0 to 1.0
     passed: bool = True
-    metrics: List[MetricValue] = field(default_factory=list)
+    metrics: list[MetricValue] = field(default_factory=list)
     
     # Details
-    details: Optional[str] = None
-    raw_output: Optional[Dict[str, Any]] = None
+    details: str | None = None
+    raw_output: dict[str, Any] | None = None
     
     # Timing
     evaluated_at: datetime = field(default_factory=datetime.now)
     evaluation_duration_ms: int = 0
     
     # Metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
-    def add_metric(self, name: str, value: float, unit: Optional[str] = None):
+    def add_metric(self, name: str, value: float, unit: str | None = None):
         """Add a metric to the result."""
         self.metrics.append(MetricValue(name=name, value=value, unit=unit))
     
-    def get_metric(self, name: str) -> Optional[MetricValue]:
+    def get_metric(self, name: str) -> MetricValue | None:
         """Get a metric by name."""
         for m in self.metrics:
             if m.name == name:
@@ -89,7 +89,7 @@ class EvaluationResult:
         metric = self.get_metric(name)
         return metric.value if metric else default
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "id": self.id,
@@ -108,7 +108,7 @@ class EvaluationResult:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EvaluationResult":
+    def from_dict(cls, data: dict[str, Any]) -> "EvaluationResult":
         """Deserialize from dictionary."""
         result = cls(
             id=data.get("id", str(uuid.uuid4())),
@@ -140,23 +140,23 @@ class ComparisonResult:
     """
     Value Object - Result of comparing multiple executions.
     """
-    execution_ids: List[str] = field(default_factory=list)
-    evaluator_names: List[str] = field(default_factory=list)
+    execution_ids: list[str] = field(default_factory=list)
+    evaluator_names: list[str] = field(default_factory=list)
     
     # Rankings per evaluator
-    rankings: Dict[str, List[str]] = field(default_factory=dict)  # evaluator -> [exec_ids ranked]
+    rankings: dict[str, list[str]] = field(default_factory=dict)  # evaluator -> [exec_ids ranked]
     
     # Scores matrix: execution_id -> evaluator -> score
-    scores: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    scores: dict[str, dict[str, float]] = field(default_factory=dict)
     
     # Overall winner
-    winner_execution_id: Optional[str] = None
+    winner_execution_id: str | None = None
     winner_overall_score: float = 0.0
     
     # Metadata
     compared_at: datetime = field(default_factory=datetime.now)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "execution_ids": self.execution_ids,
             "evaluator_names": self.evaluator_names,

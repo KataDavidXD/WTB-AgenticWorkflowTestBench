@@ -10,9 +10,9 @@ Design Philosophy:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 
 class IntegrityIssueType(Enum):
@@ -65,18 +65,18 @@ class IntegrityIssue:
     # Location info
     source_table: str
     source_id: str
-    target_table: Optional[str] = None
-    target_id: Optional[str] = None
+    target_table: str | None = None
+    target_id: str | None = None
     
     # Details
     message: str = ""
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
     
     # Repair info
     suggested_action: RepairAction = RepairAction.MANUAL_REQUIRED
     auto_repairable: bool = False
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "issue_type": self.issue_type.value,
@@ -92,7 +92,7 @@ class IntegrityIssue:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IntegrityIssue":
+    def from_dict(cls, data: dict[str, Any]) -> "IntegrityIssue":
         """Create from dictionary."""
         return cls(
             issue_type=IntegrityIssueType(data["issue_type"]),
@@ -194,7 +194,7 @@ class IntegrityReport:
     info_count: int = 0
     
     # Issue list
-    issues: List[IntegrityIssue] = field(default_factory=list)
+    issues: list[IntegrityIssue] = field(default_factory=list)
     
     # Repair results
     repaired_count: int = 0
@@ -222,15 +222,15 @@ class IntegrityReport:
         """Count of issues that can be auto-repaired."""
         return sum(1 for i in self.issues if i.auto_repairable)
     
-    def get_issues_by_type(self, issue_type: IntegrityIssueType) -> List[IntegrityIssue]:
+    def get_issues_by_type(self, issue_type: IntegrityIssueType) -> list[IntegrityIssue]:
         """Get all issues of a specific type."""
         return [i for i in self.issues if i.issue_type == issue_type]
     
-    def get_issues_by_severity(self, severity: IntegritySeverity) -> List[IntegrityIssue]:
+    def get_issues_by_severity(self, severity: IntegritySeverity) -> list[IntegrityIssue]:
         """Get all issues of a specific severity."""
         return [i for i in self.issues if i.severity == severity]
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "checked_at": self.checked_at.isoformat(),

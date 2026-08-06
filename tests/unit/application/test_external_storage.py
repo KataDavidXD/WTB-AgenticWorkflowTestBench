@@ -2,9 +2,9 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
-from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+from wtb.application.services.batch_execution_coordinator import (
+    BatchExecutionCoordinator,
+)
 from wtb.application.services.external_storage import (
     resolve_actor_local_storage_paths,
     resolve_execution_storage_paths,

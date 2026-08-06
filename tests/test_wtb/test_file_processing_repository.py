@@ -11,25 +11,22 @@ Test Categories:
 5. ACID compliance tests
 """
 
-import pytest
-import tempfile
 from datetime import datetime
-from pathlib import Path
+
+import pytest
 
 from wtb.domain.models.file_processing import (
     BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
     CheckpointFileLink,
-    CommitStatus,
+    CommitId,
+    FileCommit,
+    FileMemento,
 )
 from wtb.infrastructure.database.repositories.file_processing_repository import (
     InMemoryBlobRepository,
-    InMemoryFileCommitRepository,
     InMemoryCheckpointFileLinkRepository,
+    InMemoryFileCommitRepository,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

@@ -13,104 +13,106 @@ DEPRECATED Interfaces (Legacy, Backward Compat Only - 2026-01-27):
   See _deprecated.py for migration guide.
 """
 
-from .execution_controller import IExecutionController
-from .node_replacer import INodeReplacer, IVariantRegistry, INodeSwapper
+# API Service Interfaces (v2.0 - 2026-01-28)
+from .api_services import (
+    AuditEventDTO,
+    AuditSummaryDTO,
+    BatchTestDTO,
+    BatchTestProgressDTO,
+    CheckpointDTO,
+    ControlResultDTO,
+    ExecutionDTO,
+    IAuditAPIService,
+    IBatchTestAPIService,
+    IExecutionAPIService,
+    IWorkflowAPIService,
+    PaginatedResultDTO,
+    RollbackResultDTO,
+    WorkflowDTO,
+)
+
+# Batch Coordinator (v1.8 - 2026-02-05)
+from .batch_coordinator import (
+    BatchOperationRequest,
+    BatchOperationResult,
+    IBatchExecutionCoordinator,
+    IExecutionControllerFactory,
+    OperationType,
+)
+from .batch_runner import (
+    BatchRunnerConfigError,
+    BatchRunnerError,
+    BatchRunnerExecutionError,
+    BatchRunnerProgress,
+    BatchRunnerStatus,
+    IBatchTestRunner,
+    IEnvironmentProvider,
+)
 
 # PRIMARY: Checkpoint persistence (LangGraph-native)
 from .checkpoint_store import (
     ICheckpointStore,
     ICheckpointStoreFactory,
 )
-
-# DEPRECATED (2026-01-27): AgentGit-centric state adapter
-# These are kept for backward compatibility only.
-# New code should use ICheckpointStore instead.
-from .state_adapter import (
-    IStateAdapter,  # DEPRECATED - use ICheckpointStore
-    CheckpointTrigger,  # Still valid - enum for checkpoint triggers
-    CheckpointInfo,  # Still valid - lightweight checkpoint info
-    NodeBoundaryInfo,  # Still valid - node boundary tracking
+from .evaluator import (
+    EvaluationMetric,
+    EvaluationScore,
+    IEvaluationEngine,
+    IEvaluator,
+    IEvaluatorRegistry,
 )
-from .repositories import (
-    IRepository,
-    IReadRepository,
-    IWriteRepository,
-    IWorkflowRepository,
-    IExecutionRepository,
-    INodeVariantRepository,
-    IBatchTestRepository,
-    IEvaluationResultRepository,
-    IAuditLogRepository,
-    INodeBoundaryRepository,
-    # ICheckpointFileRepository REMOVED (2026-01-27) - Use ICheckpointFileLinkRepository
-    IOutboxRepository,
+from .execution_controller import IExecutionController
+from .file_processing_repository import (
+    IBlobRepository,
+    ICheckpointFileLinkRepository,
+    IFileCommitRepository,
+    IFileProcessingUnitOfWork,
 )
-from .unit_of_work import IUnitOfWork
+from .file_tracking import (
+    CheckpointLinkError,
+    CommitNotFoundError,
+    FileRestoreResult,
+    FileTrackingError,
+    FileTrackingLink,
+    FileTrackingResult,
+    IFileTrackingService,
+    IFileTrackingServiceFactory,
+    TrackedFile,
+)
+from .file_tracking import (
+    FileNotFoundError as FileTrackingFileNotFoundError,
+)
 from .node_executor import (
     INodeExecutor,
     INodeExecutorRegistry,
     NodeExecutionResult,
 )
-from .evaluator import (
-    IEvaluator,
-    IEvaluatorRegistry,
-    IEvaluationEngine,
-    EvaluationMetric,
-    EvaluationScore,
-)
-from .batch_runner import (
-    IBatchTestRunner,
-    IEnvironmentProvider,
-    BatchRunnerStatus,
-    BatchRunnerProgress,
-    BatchRunnerError,
-    BatchRunnerConfigError,
-    BatchRunnerExecutionError,
-)
-# Batch Coordinator (v1.8 - 2026-02-05)
-from .batch_coordinator import (
-    IBatchExecutionCoordinator,
-    IExecutionControllerFactory,
-    OperationType,
-    BatchOperationRequest,
-    BatchOperationResult,
-)
-from .file_tracking import (
-    IFileTrackingService,
-    IFileTrackingServiceFactory,
-    TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
-    FileTrackingLink,
-    FileTrackingError,
-    FileNotFoundError as FileTrackingFileNotFoundError,
-    CommitNotFoundError,
-    CheckpointLinkError,
-)
-from .file_processing_repository import (
-    IBlobRepository,
-    IFileCommitRepository,
-    ICheckpointFileLinkRepository,
-    IFileProcessingUnitOfWork,
+from .node_replacer import INodeReplacer, INodeSwapper, IVariantRegistry
+from .repositories import (
+    IAuditLogRepository,
+    IBatchTestRepository,
+    IEvaluationResultRepository,
+    IExecutionRepository,
+    INodeBoundaryRepository,
+    INodeVariantRepository,
+    # ICheckpointFileRepository REMOVED (2026-01-27) - Use ICheckpointFileLinkRepository
+    IOutboxRepository,
+    IReadRepository,
+    IRepository,
+    IWorkflowRepository,
+    IWriteRepository,
 )
 
-# API Service Interfaces (v2.0 - 2026-01-28)
-from .api_services import (
-    IExecutionAPIService,
-    IAuditAPIService,
-    IBatchTestAPIService,
-    IWorkflowAPIService,
-    ExecutionDTO,
-    ControlResultDTO,
-    RollbackResultDTO,
-    CheckpointDTO,
-    PaginatedResultDTO,
-    AuditEventDTO,
-    AuditSummaryDTO,
-    BatchTestDTO,
-    BatchTestProgressDTO,
-    WorkflowDTO,
+# DEPRECATED (2026-01-27): AgentGit-centric state adapter
+# These are kept for backward compatibility only.
+# New code should use ICheckpointStore instead.
+from .state_adapter import (
+    CheckpointInfo,  # Still valid - lightweight checkpoint info
+    CheckpointTrigger,  # Still valid - enum for checkpoint triggers
+    IStateAdapter,  # DEPRECATED - use ICheckpointStore
+    NodeBoundaryInfo,  # Still valid - node boundary tracking
 )
+from .unit_of_work import IUnitOfWork
 
 __all__ = [
     # ═══════════════════════════════════════════════════════════════════

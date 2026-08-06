@@ -16,36 +16,23 @@ ACID Compliance:
 Run with: pytest tests/test_langgraph/integration/test_file_processing_integration.py -v
 """
 
-import pytest
-from typing import Dict, Any, List
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
-import tempfile
-
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
-from wtb.domain.events.file_processing_events import (
-    FileCommitCreatedEvent,
-    FileRestoredEvent,
-    CheckpointFileLinkCreatedEvent,
-)
-from wtb.infrastructure.events import WTBEventBus
 
 from tests.test_langgraph.helpers import (
     create_initial_file_tracking_state,
-    FileTrackingState,
 )
-
+from wtb.domain.events.file_processing_events import (
+    CheckpointFileLinkCreatedEvent,
+    FileCommitCreatedEvent,
+)
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    CommitStatus,
+    FileCommit,
+    FileMemento,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # File Processing Domain Model Tests

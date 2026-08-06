@@ -24,22 +24,23 @@ Architecture:
            └──► IAsyncFileTrackingService (file tracking)
 """
 
+import asyncio
+import logging
+import uuid
+from collections.abc import AsyncIterator, Callable
 from contextvars import ContextVar
-from typing import Optional, Dict, Any, List, AsyncIterator, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import asyncio
-import logging
 from threading import Lock
-import uuid
+from typing import TYPE_CHECKING, Any, Optional
 
+from wtb.domain.interfaces.async_file_tracking import IAsyncFileTrackingService
 from wtb.domain.interfaces.async_state_adapter import IAsyncStateAdapter
 from wtb.domain.interfaces.async_unit_of_work import IAsyncUnitOfWork
-from wtb.domain.interfaces.async_file_tracking import IAsyncFileTrackingService
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
-from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
 from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
+from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
 
 if TYPE_CHECKING:
     from langgraph.graph import StateGraph
@@ -78,10 +79,10 @@ class AsyncExecutionResult:
     """Result of async execution."""
     execution_id: str
     status: ExecutionStatus
-    final_state: Dict[str, Any]
-    checkpoint_id: Optional[str] = None
-    error_message: Optional[str] = None
-    duration_ms: Optional[int] = None
+    final_state: dict[str, Any]
+    checkpoint_id: str | None = None
+    error_message: str | None = None
+    duration_ms: int | None = None
     
     @property
     def is_success(self) -> bool:
@@ -92,8 +93,8 @@ class AsyncExecutionResult:
 class AsyncStreamEvent:
     """Event from async streaming execution."""
     event_type: str  # "update", "checkpoint", "error", "complete"
-    node_id: Optional[str]
-    state: Dict[str, Any]
+    node_id: str | None
+    state: dict[str, Any]
     timestamp: datetime = None
     
     def __post_init__(self):
@@ -138,7 +139,7 @@ class AsyncExecutionController:
         self,
         state_adapter: IAsyncStateAdapter,
         uow_factory: Callable[[], IAsyncUnitOfWork],
-        file_tracking_service: Optional[IAsyncFileTrackingService] = None,
+        file_tracking_service: IAsyncFileTrackingService | None = None,
     ):
         """
         Initialize async execution controller.
@@ -151,7 +152,7 @@ class AsyncExecutionController:
         self._state_adapter = state_adapter
         self._uow_factory = uow_factory
         self._file_tracking = file_tracking_service
-        self._current_execution_var: ContextVar[Optional[Execution]] = ContextVar(
+        self._current_execution_var: ContextVar[Execution | None] = ContextVar(
             "async_exec_current_execution", default=None
         )
         self._state_adapter_lock = _shared_state_adapter_lock(state_adapter)
@@ -186,7 +187,7 @@ class AsyncExecutionController:
         self,
         execution_id: str,
         graph: Optional["StateGraph"] = None,
-        track_output_files: Optional[List[str]] = None,
+        track_output_files: list[str] | None = None,
     ) -> AsyncExecutionResult:
         """Run with exclusive access to the adapter's mutable session and graph."""
         try:
@@ -211,7 +212,7 @@ class AsyncExecutionController:
         self, 
         execution_id: str, 
         graph: Optional["StateGraph"] = None,
-        track_output_files: Optional[List[str]] = None,
+        track_output_files: list[str] | None = None,
     ) -> AsyncExecutionResult:
         """
         Run workflow asynchronously.
@@ -400,9 +401,9 @@ class AsyncExecutionController:
 
     async def _aresolve_final_checkpoint_id(
         self,
-        current_state: Dict[str, Any],
-        final_state: Dict[str, Any],
-        current_node_id: Optional[str],
+        current_state: dict[str, Any],
+        final_state: dict[str, Any],
+        current_node_id: str | None,
     ) -> str:
         """Resolve or create the final graph checkpoint ID."""
         checkpoint_id = None
@@ -444,7 +445,7 @@ class AsyncExecutionController:
         uow: IAsyncUnitOfWork,
         *,
         checkpoint_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
     ):
         """Track files atomically in the execution's caller-owned UoW."""
@@ -612,8 +613,8 @@ class AsyncExecutionController:
     async def asave_checkpoint(
         self,
         node_id: str,
-        name: Optional[str] = None,
-        track_files: Optional[List[str]] = None,
+        name: str | None = None,
+        track_files: list[str] | None = None,
     ) -> str:
         """Save a checkpoint without sharing mutable adapter context."""
         async with self._state_adapter_lock:
@@ -626,8 +627,8 @@ class AsyncExecutionController:
     async def _asave_checkpoint_with_adapter(
         self,
         node_id: str,
-        name: Optional[str] = None,
-        track_files: Optional[List[str]] = None,
+        name: str | None = None,
+        track_files: list[str] | None = None,
     ) -> str:
         """
         Save checkpoint with optional file tracking.
@@ -676,7 +677,7 @@ class AsyncExecutionController:
     async def arollback_to_checkpoint(
         self,
         checkpoint_id: str,
-        restore_output_dir: Optional[Path] = None,
+        restore_output_dir: Path | None = None,
     ) -> ExecutionState:
         """Rollback without sharing mutable adapter context."""
         async with self._state_adapter_lock:
@@ -688,7 +689,7 @@ class AsyncExecutionController:
     async def _arollback_with_adapter(
         self,
         checkpoint_id: str,
-        restore_output_dir: Optional[Path] = None,
+        restore_output_dir: Path | None = None,
     ) -> ExecutionState:
         """Rollback state and, when requested, its linked files asynchronously.
 
@@ -764,7 +765,7 @@ class AsyncExecutionController:
     async def afork(
         self,
         new_execution_id: str,
-        from_checkpoint_id: Optional[str] = None,
+        from_checkpoint_id: str | None = None,
     ) -> "AsyncExecutionController":
         """Fork without sharing mutable adapter context."""
         async with self._state_adapter_lock:
@@ -776,7 +777,7 @@ class AsyncExecutionController:
     async def _afork_with_adapter(
         self,
         new_execution_id: str,
-        from_checkpoint_id: Optional[str] = None,
+        from_checkpoint_id: str | None = None,
     ) -> "AsyncExecutionController":
         """
         Create a fork of current execution asynchronously.
@@ -844,13 +845,13 @@ class AsyncExecutionController:
     # State Accessors
     # ═══════════════════════════════════════════════════════════════════════════
     
-    async def aget_current_state(self) -> Dict[str, Any]:
+    async def aget_current_state(self) -> dict[str, Any]:
         """Get current execution state."""
         async with self._state_adapter_lock:
             await self._activate_current_adapter_session()
             return await self._state_adapter.aget_current_state()
     
-    async def aget_checkpoints(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def aget_checkpoints(self, limit: int = 100) -> list[dict[str, Any]]:
         """Get checkpoint history for current execution."""
         async with self._state_adapter_lock:
             await self._activate_current_adapter_session()
@@ -859,7 +860,7 @@ class AsyncExecutionController:
             return []
     
     @property
-    def current_execution(self) -> Optional[Execution]:
+    def current_execution(self) -> Execution | None:
         """Get current execution record."""
         return self._current_execution_var.get()
 
@@ -875,7 +876,7 @@ class AsyncExecutionControllerFactory:
     def __init__(
         self,
         uow_factory: Callable[[], IAsyncUnitOfWork],
-        file_tracking_service: Optional[IAsyncFileTrackingService] = None,
+        file_tracking_service: IAsyncFileTrackingService | None = None,
     ):
         self._uow_factory = uow_factory
         self._file_tracking = file_tracking_service
@@ -902,7 +903,7 @@ class AsyncExecutionControllerFactory:
     async def acreate_with_langgraph(
         self,
         checkpointer_type: str = "memory",
-        db_path: Optional[str] = None,
+        db_path: str | None = None,
     ) -> AsyncExecutionController:
         """
         Create controller with LangGraph async state adapter.
@@ -916,8 +917,8 @@ class AsyncExecutionControllerFactory:
         """
         from wtb.infrastructure.adapters.async_langgraph_state_adapter import (
             AsyncLangGraphStateAdapter,
-            LangGraphConfig,
             CheckpointerType,
+            LangGraphConfig,
         )
 
         try:

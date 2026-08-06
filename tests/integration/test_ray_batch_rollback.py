@@ -18,12 +18,11 @@ Prerequisites:
 Note: These tests use in-memory databases where possible for isolation.
 """
 
-import pytest
-import tempfile
 import os
-from pathlib import Path
-from typing import Dict, Any, Optional
+import tempfile
 import uuid
+
+import pytest
 
 # Check if Ray is available
 try:
@@ -39,10 +38,9 @@ from wtb.domain.models.batch_test import (
 )
 from wtb.domain.models.workflow import (
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-
 
 # Skip all tests in this module if Ray is not available
 pytestmark = pytest.mark.skipif(
@@ -370,12 +368,12 @@ class TestCoordinatorBehavior:
     def test_coordinator_rollback_emits_event(self, temp_data_dir):
         """Coordinator rollback should emit outbox event."""
         from unittest.mock import MagicMock
+
         from wtb.application.services.batch_execution_coordinator import (
             BatchExecutionCoordinator,
-            DefaultExecutionControllerFactory,
         )
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
         from wtb.domain.models.outbox import OutboxEventType
+        from wtb.domain.models.workflow import Execution, ExecutionStatus
         
         # Create mock dependencies
         mock_uow = MagicMock()
@@ -417,11 +415,12 @@ class TestCoordinatorBehavior:
     def test_coordinator_fork_emits_event(self, temp_data_dir):
         """Coordinator fork should emit EXECUTION_FORKED event."""
         from unittest.mock import MagicMock
+
         from wtb.application.services.batch_execution_coordinator import (
             BatchExecutionCoordinator,
         )
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
         from wtb.domain.models.outbox import OutboxEventType
+        from wtb.domain.models.workflow import Execution, ExecutionStatus
         
         # Create mock dependencies
         mock_uow = MagicMock()

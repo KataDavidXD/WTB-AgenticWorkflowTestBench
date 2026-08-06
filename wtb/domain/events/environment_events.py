@@ -13,8 +13,6 @@ SOLID Compliance:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 
 from wtb.domain.events.execution_events import WTBEvent
 
@@ -24,7 +22,7 @@ class EnvironmentEvent(WTBEvent):
     """Base class for environment-related events."""
     workflow_id: str = ""
     node_id: str = ""
-    version_id: Optional[str] = None
+    version_id: str | None = None
     
     @property
     def env_id(self) -> str:
@@ -48,7 +46,7 @@ class EnvironmentCreationStartedEvent(EnvironmentEvent):
     Used for tracking long-running operations.
     """
     python_version: str = ""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     source: str = "api"  # "api", "grpc", "internal"
 
 
@@ -61,7 +59,7 @@ class EnvironmentCreatedEvent(EnvironmentEvent):
     """
     env_path: str = ""
     python_version: str = ""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
     source: str = "api"
 
@@ -75,7 +73,7 @@ class EnvironmentCreationFailedEvent(EnvironmentEvent):
     """
     error: str = ""
     python_version: str = ""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
     rollback_performed: bool = False
     source: str = "api"
@@ -95,7 +93,7 @@ class EnvironmentDeletedEvent(EnvironmentEvent):
 @dataclass
 class DependenciesAddedEvent(EnvironmentEvent):
     """Published when packages are added to environment."""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
     exit_code: int = 0
 
@@ -103,7 +101,7 @@ class DependenciesAddedEvent(EnvironmentEvent):
 @dataclass
 class DependenciesUpdatedEvent(EnvironmentEvent):
     """Published when packages are upgraded in environment."""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
     exit_code: int = 0
 
@@ -111,7 +109,7 @@ class DependenciesUpdatedEvent(EnvironmentEvent):
 @dataclass
 class DependenciesRemovedEvent(EnvironmentEvent):
     """Published when packages are removed from environment."""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     duration_ms: float = 0.0
     exit_code: int = 0
 
@@ -120,7 +118,7 @@ class DependenciesRemovedEvent(EnvironmentEvent):
 class DependencyOperationFailedEvent(EnvironmentEvent):
     """Published when a dependency operation fails."""
     operation: str = ""  # "add", "update", "remove"
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     error: str = ""
     duration_ms: float = 0.0
 
@@ -156,7 +154,7 @@ class EnvironmentCleanupStartedEvent(WTBEvent):
 @dataclass
 class EnvironmentCleanupCompletedEvent(WTBEvent):
     """Published when cleanup process completes."""
-    deleted_envs: List[str] = field(default_factory=list)
+    deleted_envs: list[str] = field(default_factory=list)
     deleted_count: int = 0
     duration_ms: float = 0.0
     idle_hours: int = 0

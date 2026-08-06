@@ -13,8 +13,10 @@ from wtb.domain.models import (
     Execution,
     ExecutionState,
     ExecutionStatus,
-    TestWorkflow as WorkflowDefinition,
     WorkflowNode,
+)
+from wtb.domain.models import (
+    TestWorkflow as WorkflowDefinition,
 )
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork

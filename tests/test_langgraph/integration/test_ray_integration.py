@@ -13,38 +13,28 @@ components, testing the integration patterns.
 Run with: pytest tests/test_langgraph/integration/test_ray_integration.py -v
 """
 
-import pytest
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch
 import threading
 import time
+from datetime import datetime
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    WTBAuditTrail,
-    AuditEventListener,
-    InMemoryMetricsCollector,
-)
-from wtb.domain.events import (
-    RayBatchTestStartedEvent,
-    RayBatchTestCompletedEvent,
-    RayBatchTestFailedEvent,
-    RayVariantExecutionStartedEvent,
-    RayVariantExecutionCompletedEvent,
-    RayVariantExecutionFailedEvent,
-    RayActorPoolCreatedEvent,
-    RayActorInitializedEvent,
-)
 
 from tests.test_langgraph.helpers import (
     create_initial_simple_state,
-    SimpleState,
 )
-
+from wtb.domain.events import (
+    RayActorInitializedEvent,
+    RayActorPoolCreatedEvent,
+    RayBatchTestCompletedEvent,
+    RayBatchTestFailedEvent,
+    RayBatchTestStartedEvent,
+    RayVariantExecutionCompletedEvent,
+    RayVariantExecutionFailedEvent,
+    RayVariantExecutionStartedEvent,
+)
+from wtb.infrastructure.events import (
+    AuditEventListener,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Ray Event Model Tests
@@ -156,7 +146,7 @@ class TestRayEventSerialization:
     
     def test_serialize_batch_test_event(self):
         """Test serializing batch test events."""
-        from wtb.infrastructure.events import serialize_ray_event, deserialize_ray_event
+        from wtb.infrastructure.events import serialize_ray_event
         
         event = RayBatchTestStartedEvent(
             batch_test_id="bt-1",
@@ -174,7 +164,7 @@ class TestRayEventSerialization:
     
     def test_deserialize_batch_test_event(self):
         """Test deserializing batch test events."""
-        from wtb.infrastructure.events import serialize_ray_event, deserialize_ray_event
+        from wtb.infrastructure.events import deserialize_ray_event, serialize_ray_event
         
         original = RayBatchTestStartedEvent(
             batch_test_id="bt-1",
@@ -194,7 +184,7 @@ class TestRayEventSerialization:
     
     def test_serialization_roundtrip(self):
         """Test serialization roundtrip for all Ray events."""
-        from wtb.infrastructure.events import serialize_ray_event, deserialize_ray_event
+        from wtb.infrastructure.events import deserialize_ray_event, serialize_ray_event
         
         events = [
             RayBatchTestStartedEvent(batch_test_id="bt-1", workflow_id="wf-1"),

@@ -10,10 +10,10 @@ Provides:
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
+from wtb.api.rest.dependencies import get_app_state
 from wtb.api.rest.models import HealthResponse
-from wtb.api.rest.dependencies import get_app_state, AppState
 
 router = APIRouter(prefix="/api/v1/health", tags=["Health"])
 

@@ -6,7 +6,8 @@ Thread-safe and process-safe implementations.
 """
 
 import time
-from typing import Callable, TypeVar, Optional, Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 

@@ -11,15 +11,14 @@ ExecutionController (ONE) + LangGraphStateAdapter = LangGraph-powered workflows
 DO NOT create separate LangGraphExecutionController - use adapter injection instead!
 """
 
+from typing import Any, TypedDict
+
 import pytest
-from typing import Dict, Any, TypedDict
-from datetime import datetime
-import asyncio
 
 # Check LangGraph availability
 try:
-    from langgraph.graph import StateGraph, END
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import END, StateGraph
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
@@ -33,15 +32,14 @@ pytestmark = pytest.mark.skipif(
 
 # Only import if LangGraph is available
 if LANGGRAPH_AVAILABLE:
-    from wtb.infrastructure.adapters.langgraph_state_adapter import (
-        LangGraphStateAdapter,
-        LangGraphConfig,
-        LangGraphStateAdapterFactory,
-    )
     from wtb.application.services.langgraph_node_replacer import (
-        LangGraphNodeReplacer,
         GraphStructure,
-        capture_graph_structure,
+        LangGraphNodeReplacer,
+    )
+    from wtb.infrastructure.adapters.langgraph_state_adapter import (
+        LangGraphConfig,
+        LangGraphStateAdapter,
+        LangGraphStateAdapterFactory,
     )
     from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 
@@ -84,19 +82,19 @@ def state_adapter(langgraph_config):
 @pytest.fixture
 def simple_graph():
     """Create a simple test graph."""
-    def start_node(state: TestState) -> Dict[str, Any]:
+    def start_node(state: TestState) -> dict[str, Any]:
         return {
             "messages": state.get("messages", []) + ["Started"],
             "counter": state.get("counter", 0) + 1,
         }
     
-    def process_node(state: TestState) -> Dict[str, Any]:
+    def process_node(state: TestState) -> dict[str, Any]:
         return {
             "messages": state.get("messages", []) + ["Processed"],
             "counter": state.get("counter", 0) + 1,
         }
     
-    def end_node(state: TestState) -> Dict[str, Any]:
+    def end_node(state: TestState) -> dict[str, Any]:
         return {
             "messages": state.get("messages", []) + ["Completed"],
             "result": "success",
@@ -122,19 +120,19 @@ def node_replacer():
     replacer = LangGraphNodeReplacer()
     
     # Register original implementations
-    def original_process(state: TestState) -> Dict[str, Any]:
+    def original_process(state: TestState) -> dict[str, Any]:
         return {
             "messages": state.get("messages", []) + ["Original Process"],
             "counter": state.get("counter", 0) + 1,
         }
     
-    def optimized_process(state: TestState) -> Dict[str, Any]:
+    def optimized_process(state: TestState) -> dict[str, Any]:
         return {
             "messages": state.get("messages", []) + ["Optimized Process"],
             "counter": state.get("counter", 0) + 2,  # Faster!
         }
     
-    def experimental_process(state: TestState) -> Dict[str, Any]:
+    def experimental_process(state: TestState) -> dict[str, Any]:
         return {
             "messages": state.get("messages", []) + ["Experimental Process"],
             "counter": state.get("counter", 0) + 3,  # Even faster!
@@ -339,7 +337,7 @@ class TestLangGraphNodeReplacerIntegration:
     def test_generate_and_execute_variants(self, node_replacer, state_adapter):
         """Test generating variants and executing them."""
         # Create base structure
-        def start_node(state: TestState) -> Dict[str, Any]:
+        def start_node(state: TestState) -> dict[str, Any]:
             return {"messages": ["started"]}
         
         structure = GraphStructure(state_schema=TestState)
@@ -363,10 +361,10 @@ class TestLangGraphNodeReplacerIntegration:
         from wtb.domain.models.workflow import ExecutionState
         
         # Create base structure
-        def start_node(state: TestState) -> Dict[str, Any]:
+        def start_node(state: TestState) -> dict[str, Any]:
             return {"messages": ["started"], "counter": 1}
         
-        def end_node(state: TestState) -> Dict[str, Any]:
+        def end_node(state: TestState) -> dict[str, Any]:
             return {"result": "done"}
         
         structure = GraphStructure(state_schema=TestState)
@@ -456,15 +454,15 @@ class TestArchitectureValidation:
     def test_no_langgraph_execution_controller_import(self):
         """Verify LangGraphExecutionController is NOT importable (deleted)."""
         with pytest.raises(ImportError):
-            from wtb.application.services.langgraph_execution_controller import (
-                LangGraphExecutionController
+            from wtb.application.services.langgraph_execution_controller import (  # noqa: F401
+                LangGraphExecutionController,
             )
     
     def test_no_langgraph_batch_runner_import(self):
         """Verify LangGraphBatchTestRunner is NOT importable (deleted)."""
         with pytest.raises(ImportError):
-            from wtb.application.services.langgraph_batch_runner import (
-                LangGraphBatchTestRunner
+            from wtb.application.services.langgraph_batch_runner import (  # noqa: F401
+                LangGraphBatchTestRunner,
             )
     
     def test_langgraph_node_replacer_exists(self):

@@ -4,25 +4,26 @@ SQLAlchemy Unit of Work Implementation.
 Manages transaction boundaries across multiple repositories.
 """
 
-from sqlalchemy.orm import sessionmaker, Session
-from typing import Optional
+
+from sqlalchemy.orm import Session, sessionmaker
 
 from wtb.domain.interfaces.unit_of_work import IUnitOfWork
+
 from .engine_cache import get_engine
 from .models import Base
 from .repositories import (
-    WorkflowRepository,
-    ExecutionRepository,
-    NodeVariantRepository,
     BatchTestRepository,
     EvaluationResultRepository,
+    ExecutionRepository,
     NodeBoundaryRepository,
-    SQLAlchemyCheckpointFileLinkRepository,
+    NodeVariantRepository,
     SQLAlchemyBlobRepository,
+    SQLAlchemyCheckpointFileLinkRepository,
     SQLAlchemyFileCommitRepository,
+    WorkflowRepository,
 )
-from .repositories.outbox_repository import SQLAlchemyOutboxRepository
 from .repositories.audit_repository import SQLAlchemyAuditLogRepository
+from .repositories.outbox_repository import SQLAlchemyOutboxRepository
 
 
 class SQLAlchemyUnitOfWork(IUnitOfWork):
@@ -50,7 +51,7 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
         self._blob_storage_path = blob_storage_path
         self._engine = get_engine(db_url, echo)
         self._session_factory = sessionmaker(bind=self._engine)
-        self._session: Optional[Session] = None
+        self._session: Session | None = None
         
         # Create tables if they don't exist
         Base.metadata.create_all(self._engine)
@@ -102,7 +103,7 @@ class SQLAlchemyUnitOfWork(IUnitOfWork):
             self._session.rollback()
     
     @property
-    def session(self) -> Optional[Session]:
+    def session(self) -> Session | None:
         """Get the current session (for advanced usage)."""
         return self._session
     

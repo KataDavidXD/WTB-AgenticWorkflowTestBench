@@ -5,15 +5,15 @@ Uses shared OutboxMapper for consistent domain ↔ ORM conversion.
 Updated: 2026-01-28 - Refactored to use OutboxMapper (ISSUE-FS-002)
 """
 
-from typing import List
-from sqlalchemy import select, update, delete
-from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from wtb.domain.interfaces.async_repositories import IAsyncOutboxRepository
-from wtb.domain.models.outbox import OutboxEvent, OutboxStatus, OutboxEventType
-from wtb.infrastructure.database.models import OutboxEventORM, json_serializer, json_deserializer
+from wtb.domain.models.outbox import OutboxEvent
 from wtb.infrastructure.database.mappers import OutboxMapper
+from wtb.infrastructure.database.models import OutboxEventORM
 
 
 class AsyncOutboxRepository(IAsyncOutboxRepository):
@@ -46,7 +46,7 @@ class AsyncOutboxRepository(IAsyncOutboxRepository):
         self,
         limit: int = 100,
         order_by: str = "created_at",
-    ) -> List[OutboxEvent]:
+    ) -> list[OutboxEvent]:
         """
         Get pending events in FIFO order.
         """

@@ -1,73 +1,74 @@
 """Domain Models - Entities, Value Objects, and Aggregates."""
 
-from .workflow import (
-    WorkflowNode,
-    WorkflowEdge,
-    TestWorkflow,
-    ExecutionState,
-    Execution,
-    ExecutionStatus,
-    NodeVariant,
-    InvalidStateTransition,
+from .audit import AuditEntry
+from .batch_test import (
+    BatchTest,
+    BatchTestResult,
+    BatchTestStatus,
+    VariantCombination,
 )
 
-from .node_boundary import NodeBoundary, NodeStatus
 # CheckpointFile REMOVED (2026-01-27) - Use CheckpointFileLink from file_processing
 from .checkpoint import (
     Checkpoint,
     CheckpointId,
-    ExecutionHistory,
     CheckpointNotFoundError,
-    InvalidRollbackTargetError,
+    ExecutionHistory,
     ExecutionHistoryError,
-)
-from .batch_test import (
-    BatchTest,
-    BatchTestStatus,
-    VariantCombination,
-    BatchTestResult,
+    InvalidRollbackTargetError,
 )
 from .evaluation import (
+    ComparisonResult,
     EvaluationResult,
     MetricValue,
-    ComparisonResult,
 )
+from .file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitAlreadyFinalized,
+    CommitId,
+    CommitStatus,
+    DuplicateFileError,
+    FileCommit,
+    FileMemento,
+    FileProcessingError,
+    InvalidBlobIdError,
+    InvalidCommitIdError,
+)
+from .integrity import (
+    IntegrityIssue,
+    IntegrityIssueType,
+    IntegrityReport,
+    IntegritySeverity,
+    RepairAction,
+)
+from .node_boundary import NodeBoundary, NodeStatus
 from .outbox import (
     OutboxEvent,
     OutboxEventType,
     OutboxStatus,
 )
-from .audit import AuditEntry
-from .integrity import (
-    IntegrityIssue,
-    IntegrityIssueType,
-    IntegritySeverity,
-    IntegrityReport,
-    RepairAction,
+from .workflow import (
+    Execution,
+    ExecutionState,
+    ExecutionStatus,
+    InvalidStateTransition,
+    NodeVariant,
+    TestWorkflow,
+    WorkflowEdge,
+    WorkflowNode,
 )
-from .file_processing import (
-    FileCommit,
-    FileMemento,
-    BlobId,
-    CommitId,
-    CheckpointFileLink,
-    CommitStatus,
-    FileProcessingError,
-    DuplicateFileError,
-    InvalidBlobIdError,
-    InvalidCommitIdError,
-    CommitAlreadyFinalized,
-)
+
 # Backward compatibility alias (2026-01-27)
 FileCheckpointLink = CheckpointFileLink
 from .workspace import (
-    Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
+    CleanupReport,
     LinkMethod,
     LinkResult,
     OrphanWorkspace,
-    CleanupReport,
+    Workspace,
+    WorkspaceConfig,
+    WorkspaceStrategy,
     compute_venv_spec_hash,
 )
 

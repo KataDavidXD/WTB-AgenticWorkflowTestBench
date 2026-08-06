@@ -12,15 +12,15 @@ ARCHITECTURE DECISION (2026-01-15):
 - A node is a COMPLETE PROJECT (e.g., RAG pipeline), not a code snippet
 """
 
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-from typing import Dict, Any
 
 from wtb.infrastructure.environment.providers import (
+    GrpcEnvironmentProvider,
     InProcessEnvironmentProvider,
     RayEnvironmentProvider,
     RayRuntimeEnvConfig,
-    GrpcEnvironmentProvider,
 )
 
 

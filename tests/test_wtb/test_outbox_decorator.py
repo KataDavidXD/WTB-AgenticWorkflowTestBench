@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from wtb.application.factories import WTBTestBenchFactory
 from wtb.application.services.outbox_controller_decorator import (
     OutboxExecutionControllerDecorator,
 )
-from wtb.application.factories import WTBTestBenchFactory
 from wtb.domain.models import Execution, ExecutionState, ExecutionStatus
 
 

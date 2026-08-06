@@ -12,27 +12,20 @@ Test Categories:
 6. Thread safety
 """
 
-import pytest
-import os
-import tempfile
 import threading
-import time
 from datetime import datetime
-from typing import List
 
+import pytest
+
+from wtb.config import FileTrackingConfig
 from wtb.domain.interfaces.file_tracking import (
+    CheckpointLinkError,
+    CommitNotFoundError,
+    FileTrackingResult,
     IFileTrackingService,
     TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
-    FileTrackingLink,  # Renamed from CheckpointFileLink (2026-01-16)
-    FileTrackingError,
-    CommitNotFoundError,
-    CheckpointLinkError,
 )
 from wtb.infrastructure.file_tracking import MockFileTrackingService
-from wtb.config import FileTrackingConfig
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -52,7 +45,7 @@ def real_files_service() -> MockFileTrackingService:
 
 
 @pytest.fixture
-def temp_files(tmp_path) -> List[str]:
+def temp_files(tmp_path) -> list[str]:
     """Create temporary test files."""
     files = []
     for name in ["data.csv", "model.pkl", "config.json"]:

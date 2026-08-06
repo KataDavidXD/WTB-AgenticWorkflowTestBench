@@ -1,8 +1,8 @@
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -23,9 +23,9 @@ class IAsyncFileTrackingService(ABC):
     @abstractmethod
     async def atrack_files(
         self,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
-        checkpoint_id: Optional[str] = None,
+        checkpoint_id: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files asynchronously with content-addressable storage.
@@ -61,7 +61,7 @@ class IAsyncFileTrackingService(ABC):
     async def atrack_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
     ) -> FileTrackingResult:
         """
@@ -73,7 +73,7 @@ class IAsyncFileTrackingService(ABC):
         self,
         uow: Any,
         checkpoint_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         message: str,
     ) -> FileTrackingResult:
         """Track and link files inside a caller-owned unit of work.

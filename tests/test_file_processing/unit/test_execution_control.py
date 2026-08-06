@@ -14,24 +14,23 @@ Design Principles:
 - Pattern: State machine pattern for execution control
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
-from enum import Enum
-import uuid
 import copy
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+import pytest
 
 from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
     CheckpointFileLink,
+    CommitId,
     CommitStatus,
+    FileCommit,
+    FileMemento,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Execution Control Simulation Classes
@@ -54,7 +53,7 @@ class FileCheckpoint:
     step: int
     node_id: str
     commit: FileCommit
-    state_snapshot: Dict[str, Any]
+    state_snapshot: dict[str, Any]
     timestamp: datetime = field(default_factory=datetime.now)
     
     @classmethod
@@ -64,7 +63,7 @@ class FileCheckpoint:
         step: int,
         node_id: str,
         commit: FileCommit,
-        state: Dict[str, Any],
+        state: dict[str, Any],
     ) -> "FileCheckpoint":
         return cls(
             checkpoint_id=checkpoint_id,
@@ -81,25 +80,25 @@ class FileExecutionState:
     execution_id: str
     status: ExecutionControlStatus = ExecutionControlStatus.PENDING
     current_step: int = 0
-    current_node: Optional[str] = None
-    checkpoints: List[FileCheckpoint] = field(default_factory=list)
-    file_commits: Dict[str, CommitId] = field(default_factory=dict)
-    workflow_state: Dict[str, Any] = field(default_factory=dict)
-    execution_path: List[str] = field(default_factory=list)
-    branch_history: List[Dict[str, Any]] = field(default_factory=list)
+    current_node: str | None = None
+    checkpoints: list[FileCheckpoint] = field(default_factory=list)
+    file_commits: dict[str, CommitId] = field(default_factory=dict)
+    workflow_state: dict[str, Any] = field(default_factory=dict)
+    execution_path: list[str] = field(default_factory=list)
+    branch_history: list[dict[str, Any]] = field(default_factory=list)
     
     def add_checkpoint(self, checkpoint: FileCheckpoint):
         """Add checkpoint to history."""
         self.checkpoints.append(checkpoint)
     
-    def get_checkpoint(self, checkpoint_id: int) -> Optional[FileCheckpoint]:
+    def get_checkpoint(self, checkpoint_id: int) -> FileCheckpoint | None:
         """Get checkpoint by ID."""
         for cp in self.checkpoints:
             if cp.checkpoint_id == checkpoint_id:
                 return cp
         return None
     
-    def get_latest_checkpoint(self) -> Optional[FileCheckpoint]:
+    def get_latest_checkpoint(self) -> FileCheckpoint | None:
         """Get most recent checkpoint."""
         if self.checkpoints:
             return max(self.checkpoints, key=lambda c: c.step)
@@ -118,7 +117,7 @@ class FileExecutionController:
         self._blob_repo = blob_repository
         self._commit_repo = commit_repository
         self._link_repo = link_repository
-        self._executions: Dict[str, FileExecutionState] = {}
+        self._executions: dict[str, FileExecutionState] = {}
     
     def create_execution(self, execution_id: str = None) -> FileExecutionState:
         """Create new execution state."""
@@ -127,7 +126,7 @@ class FileExecutionController:
         self._executions[exec_id] = state
         return state
     
-    def get_execution(self, execution_id: str) -> Optional[FileExecutionState]:
+    def get_execution(self, execution_id: str) -> FileExecutionState | None:
         """Get execution state."""
         return self._executions.get(execution_id)
     
@@ -160,7 +159,7 @@ class FileExecutionController:
         self,
         execution_id: str,
         node_id: str,
-        files_to_track: List[str] = None,
+        files_to_track: list[str] = None,
     ) -> FileCheckpoint:
         """
         Execute a single node with file tracking.
@@ -258,7 +257,7 @@ class FileExecutionController:
         execution_id: str,
         checkpoint_id: int,
         output_dir: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Restore files from a checkpoint's commit.
         

@@ -25,10 +25,8 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, Any, List, Optional
 from enum import Enum
-import uuid
+from typing import Any
 
 from wtb.domain.events.execution_events import WTBEvent
 
@@ -74,8 +72,8 @@ class RayEvent(WTBEvent):
     event_type: str = field(default="ray_event", init=False)
     
     # Common Ray metadata
-    ray_job_id: Optional[str] = None
-    ray_address: Optional[str] = None
+    ray_job_id: str | None = None
+    ray_address: str | None = None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -97,7 +95,7 @@ class RayBatchTestStartedEvent(RayEvent):
     file_tracking_enabled: bool = False
     
     # Configuration snapshot
-    config_snapshot: Dict[str, Any] = field(default_factory=dict)
+    config_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -115,7 +113,7 @@ class RayBatchTestCompletedEvent(RayEvent):
     variants_cancelled: int = 0
     
     # Best performer
-    best_combination_name: Optional[str] = None
+    best_combination_name: str | None = None
     best_overall_score: float = 0.0
     
     # Files tracked (aggregated)
@@ -137,7 +135,7 @@ class RayBatchTestFailedEvent(RayEvent):
     # Failure details
     error_type: str = ""
     error_message: str = ""
-    failed_at_variant: Optional[str] = None
+    failed_at_variant: str | None = None
     
     # Partial progress
     variants_succeeded: int = 0
@@ -178,7 +176,7 @@ class RayBatchTestProgressEvent(RayEvent):
     
     # Timing
     elapsed_ms: int = 0
-    estimated_remaining_ms: Optional[int] = None
+    estimated_remaining_ms: int | None = None
     
     # Rate metrics
     variants_per_second: float = 0.0
@@ -200,7 +198,7 @@ class RayActorPoolCreatedEvent(RayEvent):
     memory_per_actor_gb: float = 0.0
     
     # Actor IDs
-    actor_ids: List[str] = field(default_factory=list)
+    actor_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -230,7 +228,7 @@ class RayActorFailedEvent(RayEvent):
     error_message: str = ""
     
     # Context
-    executing_variant: Optional[str] = None
+    executing_variant: str | None = None
     executions_completed: int = 0
 
 
@@ -261,7 +259,7 @@ class RayVariantExecutionStartedEvent(RayEvent):
     
     # Variant details
     combination_name: str = ""
-    variants: Dict[str, str] = field(default_factory=dict)
+    variants: dict[str, str] = field(default_factory=dict)
     
     # Queue position
     queue_position: int = 0
@@ -279,7 +277,7 @@ class RayVariantExecutionCompletedEvent(RayEvent):
     
     # Variant details
     combination_name: str = ""
-    variants: Dict[str, str] = field(default_factory=dict)
+    variants: dict[str, str] = field(default_factory=dict)
     
     # Execution metrics
     duration_ms: int = 0
@@ -287,12 +285,12 @@ class RayVariantExecutionCompletedEvent(RayEvent):
     node_count: int = 0
     
     # Evaluation metrics
-    metrics: Dict[str, float] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
     overall_score: float = 0.0
     
     # File tracking
     files_tracked: int = 0
-    file_commit_id: Optional[str] = None
+    file_commit_id: str | None = None
 
 
 @dataclass
@@ -306,12 +304,12 @@ class RayVariantExecutionFailedEvent(RayEvent):
     
     # Variant details
     combination_name: str = ""
-    variants: Dict[str, str] = field(default_factory=dict)
+    variants: dict[str, str] = field(default_factory=dict)
     
     # Failure details
     error_type: str = ""
     error_message: str = ""
-    failed_at_node: Optional[str] = None
+    failed_at_node: str | None = None
     duration_ms: int = 0
     
     # Partial progress
@@ -353,7 +351,7 @@ class RayVariantFilesTrackedEvent(RayEvent):
     checkpoint_id: str = ""
     
     # File details
-    file_paths: List[str] = field(default_factory=list)
+    file_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -369,7 +367,7 @@ class RayVariantFilesTrackingFailedEvent(RayEvent):
     error_message: str = ""
     
     # Files that failed to track
-    failed_files: List[str] = field(default_factory=list)
+    failed_files: list[str] = field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════

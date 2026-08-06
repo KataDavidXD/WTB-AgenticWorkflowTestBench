@@ -15,35 +15,14 @@ Design Reference: docs/issues/WORKSPACE_ISOLATION_DESIGN.md
 
 import json
 import os
-import shutil
-import sys
-import tempfile
-import threading
-import time
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
 import uuid
 
 import pytest
 
 from wtb.domain.models.workspace import (
     Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
     compute_venv_spec_hash,
 )
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceCleanedUpEvent,
-    ForkRequestedEvent,
-    ForkCompletedEvent,
-    VenvCreatedEvent,
-)
-from wtb.infrastructure.workspace.manager import WorkspaceManager
-from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test: Pause/Resume Integration

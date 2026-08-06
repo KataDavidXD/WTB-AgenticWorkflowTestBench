@@ -29,24 +29,26 @@ from __future__ import annotations
 
 import base64
 import copy
+import logging
 import os
 import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from functools import wraps
-from typing import Any, Callable, Dict, Iterator, List, Optional, TYPE_CHECKING
 from datetime import datetime, timezone
-import logging
+from functools import wraps
+from typing import TYPE_CHECKING, Any
 
-# REUSE domain models - don't duplicate!
-from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
-from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
 from wtb.domain.models.batch_test import (
     BatchTest,
     BatchTestResult,
     BatchTestStatus,
     normalize_finite_metrics,
 )
+from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
+
+# REUSE domain models - don't duplicate!
+from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
 
 from .workflow_project import WorkflowProject
 
@@ -62,12 +64,14 @@ def _serialized_adapter_access(method):
 
 
 if TYPE_CHECKING:
-    from wtb.domain.interfaces import (
-        IExecutionController,
-        IBatchTestRunner,
-    )
     from wtb.application.services import ProjectService, VariantService
-    from wtb.application.services.batch_execution_coordinator import BatchExecutionCoordinator
+    from wtb.application.services.batch_execution_coordinator import (
+        BatchExecutionCoordinator,
+    )
+    from wtb.domain.interfaces import (
+        IBatchTestRunner,
+        IExecutionController,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +92,7 @@ class RollbackResult:
     to_checkpoint_id: str
     nodes_reverted: int = 0
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -113,9 +117,9 @@ class BatchRollbackResult:
     execution_id: str
     checkpoint_id: str
     success: bool
-    execution: Optional[Execution] = None
+    execution: Execution | None = None
     files_restored: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -131,8 +135,8 @@ class BatchForkResult:
     source_execution_id: str
     fork_execution_id: str
     checkpoint_id: str
-    execution: Optional[Execution] = None
-    error: Optional[str] = None
+    execution: Execution | None = None
+    error: str | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -154,7 +158,7 @@ class WTBTestBenchBuilder:
     
     def __init__(self):
         self._mode = "testing"
-        self._config: Dict[str, Any] = {}
+        self._config: dict[str, Any] = {}
         # Custom dependency overrides (for testing/advanced use)
         self._project_service = None
         self._variant_service = None
@@ -175,7 +179,7 @@ class WTBTestBenchBuilder:
     def for_production(
         self,
         checkpointer: str = "postgres",
-        connection_string: Optional[str] = None,
+        connection_string: str | None = None,
     ) -> "WTBTestBenchBuilder":
         """Configure for production (LangGraph checkpointers)."""
         self._mode = "production"
@@ -186,7 +190,7 @@ class WTBTestBenchBuilder:
     def with_ray(
         self,
         data_dir: str = "data",
-        grpc_env_url: Optional[str] = None,
+        grpc_env_url: str | None = None,
     ) -> "WTBTestBenchBuilder":
         """
         Configure for development mode with Ray batch runner.
@@ -307,7 +311,7 @@ class WTBTestBench:
         project_service: "ProjectService",
         variant_service: "VariantService",
         execution_controller: "IExecutionController",
-        batch_runner: Optional["IBatchTestRunner"] = None,
+        batch_runner: "IBatchTestRunner" | None = None,
         *,
         owns_batch_runner: bool = False,
         owns_execution_resources: bool = False,
@@ -334,7 +338,7 @@ class WTBTestBench:
         self._closed = False
         
         # SDK-level caches
-        self._project_cache: Dict[str, WorkflowProject] = {}
+        self._project_cache: dict[str, WorkflowProject] = {}
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Resource Lifecycle
@@ -397,7 +401,7 @@ class WTBTestBench:
 
     def _replace_batch_runner(
         self,
-        batch_runner: Optional["IBatchTestRunner"],
+        batch_runner: "IBatchTestRunner" | None,
         *,
         owns_batch_runner: bool,
     ) -> None:
@@ -525,7 +529,7 @@ class WTBTestBench:
             return self._project_cache[name]
         raise KeyError(f"Project '{name}' not found in cache")
     
-    def list_projects(self) -> List[str]:
+    def list_projects(self) -> list[str]:
         """List all registered project names."""
         return list(self._project_cache.keys())
     
@@ -544,10 +548,10 @@ class WTBTestBench:
     def run(
         self,
         project: str,
-        initial_state: Dict[str, Any],
-        variant_config: Optional[Dict[str, str]] = None,
-        workflow_variant: Optional[str] = None,
-        breakpoints: Optional[List[str]] = None,
+        initial_state: dict[str, Any],
+        variant_config: dict[str, str] | None = None,
+        workflow_variant: str | None = None,
+        breakpoints: list[str] | None = None,
     ) -> Execution:
         """
         Run a workflow execution. Returns domain Execution object directly.
@@ -566,7 +570,7 @@ class WTBTestBench:
             raise ValueError(f"Workflow for project '{project}' not found")
         
         run_initial_state = dict(initial_state)
-        execution_metadata: Dict[str, Any] = {}
+        execution_metadata: dict[str, Any] = {}
         if variant_config:
             run_initial_state.setdefault(
                 "_variant_config",
@@ -584,7 +588,7 @@ class WTBTestBench:
         )
         
         # Create and run execution via ExecutionController
-        create_kwargs: Dict[str, Any] = {
+        create_kwargs: dict[str, Any] = {
             "workflow": workflow,
             "initial_state": run_initial_state,
             "breakpoints": breakpoints or [],
@@ -614,7 +618,7 @@ class WTBTestBench:
         return self._exec_ctrl.pause(execution_id)
     
     @_serialized_adapter_access
-    def resume(self, execution_id: str, modified_state: Optional[Dict[str, Any]] = None) -> Execution:
+    def resume(self, execution_id: str, modified_state: dict[str, Any] | None = None) -> Execution:
         """Resume execution. Returns domain Execution."""
         execution = self.get_execution(execution_id)
         graph = self._require_graph_for_execution(execution_id, execution=execution)
@@ -674,7 +678,7 @@ class WTBTestBench:
     # ═══════════════════════════════════════════════════════════════════════════
     
     @_serialized_adapter_access
-    def fork(self, execution_id: str, checkpoint_id: str, new_initial_state: Optional[Dict[str, Any]] = None) -> ForkResult:
+    def fork(self, execution_id: str, checkpoint_id: str, new_initial_state: dict[str, Any] | None = None) -> ForkResult:
         """
         Fork an execution to create a new independent execution.
         
@@ -744,8 +748,8 @@ class WTBTestBench:
     def _resolve_graph_for_execution(
         self,
         execution_id: str,
-        execution: Optional[Execution] = None,
-    ) -> Optional[Any]:
+        execution: Execution | None = None,
+    ) -> Any | None:
         """Resolve the registered project graph for an existing execution."""
         if execution is None:
             try:
@@ -788,8 +792,8 @@ class WTBTestBench:
     def _require_graph_for_execution(
         self,
         execution_id: str,
-        execution: Optional[Execution] = None,
-    ) -> Optional[Any]:
+        execution: Execution | None = None,
+    ) -> Any | None:
         """Resolve one execution-owned graph or reject the control operation.
 
         Node-executor checkpoints do not have a LangGraph graph contract. A
@@ -814,8 +818,8 @@ class WTBTestBench:
     @contextmanager
     def _prepare_controller_graph(
         self,
-        graph: Optional[Any],
-        execution: Optional[Execution] = None,
+        graph: Any | None,
+        execution: Execution | None = None,
     ) -> Iterator[None]:
         """Temporarily bind an execution-specific graph and state adapter."""
         with self._lifecycle_lock:
@@ -858,8 +862,8 @@ class WTBTestBench:
 
     @staticmethod
     def _execution_state_adapter_backend(
-        execution: Optional[Execution],
-    ) -> Optional[str]:
+        execution: Execution | None,
+    ) -> str | None:
         """Return the persisted adapter backend for actor-local execution state."""
         if execution is None:
             return None
@@ -884,7 +888,7 @@ class WTBTestBench:
         return backend
 
     @staticmethod
-    def _normalized_state_adapter_path(value: Any) -> Optional[str]:
+    def _normalized_state_adapter_path(value: Any) -> str | None:
         """Normalize adapter paths before deciding whether reuse is safe."""
         if value is None:
             return None
@@ -897,7 +901,7 @@ class WTBTestBench:
         return os.path.normcase(os.path.abspath(os.path.expanduser(path_value)))
 
     @staticmethod
-    def _state_adapter_identity(adapter: Optional[Any]) -> tuple[Optional[str], Any]:
+    def _state_adapter_identity(adapter: Any | None) -> tuple[str | None, Any]:
         """Return the advertised backend and storage path of an adapter."""
         if adapter is None:
             return None, None
@@ -920,9 +924,9 @@ class WTBTestBench:
 
     def _state_adapter_for_execution(
         self,
-        execution: Optional[Execution],
-        fallback: Optional[Any],
-    ) -> Optional[Any]:
+        execution: Execution | None,
+        fallback: Any | None,
+    ) -> Any | None:
         """Use actor-local checkpoint storage when execution metadata requires it."""
         backend = self._execution_state_adapter_backend(execution)
         if backend is None or execution is None:
@@ -991,8 +995,8 @@ class WTBTestBench:
     def rollback_batch_result(
         self,
         result: BatchTestResult,
-        checkpoint_id: Optional[str] = None,
-        graph: Optional[Any] = None,
+        checkpoint_id: str | None = None,
+        graph: Any | None = None,
     ) -> BatchRollbackResult:
         """
         Convenience: Rollback a batch test result to a checkpoint.
@@ -1060,9 +1064,9 @@ class WTBTestBench:
     def fork_batch_result(
         self,
         result: BatchTestResult,
-        checkpoint_id: Optional[str] = None,
-        new_state: Optional[Dict[str, Any]] = None,
-        graph: Optional[Any] = None,
+        checkpoint_id: str | None = None,
+        new_state: dict[str, Any] | None = None,
+        graph: Any | None = None,
     ) -> BatchForkResult:
         """
         Convenience: Fork a batch test result from a checkpoint.
@@ -1134,8 +1138,8 @@ class WTBTestBench:
     def _checkpoint_dicts_to_domain(
         self,
         execution_id: str,
-        history: List[Dict[str, Any]],
-    ) -> List[Checkpoint]:
+        history: list[dict[str, Any]],
+    ) -> list[Checkpoint]:
         """Convert raw checkpoint dicts to domain Checkpoint objects."""
         checkpoints = []
         for cp in history:
@@ -1159,7 +1163,7 @@ class WTBTestBench:
     def get_batch_result_checkpoints(
         self,
         result: BatchTestResult,
-    ) -> List[Checkpoint]:
+    ) -> list[Checkpoint]:
         """
         Get checkpoints for a batch test result.
 
@@ -1243,8 +1247,8 @@ class WTBTestBench:
     def run_batch_test(
         self,
         project: str,
-        variant_matrix: List[Dict[str, str]],
-        test_cases: List[Dict[str, Any]],
+        variant_matrix: list[dict[str, str]],
+        test_cases: list[dict[str, Any]],
     ) -> BatchTest:
         """
         Run batch tests. Returns domain BatchTest with results.
@@ -1313,9 +1317,9 @@ class WTBTestBench:
         # When the script is the entry point, __module__ is "__main__" which
         # is not importable in a Ray actor process.  Resolve to the real
         # module name via __spec__ when possible.
-        gf_module: Optional[str] = None
-        gf_name: Optional[str] = None
-        gf_pickled: Optional[str] = None
+        gf_module: str | None = None
+        gf_name: str | None = None
+        gf_pickled: str | None = None
         if proj and callable(getattr(proj, "graph_factory", None)):
             gf = proj.graph_factory
             gf_module = getattr(gf, "__module__", None)
@@ -1342,9 +1346,9 @@ class WTBTestBench:
         from wtb.domain.models.batch_test import VariantCombination
         for i, variant_config in enumerate(isolated_variant_matrix):
             isolated_variant_config = copy.deepcopy(variant_config)
-            combo_metadata: Dict[str, Any] = {}
-            runtime_graph: Optional[Any] = None
-            graph: Optional[Any] = None
+            combo_metadata: dict[str, Any] = {}
+            runtime_graph: Any | None = None
+            graph: Any | None = None
             registered_variant_selected = bool(
                 proj
                 and any(
@@ -1467,9 +1471,9 @@ class WTBTestBench:
         return combined
     
     @staticmethod
-    def _extract_batch_result_metrics(execution: Execution) -> Dict[str, float]:
+    def _extract_batch_result_metrics(execution: Execution) -> dict[str, float]:
         """Extract batch metrics with the same contract used by worker modes."""
-        metrics: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
         if execution.state:
             variables = (
                 getattr(execution.state, "workflow_variables", {}) or {}
@@ -1493,8 +1497,8 @@ class WTBTestBench:
     def _run_batch_sequential(
         self,
         project: str,
-        variant_matrix: List[Dict[str, str]],
-        test_cases: List[Dict[str, Any]],
+        variant_matrix: list[dict[str, str]],
+        test_cases: list[dict[str, Any]],
     ) -> BatchTest:
         """Fallback sequential batch execution.
         
@@ -1503,6 +1507,7 @@ class WTBTestBench:
         are populated to match the ThreadPoolBatchTestRunner output schema.
         """
         import time as _time
+
         from wtb.domain.interfaces.batch_runner import BatchRunnerError
 
         if not variant_matrix:
@@ -1614,7 +1619,7 @@ class WTBTestBench:
         return self._exec_ctrl.get_status(execution_id)
     
     @_serialized_adapter_access
-    def get_checkpoints(self, execution_id: str) -> List[Checkpoint]:
+    def get_checkpoints(self, execution_id: str) -> list[Checkpoint]:
         """Get checkpoints. Returns domain Checkpoint list."""
         if not self._exec_ctrl.supports_time_travel():
             return []
@@ -1687,7 +1692,7 @@ class ExecutionControllerBuilder:
         self._config["db_path"] = db_path
         return self
     
-    def with_langgraph(self, checkpointer_type: str = "memory", connection_string: Optional[str] = None) -> "ExecutionControllerBuilder":
+    def with_langgraph(self, checkpointer_type: str = "memory", connection_string: str | None = None) -> "ExecutionControllerBuilder":
         self._mode = "langgraph"
         self._config["checkpointer_type"] = checkpointer_type
         self._config["connection_string"] = connection_string

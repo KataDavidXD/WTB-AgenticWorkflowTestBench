@@ -19,31 +19,27 @@ Design Principles:
 Note: Tests simulate venv operations without requiring actual venv creation.
 """
 
-import pytest
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
-from enum import Enum
-import uuid
 import threading
-import os
-import json
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
 
-from wtb.domain.models.file_processing import (
-    BlobId,
-    CommitId,
-    FileMemento,
-    FileCommit,
-    CheckpointFileLink,
-    CommitStatus,
-)
+import pytest
+
 from wtb.domain.events.file_processing_events import (
     FileCommitCreatedEvent,
     FileRestoredEvent,
 )
+from wtb.domain.models.file_processing import (
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+    FileMemento,
+)
 from wtb.infrastructure.events import WTBEventBus
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Virtual Environment Simulation
@@ -74,17 +70,17 @@ class VirtualEnvironment:
     name: str
     python_version: str = "3.10"
     status: EnvStatus = EnvStatus.CREATING
-    packages: Dict[str, str] = field(default_factory=dict)  # package -> version
-    file_commits: List[str] = field(default_factory=list)  # Linked commit IDs
-    working_dir: Optional[str] = None
+    packages: dict[str, str] = field(default_factory=dict)  # package -> version
+    file_commits: list[str] = field(default_factory=list)  # Linked commit IDs
+    working_dir: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     @property
     def is_ready(self) -> bool:
         return self.status == EnvStatus.READY
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "env_id": self.env_id,
             "name": self.name,
@@ -106,7 +102,7 @@ class VirtualEnvironmentManager:
     """
     
     def __init__(self, base_path: str = None):
-        self._envs: Dict[str, VirtualEnvironment] = {}
+        self._envs: dict[str, VirtualEnvironment] = {}
         self._base_path = base_path or "/tmp/wtb_venvs"
         self._lock = threading.Lock()
     
@@ -114,7 +110,7 @@ class VirtualEnvironmentManager:
         self,
         name: str,
         python_version: str = "3.10",
-        packages: Dict[str, str] = None,
+        packages: dict[str, str] = None,
     ) -> VirtualEnvironment:
         """Create a new virtual environment."""
         with self._lock:
@@ -134,11 +130,11 @@ class VirtualEnvironmentManager:
             self._envs[env_id] = env
             return env
     
-    def get_env(self, env_id: str) -> Optional[VirtualEnvironment]:
+    def get_env(self, env_id: str) -> VirtualEnvironment | None:
         """Get environment by ID."""
         return self._envs.get(env_id)
     
-    def get_env_by_name(self, name: str) -> Optional[VirtualEnvironment]:
+    def get_env_by_name(self, name: str) -> VirtualEnvironment | None:
         """Get environment by name."""
         for env in self._envs.values():
             if env.name == name:
@@ -148,7 +144,7 @@ class VirtualEnvironmentManager:
     def install_packages(
         self,
         env_id: str,
-        packages: Dict[str, str],
+        packages: dict[str, str],
     ) -> VirtualEnvironment:
         """Install packages in environment."""
         env = self._envs.get(env_id)
@@ -169,7 +165,7 @@ class VirtualEnvironmentManager:
             return True
         return False
     
-    def list_envs(self) -> List[VirtualEnvironment]:
+    def list_envs(self) -> list[VirtualEnvironment]:
         """List all environments."""
         return list(self._envs.values())
     
@@ -179,7 +175,7 @@ class VirtualEnvironmentManager:
         if env:
             env.file_commits.append(commit_id)
     
-    def get_env_commits(self, env_id: str) -> List[str]:
+    def get_env_commits(self, env_id: str) -> list[str]:
         """Get all commits linked to environment."""
         env = self._envs.get(env_id)
         return env.file_commits if env else []
@@ -198,7 +194,7 @@ class EnvFileTrackingResult:
     commit_id: str
     files_tracked: int
     total_size: int
-    packages_snapshot: Dict[str, str]
+    packages_snapshot: dict[str, str]
 
 
 class EnvironmentAwareFileService:
@@ -225,12 +221,12 @@ class EnvironmentAwareFileService:
         self._commit_repo = commit_repo
         self._link_repo = link_repo
         self._event_bus = event_bus
-        self._env_file_map: Dict[str, List[str]] = {}  # env_id -> [commit_ids]
+        self._env_file_map: dict[str, list[str]] = {}  # env_id -> [commit_ids]
     
     def track_files_in_env(
         self,
         env_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
         execution_id: str,
         checkpoint_id: int = None,
         message: str = None,
@@ -305,7 +301,7 @@ class EnvironmentAwareFileService:
         output_dir: str,
         execution_id: str,
         create_env_if_needed: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Restore files and recreate the environment they were tracked in.
         
@@ -355,7 +351,7 @@ class EnvironmentAwareFileService:
             "restored_env": env.to_dict() if env else None,
         }
     
-    def get_commits_for_env(self, env_id: str) -> List[FileCommit]:
+    def get_commits_for_env(self, env_id: str) -> list[FileCommit]:
         """Get all commits associated with an environment."""
         commit_ids = self._env_file_map.get(env_id, [])
         commits = []
@@ -373,7 +369,7 @@ class EnvironmentAwareFileService:
         new_env_name: str,
         output_dir: str,
         execution_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Clone an environment including its tracked files.
         

@@ -17,24 +17,21 @@ Design Principles:
 """
 
 from datetime import datetime
-from typing import Optional, List
 
 from sqlalchemy import (
-    Column,
-    String,
-    Integer,
     BigInteger,
     DateTime,
-    Text,
     ForeignKey,
     Index,
+    Integer,
+    String,
+    Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Import Base from the sibling models.py file
 from wtb.infrastructure.database.models import Base
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # File Blob ORM
@@ -95,15 +92,15 @@ class FileCommitORM(Base):
     __tablename__ = "file_commits"
     
     commit_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    execution_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    checkpoint_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    execution_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    checkpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     
     # Relationship to mementos (cascade delete)
-    mementos: Mapped[List["FileMementoORM"]] = relationship(
+    mementos: Mapped[list["FileMementoORM"]] = relationship(
         "FileMementoORM",
         back_populates="commit",
         cascade="all, delete-orphan",

@@ -16,13 +16,12 @@ ACID Properties Tested:
 - API services properly handle transactions
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -81,7 +80,6 @@ class TestAtomicity:
         from wtb.infrastructure.database.repositories.file_processing_repository import (
             SQLAlchemyBlobRepository,
         )
-        from wtb.domain.models.file_processing import BlobId
         
         # Setup: Create a blob first
         repo = SQLAlchemyBlobRepository(mock_session, str(temp_storage))
@@ -135,10 +133,10 @@ class TestConsistency:
     
     def test_blob_id_is_content_hash(self, temp_storage, mock_session):
         """Blob ID must match content hash (SHA-256)."""
+        from wtb.infrastructure.database.mappers import BlobStorageCore
         from wtb.infrastructure.database.repositories.file_processing_repository import (
             SQLAlchemyBlobRepository,
         )
-        from wtb.infrastructure.database.mappers import BlobStorageCore
         
         repo = SQLAlchemyBlobRepository(mock_session, str(temp_storage))
         content = b"consistency test content"
@@ -295,6 +293,7 @@ class TestAPIServiceTransactions:
     def test_list_executions_uses_uow_context(self):
         """list_executions wraps read in UoW context."""
         import inspect
+
         from wtb.application.services.api_services import ExecutionAPIService
         
         source = inspect.getsource(ExecutionAPIService.list_executions)
@@ -307,6 +306,7 @@ class TestAPIServiceTransactions:
     def test_pause_execution_creates_outbox_event(self):
         """pause_execution creates outbox event atomically."""
         import inspect
+
         from wtb.application.services.api_services import ExecutionAPIService
         
         source = inspect.getsource(ExecutionAPIService.pause_execution)
@@ -321,6 +321,7 @@ class TestAPIServiceTransactions:
     def test_rollback_execution_creates_outbox_event(self):
         """rollback_execution creates outbox event atomically."""
         import inspect
+
         from wtb.application.services.api_services import ExecutionAPIService
         
         source = inspect.getsource(ExecutionAPIService.rollback_execution)
@@ -341,6 +342,7 @@ class TestOutboxPattern:
     def test_outbox_events_have_fifo_ordering(self):
         """Outbox events are processed in FIFO order."""
         import inspect
+
         from wtb.infrastructure.database.repositories.outbox_repository import (
             SQLAlchemyOutboxRepository,
         )
@@ -369,7 +371,7 @@ class TestOutboxPattern:
     
     def test_outbox_retry_count_tracked(self):
         """Failed outbox events track retry count."""
-        from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
+        from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
         
         event = OutboxEvent.create(
             event_type=OutboxEventType.CHECKPOINT_VERIFY,

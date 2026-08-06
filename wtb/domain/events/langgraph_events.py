@@ -15,11 +15,11 @@ Usage:
     audit_event = create_audit_event_from_langgraph(lg_event, execution_id)
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
 from enum import Enum
-import uuid
+from typing import Any
 
 
 class LangGraphAuditEventType(Enum):
@@ -91,30 +91,30 @@ class LangGraphAuditEvent:
     # Context
     thread_id: str = ""          # LangGraph thread_id (= WTB execution_id)
     run_id: str = ""             # LangGraph run_id
-    parent_run_id: Optional[str] = None  # Parent run for nested calls
+    parent_run_id: str | None = None  # Parent run for nested calls
     
     # Timing
     timestamp: datetime = field(default_factory=datetime.utcnow)
-    duration_ms: Optional[int] = None
+    duration_ms: int | None = None
     
     # Location
-    node_id: Optional[str] = None        # Node name
-    checkpoint_id: Optional[str] = None  # Checkpoint ID
-    step: Optional[int] = None           # Super-step number
+    node_id: str | None = None        # Node name
+    checkpoint_id: str | None = None  # Checkpoint ID
+    step: int | None = None           # Super-step number
     
     # Content (Note: inputs may contain PII, handle carefully)
-    inputs: Optional[Dict[str, Any]] = None
-    outputs: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    inputs: dict[str, Any] | None = None
+    outputs: dict[str, Any] | None = None
+    error: str | None = None
     
     # Metadata
-    metadata: Optional[Dict[str, Any]] = None
-    tags: Optional[List[str]] = None
+    metadata: dict[str, Any] | None = None
+    tags: list[str] | None = None
     
     # Metrics
-    metrics: Optional[Dict[str, float]] = None  # tokens, cost, latency
+    metrics: dict[str, float] | None = None  # tokens, cost, latency
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert to dictionary for storage.
         
@@ -141,7 +141,7 @@ class LangGraphAuditEvent:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LangGraphAuditEvent":
+    def from_dict(cls, data: dict[str, Any]) -> "LangGraphAuditEvent":
         """
         Create from dictionary.
         
@@ -175,7 +175,7 @@ class LangGraphAuditEvent:
 # LangGraph Event Type Mapping
 # ═══════════════════════════════════════════════════════════════════════════════
 
-LANGGRAPH_EVENT_TYPE_MAP: Dict[str, LangGraphAuditEventType] = {
+LANGGRAPH_EVENT_TYPE_MAP: dict[str, LangGraphAuditEventType] = {
     # Chain events
     "on_chain_start": LangGraphAuditEventType.NODE_STARTED,
     "on_chain_end": LangGraphAuditEventType.NODE_COMPLETED,
@@ -218,7 +218,7 @@ def map_langgraph_event_type(lg_event_type: str) -> LangGraphAuditEventType:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def create_audit_event_from_langgraph(
-    lg_event: Dict[str, Any],
+    lg_event: dict[str, Any],
     thread_id: str,
     include_inputs: bool = False,
     include_outputs: bool = True,
@@ -263,8 +263,8 @@ def create_checkpoint_audit_event(
     execution_id: str,
     checkpoint_id: str,
     step: int,
-    writes: Dict[str, Any],
-    next_nodes: List[str],
+    writes: dict[str, Any],
+    next_nodes: list[str],
 ) -> LangGraphAuditEvent:
     """
     Create audit event for checkpoint creation.
@@ -303,8 +303,8 @@ def create_superstep_audit_event(
     execution_id: str,
     step: int,
     completed: bool,
-    nodes_executed: List[str],
-    duration_ms: Optional[int] = None,
+    nodes_executed: list[str],
+    duration_ms: int | None = None,
 ) -> LangGraphAuditEvent:
     """
     Create audit event for super-step boundary.

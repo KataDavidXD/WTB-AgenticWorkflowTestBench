@@ -10,11 +10,10 @@ ARCHITECTURE DECISION (2026-01-15):
 - A node is a COMPLETE PROJECT (e.g., RAG pipeline), not a code snippet
 """
 
-import pytest
 import os
-import sys
-from pathlib import Path
-from typing import Generator
+from collections.abc import Generator
+
+import pytest
 
 # Skip all tests if gRPC dependencies are not available
 try:
@@ -24,7 +23,6 @@ except ImportError:
     GRPC_AVAILABLE = False
 
 from wtb.infrastructure.environment.providers import GrpcEnvironmentProvider
-
 
 # Default test configuration
 GRPC_ADDRESS = os.environ.get("UV_VENV_GRPC_ADDRESS", "localhost:50051")

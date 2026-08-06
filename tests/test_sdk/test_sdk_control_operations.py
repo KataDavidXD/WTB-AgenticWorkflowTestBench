@@ -12,24 +12,20 @@ Tests control operations:
 Run with: pytest tests/test_sdk/test_sdk_control_operations.py -v
 """
 
-import pytest
 import uuid
-import time
-from typing import Dict, Any, List, Callable
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
-from wtb.sdk import WTBTestBench, WorkflowProject
-from wtb.sdk.test_bench import RollbackResult, ForkResult
-from wtb.domain.models import ExecutionStatus
-from wtb.application.factories import WTBTestBenchFactory
+import pytest
 
 from tests.test_sdk.conftest import (
-    create_initial_state,
-    create_branching_state,
     LANGGRAPH_AVAILABLE,
+    create_branching_state,
+    create_initial_state,
 )
-
+from wtb.domain.models import ExecutionStatus
+from wtb.sdk import WorkflowProject
+from wtb.sdk.test_bench import ForkResult, RollbackResult
 
 # Skip all tests if LangGraph not available
 pytestmark = pytest.mark.skipif(
@@ -158,7 +154,7 @@ class TestUpdateNode:
         
         original_version = project.version
         
-        def new_implementation(state: Dict[str, Any]) -> Dict[str, Any]:
+        def new_implementation(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state.get("messages", []) + ["UPDATED"], "count": 999}
         
         project.update_node(

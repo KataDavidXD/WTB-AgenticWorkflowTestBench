@@ -48,35 +48,34 @@ Usage:
     # Send to main process via Ray object store
 """
 
-from typing import Dict, Any, List, Optional, Callable, Type
-from datetime import datetime
-from dataclasses import dataclass
-from threading import Lock
 import logging
 import uuid
-import json
+from collections.abc import Callable
+from datetime import datetime
+from threading import Lock
+from typing import Any
 
 from wtb.domain.events import (
-    WTBEvent,
-    RayBatchTestStartedEvent,
-    RayBatchTestCompletedEvent,
-    RayBatchTestFailedEvent,
-    RayBatchTestCancelledEvent,
-    RayBatchTestProgressEvent,
-    RayActorPoolCreatedEvent,
-    RayActorInitializedEvent,
     RayActorFailedEvent,
+    RayActorInitializedEvent,
+    RayActorPoolCreatedEvent,
     RayActorRestartedEvent,
-    RayVariantExecutionStartedEvent,
-    RayVariantExecutionCompletedEvent,
-    RayVariantExecutionFailedEvent,
-    RayVariantExecutionCancelledEvent,
-    RayVariantFilesTrackedEvent,
-    RayVariantFilesTrackingFailedEvent,
     RayBackpressureAppliedEvent,
     RayBackpressureReleasedEvent,
+    RayBatchTestCancelledEvent,
+    RayBatchTestCompletedEvent,
+    RayBatchTestFailedEvent,
+    RayBatchTestProgressEvent,
+    RayBatchTestStartedEvent,
+    RayVariantExecutionCancelledEvent,
+    RayVariantExecutionCompletedEvent,
+    RayVariantExecutionFailedEvent,
+    RayVariantExecutionStartedEvent,
+    RayVariantFilesTrackedEvent,
+    RayVariantFilesTrackingFailedEvent,
+    WTBEvent,
 )
-from wtb.domain.models.outbox import OutboxEvent, OutboxEventType, OutboxStatus
+from wtb.domain.models.outbox import OutboxEvent, OutboxEventType
 from wtb.infrastructure.events.wtb_event_bus import WTBEventBus
 
 logger = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════
 
 
-def serialize_ray_event(event: WTBEvent) -> Dict[str, Any]:
+def serialize_ray_event(event: WTBEvent) -> dict[str, Any]:
     """
     Serialize a Ray event to a dictionary for outbox storage.
     
@@ -114,7 +113,7 @@ def serialize_ray_event(event: WTBEvent) -> Dict[str, Any]:
     return data
 
 
-def deserialize_ray_event(data: Dict[str, Any]) -> Optional[WTBEvent]:
+def deserialize_ray_event(data: dict[str, Any]) -> WTBEvent | None:
     """
     Deserialize a Ray event from dictionary.
     
@@ -196,9 +195,9 @@ class RayEventBridge:
     def __init__(
         self,
         event_bus: WTBEventBus,
-        uow_factory: Optional[Callable] = None,
+        uow_factory: Callable | None = None,
         use_outbox: bool = True,
-        audit_trail_factory: Optional[Callable] = None,
+        audit_trail_factory: Callable | None = None,
     ):
         """
         Initialize Ray Event Bridge.
@@ -216,8 +215,8 @@ class RayEventBridge:
         self._lock = Lock()
         
         # Per-batch tracking
-        self._batch_audit_trails: Dict[str, Any] = {}  # batch_id -> WTBAuditTrail
-        self._batch_start_times: Dict[str, datetime] = {}
+        self._batch_audit_trails: dict[str, Any] = {}  # batch_id -> WTBAuditTrail
+        self._batch_start_times: dict[str, datetime] = {}
         
         if self._use_outbox:
             logger.info("RayEventBridge initialized with outbox pattern (ACID compliant)")
@@ -236,8 +235,8 @@ class RayEventBridge:
     def publish_event(
         self,
         event: WTBEvent,
-        batch_test_id: Optional[str] = None,
-        use_outbox: Optional[bool] = None,
+        batch_test_id: str | None = None,
+        use_outbox: bool | None = None,
     ) -> bool:
         """
         Publish a Ray event with optional outbox pattern.
@@ -271,7 +270,7 @@ class RayEventBridge:
             logger.error(f"Immediate publish failed: {e}")
             return False
     
-    def _publish_via_outbox(self, event: WTBEvent, batch_test_id: Optional[str]) -> bool:
+    def _publish_via_outbox(self, event: WTBEvent, batch_test_id: str | None) -> bool:
         """
         Publish event via outbox pattern for ACID compliance.
         
@@ -320,7 +319,7 @@ class RayEventBridge:
     
     def publish_events_batch(
         self,
-        events: List[WTBEvent],
+        events: list[WTBEvent],
         batch_test_id: str,
     ) -> int:
         """
@@ -385,7 +384,7 @@ class RayEventBridge:
         parallel_workers: int,
         max_pending_tasks: int,
         file_tracking_enabled: bool = False,
-        config_snapshot: Optional[Dict[str, Any]] = None,
+        config_snapshot: dict[str, Any] | None = None,
     ) -> None:
         """Emit event when batch test starts."""
         with self._lock:
@@ -393,7 +392,6 @@ class RayEventBridge:
             
             # Create audit trail for this batch
             if self._audit_trail_factory:
-                from wtb.infrastructure.events.wtb_audit_trail import WTBAuditTrail
                 trail = self._audit_trail_factory()
                 trail.execution_id = batch_test_id
                 trail.workflow_id = workflow_id
@@ -419,7 +417,7 @@ class RayEventBridge:
         variants_succeeded: int,
         variants_failed: int,
         variants_cancelled: int = 0,
-        best_combination_name: Optional[str] = None,
+        best_combination_name: str | None = None,
         best_overall_score: float = 0.0,
         total_files_tracked: int = 0,
         has_comparison_matrix: bool = False,
@@ -455,7 +453,7 @@ class RayEventBridge:
         workflow_id: str,
         error_type: str,
         error_message: str,
-        failed_at_variant: Optional[str] = None,
+        failed_at_variant: str | None = None,
         variants_succeeded: int = 0,
         variants_failed: int = 0,
         variants_pending: int = 0,
@@ -514,7 +512,7 @@ class RayEventBridge:
         completed_variants: int,
         failed_variants: int,
         in_progress_variants: int,
-        estimated_remaining_ms: Optional[int] = None,
+        estimated_remaining_ms: int | None = None,
     ) -> None:
         """Emit progress event for batch test."""
         elapsed_ms = 0
@@ -550,7 +548,7 @@ class RayEventBridge:
         num_actors: int,
         cpus_per_actor: float,
         memory_per_actor_gb: float,
-        actor_ids: List[str],
+        actor_ids: list[str],
     ) -> None:
         """Emit event when actor pool is created."""
         event = RayActorPoolCreatedEvent(
@@ -586,7 +584,7 @@ class RayEventBridge:
         batch_test_id: str,
         error_type: str,
         error_message: str,
-        executing_variant: Optional[str] = None,
+        executing_variant: str | None = None,
         executions_completed: int = 0,
     ) -> None:
         """Emit event when actor fails."""
@@ -610,7 +608,7 @@ class RayEventBridge:
         batch_test_id: str,
         actor_id: str,
         combination_name: str,
-        variants: Dict[str, str],
+        variants: dict[str, str],
         queue_position: int = 0,
         total_in_queue: int = 0,
     ) -> None:
@@ -632,14 +630,14 @@ class RayEventBridge:
         batch_test_id: str,
         actor_id: str,
         combination_name: str,
-        variants: Dict[str, str],
+        variants: dict[str, str],
         duration_ms: int,
         checkpoint_count: int = 0,
         node_count: int = 0,
-        metrics: Optional[Dict[str, float]] = None,
+        metrics: dict[str, float] | None = None,
         overall_score: float = 0.0,
         files_tracked: int = 0,
-        file_commit_id: Optional[str] = None,
+        file_commit_id: str | None = None,
     ) -> None:
         """Emit event when variant execution completes."""
         event = RayVariantExecutionCompletedEvent(
@@ -664,10 +662,10 @@ class RayEventBridge:
         batch_test_id: str,
         actor_id: str,
         combination_name: str,
-        variants: Dict[str, str],
+        variants: dict[str, str],
         error_type: str,
         error_message: str,
-        failed_at_node: Optional[str] = None,
+        failed_at_node: str | None = None,
         duration_ms: int = 0,
         nodes_completed: int = 0,
         checkpoints_created: int = 0,
@@ -701,7 +699,7 @@ class RayEventBridge:
         files_tracked: int,
         file_commit_id: str,
         checkpoint_id: str,
-        file_paths: List[str],
+        file_paths: list[str],
     ) -> None:
         """Emit event when variant files are tracked."""
         event = RayVariantFilesTrackedEvent(
@@ -723,7 +721,7 @@ class RayEventBridge:
         actor_id: str,
         combination_name: str,
         error_message: str,
-        failed_files: List[str],
+        failed_files: list[str],
     ) -> None:
         """Emit event when file tracking fails."""
         event = RayVariantFilesTrackingFailedEvent(
@@ -775,7 +773,7 @@ class RayEventBridge:
     # Audit Trail Access
     # ═══════════════════════════════════════════════════════════════
     
-    def get_batch_audit_trail(self, batch_test_id: str) -> Optional[Any]:
+    def get_batch_audit_trail(self, batch_test_id: str) -> Any | None:
         """
         Get the audit trail for a batch test.
         
@@ -805,15 +803,15 @@ class RayEventBridge:
         batch_test_id: str,
         actor_id: str,
         combination_name: str,
-        variants: Dict[str, str],
+        variants: dict[str, str],
         duration_ms: int,
         checkpoint_count: int = 0,
         node_count: int = 0,
-        metrics: Optional[Dict[str, float]] = None,
+        metrics: dict[str, float] | None = None,
         overall_score: float = 0.0,
         files_tracked: int = 0,
-        file_commit_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        file_commit_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Create a serializable event dict for Ray actors.
         
@@ -843,14 +841,14 @@ class RayEventBridge:
         batch_test_id: str,
         actor_id: str,
         combination_name: str,
-        variants: Dict[str, str],
+        variants: dict[str, str],
         error_type: str,
         error_message: str,
-        failed_at_node: Optional[str] = None,
+        failed_at_node: str | None = None,
         duration_ms: int = 0,
         nodes_completed: int = 0,
         checkpoints_created: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a serializable failure event dict for Ray actors."""
         return {
             "__event_type__": "RayVariantExecutionFailedEvent",
@@ -873,10 +871,10 @@ class RayEventBridge:
 # Global Instance Management
 # ═══════════════════════════════════════════════════════════════
 
-_global_ray_event_bridge: Optional[RayEventBridge] = None
+_global_ray_event_bridge: RayEventBridge | None = None
 
 
-def get_ray_event_bridge() -> Optional[RayEventBridge]:
+def get_ray_event_bridge() -> RayEventBridge | None:
     """Get the global Ray event bridge instance."""
     return _global_ray_event_bridge
 

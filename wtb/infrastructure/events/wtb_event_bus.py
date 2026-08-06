@@ -30,11 +30,12 @@ Usage:
     recent = bus.get_history(limit=10)
 """
 
-from typing import Type, Callable, List, Dict, Optional, Any, Union
-from threading import Lock, RLock
-from datetime import datetime
-from collections import deque
 import logging
+from collections import deque
+from collections.abc import Callable
+from datetime import datetime
+from threading import RLock
+from typing import Any
 
 from wtb.domain.events import WTBEvent
 
@@ -64,13 +65,13 @@ class WTBEventBus:
             max_history: Maximum events to keep in history (bounded to prevent memory leaks)
         """
         self._lock = RLock()  # Reentrant for nested publishes
-        self._subscribers: Dict[Type, List[Callable[[Any], None]]] = {}
+        self._subscribers: dict[type, list[Callable[[Any], None]]] = {}
         self._event_history: deque = deque(maxlen=max_history)
         self._max_history = max_history
         
         # AgentGit bridge state
         self._bridge_enabled = False
-        self._bridge_handlers: List[tuple] = []
+        self._bridge_handlers: list[tuple] = []
     
     # ═══════════════════════════════════════════════════════════════
     # Core Pub/Sub Operations
@@ -78,7 +79,7 @@ class WTBEventBus:
     
     def subscribe(
         self, 
-        event_type: Type[WTBEvent], 
+        event_type: type[WTBEvent],
         handler: Callable[[WTBEvent], None]
     ) -> None:
         """
@@ -96,7 +97,7 @@ class WTBEventBus:
     
     def unsubscribe(
         self, 
-        event_type: Type[WTBEvent], 
+        event_type: type[WTBEvent],
         handler: Callable[[WTBEvent], None]
     ) -> None:
         """
@@ -138,7 +139,7 @@ class WTBEventBus:
             except Exception as e:
                 logger.error(f"Error in event handler for {event_type.__name__}: {e}")
     
-    def publish_all(self, events: List[WTBEvent]) -> None:
+    def publish_all(self, events: list[WTBEvent]) -> None:
         """
         Publish multiple events atomically.
         
@@ -154,8 +155,8 @@ class WTBEventBus:
     
     def get_event_history(
         self, 
-        event_type: Optional[Type[WTBEvent]] = None
-    ) -> List[WTBEvent]:
+        event_type: type[WTBEvent] | None = None
+    ) -> list[WTBEvent]:
         """
         Get event history, optionally filtered by type.
         
@@ -175,10 +176,10 @@ class WTBEventBus:
     
     def get_history(
         self, 
-        event_type: Optional[Type[WTBEvent]] = None,
-        since: Optional[datetime] = None,
+        event_type: type[WTBEvent] | None = None,
+        since: datetime | None = None,
         limit: int = 100
-    ) -> List[WTBEvent]:
+    ) -> list[WTBEvent]:
         """
         Get event history with optional filtering.
         
@@ -205,7 +206,7 @@ class WTBEventBus:
     
     def get_subscriber_count(
         self, 
-        event_type: Optional[Type[WTBEvent]] = None
+        event_type: type[WTBEvent] | None = None
     ) -> int:
         """
         Get count of subscribers.
@@ -240,10 +241,16 @@ class WTBEventBus:
         
         try:
             from agentgit.events import (
-                get_global_event_bus,
                 CheckpointCreatedEvent as AGCheckpointCreated,
+            )
+            from agentgit.events import (
                 RollbackPerformedEvent as AGRollback,
+            )
+            from agentgit.events import (
                 SessionCreatedEvent as AGSessionCreated,
+            )
+            from agentgit.events import (
+                get_global_event_bus,
             )
             
             ag_bus = get_global_event_bus()
@@ -337,7 +344,7 @@ class WTBEventBus:
 # Global Instance Management
 # ═══════════════════════════════════════════════════════════════
 
-_global_wtb_event_bus: Optional[WTBEventBus] = None
+_global_wtb_event_bus: WTBEventBus | None = None
 
 
 def get_wtb_event_bus() -> WTBEventBus:

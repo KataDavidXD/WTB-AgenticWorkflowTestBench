@@ -4,26 +4,24 @@ Unit tests for Environment Events.
 Tests the domain events for UV Venv Manager operations.
 """
 
-import pytest
 from datetime import datetime
 
 from wtb.domain.events import (
-    EnvironmentEvent,
-    EnvironmentCreationStartedEvent,
+    DependenciesAddedEvent,
+    DependenciesRemovedEvent,
+    DependenciesUpdatedEvent,
+    DependencyOperationFailedEvent,
+    EnvironmentCleanupCompletedEvent,
+    EnvironmentCleanupStartedEvent,
     EnvironmentCreatedEvent,
     EnvironmentCreationFailedEvent,
+    EnvironmentCreationStartedEvent,
     EnvironmentDeletedEvent,
-    DependenciesAddedEvent,
-    DependenciesUpdatedEvent,
-    DependenciesRemovedEvent,
-    DependencyOperationFailedEvent,
-    EnvironmentSyncedEvent,
-    EnvironmentSyncFailedEvent,
-    EnvironmentCleanupStartedEvent,
-    EnvironmentCleanupCompletedEvent,
     EnvironmentLockAcquiredEvent,
     EnvironmentLockReleasedEvent,
     EnvironmentLockTimeoutEvent,
+    EnvironmentSyncedEvent,
+    EnvironmentSyncFailedEvent,
 )
 
 
