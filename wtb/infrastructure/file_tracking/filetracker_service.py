@@ -33,18 +33,18 @@ import os
 import sys
 import threading
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any
 
 from wtb.config import FileTrackingConfig
 from wtb.domain.interfaces.file_tracking import (
+    CheckpointLinkError,
+    CommitNotFoundError,
+    FileRestoreResult,
+    FileTrackingError,
+    FileTrackingLink,
+    FileTrackingResult,
     IFileTrackingService,
     TrackedFile,
-    FileTrackingResult,
-    FileRestoreResult,
-    FileTrackingLink,
-    FileTrackingError,
-    CommitNotFoundError,
-    CheckpointLinkError,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ class FileTrackerService(IFileTrackingService):
         self._FileMemento = None
         
         # Checkpoint links cache
-        self._checkpoint_links_cache: Dict[int, str] = {}
+        self._checkpoint_links_cache: dict[int, str] = {}
         
         if config.enabled:
             self._ensure_initialized()
@@ -189,8 +189,9 @@ class FileTrackerService(IFileTrackingService):
         Returns:
             psycopg2 connection object
         """
-        import psycopg2
         from urllib.parse import urlparse
+
+        import psycopg2
         
         parsed = urlparse(url)
         
@@ -231,8 +232,8 @@ class FileTrackerService(IFileTrackingService):
     
     def track_files(
         self,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track specified files and create a commit.
@@ -260,7 +261,9 @@ class FileTrackerService(IFileTrackingService):
             # Validate all files exist
             for path in file_paths:
                 if not os.path.exists(path):
-                    from wtb.domain.interfaces.file_tracking import FileNotFoundError as FTFileNotFoundError
+                    from wtb.domain.interfaces.file_tracking import (
+                        FileNotFoundError as FTFileNotFoundError,
+                    )
                     raise FTFileNotFoundError(f"File not found: {path}")
                 
                 # Check file size limit
@@ -307,8 +310,8 @@ class FileTrackerService(IFileTrackingService):
     def track_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files AND link to checkpoint in single operation.
@@ -673,7 +676,7 @@ class FileTrackerService(IFileTrackingService):
     def get_commit_for_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the file commit ID linked to a checkpoint.
         
@@ -711,7 +714,7 @@ class FileTrackerService(IFileTrackingService):
     def get_tracked_files(
         self,
         commit_id: str,
-    ) -> List[TrackedFile]:
+    ) -> list[TrackedFile]:
         """
         Get list of tracked files for a commit.
         
@@ -747,7 +750,7 @@ class FileTrackerService(IFileTrackingService):
     def get_files_at_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get file paths that existed at a specific checkpoint.
 
@@ -799,7 +802,7 @@ class FileTrackerService(IFileTrackingService):
             message="File tracking disabled",
         )
     
-    def get_blob_stats(self) -> Dict[str, Any]:
+    def get_blob_stats(self) -> dict[str, Any]:
         """
         Get storage statistics from BlobRepository.
         

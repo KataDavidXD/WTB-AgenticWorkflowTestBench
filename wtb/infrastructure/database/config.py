@@ -16,9 +16,8 @@ Usage:
 """
 
 import os
-from pathlib import Path
-from typing import Optional
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy.orm import sessionmaker
 
@@ -60,7 +59,7 @@ class DatabaseConfig:
 
 
 # Global configuration cache
-_config: Optional[DatabaseConfig] = None
+_config: DatabaseConfig | None = None
 
 
 def get_project_root() -> Path:
@@ -75,7 +74,7 @@ def get_project_root() -> Path:
 
 
 def get_database_config(
-    data_dir: Optional[Path] = None,
+    data_dir: Path | None = None,
     use_env: bool = True
 ) -> DatabaseConfig:
     """
@@ -195,7 +194,7 @@ def print_database_locations():
     print("DATABASE LOCATIONS")
     print("="*60)
     print(f"\nData Directory: {config.data_dir}")
-    print(f"\nAgentGit (SQLite):")
+    print("\nAgentGit (SQLite):")
     print(f"  Path: {config.agentgit_db_path}")
     print(f"  URL:  {config.agentgit_db_url}")
     print(f"  Exists: {config.agentgit_db_path.exists()}")
@@ -203,7 +202,7 @@ def print_database_locations():
         size = config.agentgit_db_path.stat().st_size / 1024
         print(f"  Size: {size:.2f} KB")
     
-    print(f"\nWTB (SQLite/PostgreSQL):")
+    print("\nWTB (SQLite/PostgreSQL):")
     print(f"  Path: {config.wtb_db_path}")
     print(f"  URL:  {config.wtb_db_url}")
     print(f"  Exists: {config.wtb_db_path.exists()}")
@@ -211,7 +210,7 @@ def print_database_locations():
         size = config.wtb_db_path.stat().st_size / 1024
         print(f"  Size: {size:.2f} KB")
     
-    print(f"\nFileTracker (PostgreSQL):")
+    print("\nFileTracker (PostgreSQL):")
     print(f"  URL: {config.filetracker_url}")
     print("="*60 + "\n")
 

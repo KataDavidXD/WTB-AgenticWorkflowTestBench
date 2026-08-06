@@ -10,9 +10,9 @@ Implementations:
 """
 
 from .providers import (
+    GrpcEnvironmentProvider,
     InProcessEnvironmentProvider,
     RayEnvironmentProvider,
-    GrpcEnvironmentProvider,
 )
 
 __all__ = [

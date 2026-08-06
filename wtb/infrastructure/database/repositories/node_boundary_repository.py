@@ -13,12 +13,14 @@ Updated 2026-01-28 (ARCHITECTURE_REVIEW - ISSUE-CP-002):
   on the domain model if you need CheckpointId value objects
 """
 
+import builtins
 import json
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import INodeBoundaryRepository
 from wtb.domain.models import NodeBoundary
+
 from ..models import NodeBoundaryORM
 
 
@@ -49,8 +51,8 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
         
         # 2026-01-28 FIX: Pass strings directly, not CheckpointId objects
         # Domain model expects Optional[str] for entry/exit checkpoint IDs
-        entry_cp_id: Optional[str] = str(orm.entry_checkpoint_id) if orm.entry_checkpoint_id else None
-        exit_cp_id: Optional[str] = str(orm.exit_checkpoint_id) if orm.exit_checkpoint_id else None
+        entry_cp_id: str | None = str(orm.entry_checkpoint_id) if orm.entry_checkpoint_id else None
+        exit_cp_id: str | None = str(orm.exit_checkpoint_id) if orm.exit_checkpoint_id else None
         
         return NodeBoundary(
             id=orm.id,
@@ -89,12 +91,12 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
             error_details=json.dumps(domain.error_details) if domain.error_details else None,
         )
     
-    def get(self, id: str) -> Optional[NodeBoundary]:
+    def get(self, id: str) -> NodeBoundary | None:
         """Get by ID (id is actually int for this entity)."""
         orm = self._session.query(NodeBoundaryORM).filter_by(id=int(id)).first()
         return self._to_domain(orm) if orm else None
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[NodeBoundary]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[NodeBoundary]:
         """List with pagination."""
         orms = (
             self._session.query(NodeBoundaryORM)
@@ -147,7 +149,7 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
     # New DDD-compliant methods (2026-01-15)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def find_by_execution(self, execution_id: str) -> List[NodeBoundary]:
+    def find_by_execution(self, execution_id: str) -> builtins.list[NodeBoundary]:
         """Find all boundaries for an execution."""
         orms = (
             self._session.query(NodeBoundaryORM)
@@ -157,7 +159,7 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_by_execution_and_node(self, execution_id: str, node_id: str) -> Optional[NodeBoundary]:
+    def find_by_execution_and_node(self, execution_id: str, node_id: str) -> NodeBoundary | None:
         """Find boundary for a specific node in an execution."""
         orm = (
             self._session.query(NodeBoundaryORM)
@@ -166,7 +168,7 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
         )
         return self._to_domain(orm) if orm else None
     
-    def find_completed_by_execution(self, execution_id: str) -> List[NodeBoundary]:
+    def find_completed_by_execution(self, execution_id: str) -> builtins.list[NodeBoundary]:
         """Find completed node boundaries for an execution."""
         orms = (
             self._session.query(NodeBoundaryORM)
@@ -180,7 +182,7 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
     # Legacy methods (deprecated, kept for backward compatibility)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def find_by_session(self, internal_session_id: int) -> List[NodeBoundary]:
+    def find_by_session(self, internal_session_id: int) -> builtins.list[NodeBoundary]:
         """DEPRECATED: Use find_by_execution() instead."""
         orms = (
             self._session.query(NodeBoundaryORM)
@@ -190,7 +192,7 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_by_node(self, internal_session_id: int, node_id: str) -> Optional[NodeBoundary]:
+    def find_by_node(self, internal_session_id: int, node_id: str) -> NodeBoundary | None:
         """DEPRECATED: Use find_by_execution_and_node() instead."""
         orm = (
             self._session.query(NodeBoundaryORM)
@@ -199,7 +201,7 @@ class NodeBoundaryRepository(INodeBoundaryRepository):
         )
         return self._to_domain(orm) if orm else None
     
-    def find_completed(self, internal_session_id: int) -> List[NodeBoundary]:
+    def find_completed(self, internal_session_id: int) -> builtins.list[NodeBoundary]:
         """DEPRECATED: Use find_completed_by_execution() instead."""
         orms = (
             self._session.query(NodeBoundaryORM)

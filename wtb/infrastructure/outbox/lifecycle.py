@@ -27,14 +27,15 @@ Usage:
     manager.shutdown()
 """
 
-from typing import Dict, Any, Optional, Callable, List
+import atexit
+import logging
+import signal
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-import signal
-import threading
-import logging
-import atexit
+from typing import Any
 
 from .processor import OutboxProcessor
 
@@ -60,10 +61,10 @@ class HealthStatus:
     events_processed: int
     events_failed: int
     last_check_time: datetime
-    error_message: Optional[str] = None
-    details: Dict[str, Any] = field(default_factory=dict)
+    error_message: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
             "status": self.status,
@@ -117,9 +118,9 @@ class OutboxLifecycleManager:
         auto_start: bool = False,
         register_signals: bool = False,
         shutdown_timeout_seconds: float = 10.0,
-        on_start: Optional[Callable[[], None]] = None,
-        on_stop: Optional[Callable[[], None]] = None,
-        on_error: Optional[Callable[[Exception], None]] = None,
+        on_start: Callable[[], None] | None = None,
+        on_stop: Callable[[], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
     ):
         """
         Initialize lifecycle manager.
@@ -152,10 +153,10 @@ class OutboxLifecycleManager:
         self._on_error = on_error
         
         # State
-        self._processor: Optional[OutboxProcessor] = None
+        self._processor: OutboxProcessor | None = None
         self._status = LifecycleStatus.STOPPED
-        self._started_at: Optional[datetime] = None
-        self._error: Optional[str] = None
+        self._started_at: datetime | None = None
+        self._error: str | None = None
         self._lock = threading.Lock()
         
         # Signal handling
@@ -231,7 +232,7 @@ class OutboxLifecycleManager:
             
             return False
     
-    def shutdown(self, timeout: Optional[float] = None) -> bool:
+    def shutdown(self, timeout: float | None = None) -> bool:
         """
         Gracefully shutdown the outbox processor.
         
@@ -398,7 +399,7 @@ class OutboxLifecycleManager:
             self.shutdown(timeout=5.0)  # Short timeout for atexit
     
     @property
-    def processor(self) -> Optional[OutboxProcessor]:
+    def processor(self) -> OutboxProcessor | None:
         """Get underlying processor (for advanced use)."""
         return self._processor
     

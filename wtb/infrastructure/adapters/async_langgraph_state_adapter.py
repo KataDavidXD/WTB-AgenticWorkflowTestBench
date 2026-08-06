@@ -28,12 +28,13 @@ Architecture:
     BaseCheckpointSaver (InMemory | SQLite | PostgreSQL)
 """
 
-from typing import Any, Optional, List, Dict, AsyncIterator
-from datetime import datetime
-import logging
-import uuid
 import asyncio
+import logging
 import sys
+import uuid
+from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import Any
 
 from wtb.domain.interfaces.async_state_adapter import IAsyncStateAdapter
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
@@ -50,10 +51,10 @@ _langgraph = None
 
 try:
     import langgraph as _lg
-    from langgraph.graph import StateGraph
-    from langgraph.graph.state import CompiledStateGraph
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import StateGraph
+    from langgraph.graph.state import CompiledStateGraph
     
     _langgraph = _lg
     LANGGRAPH_AVAILABLE = True
@@ -66,15 +67,15 @@ except ImportError:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 from wtb.infrastructure.adapters.langgraph_state_adapter import (
-    LangGraphConfig,
     CheckpointerType,
+    LangGraphConfig,
 )
 
 
 class _AsyncCheckpointerResource:
     """Reference-counted lifetime for a saver shared by adapter forks."""
 
-    def __init__(self, checkpointer: Any, context: Optional[Any]):
+    def __init__(self, checkpointer: Any, context: Any | None):
         self.checkpointer = checkpointer
         self.context = context
         self._references = 1
@@ -146,20 +147,20 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
             )
         
         self._config = config
-        self._checkpointer: Optional["BaseCheckpointSaver"] = None
-        self._compiled_graph: Optional["CompiledStateGraph"] = None
-        self._workflow_graph: Optional["StateGraph"] = None
+        self._checkpointer: "BaseCheckpointSaver" | None = None
+        self._compiled_graph: "CompiledStateGraph" | None = None
+        self._workflow_graph: "StateGraph" | None = None
         
         # Durable savers are async context managers owned by this adapter.
-        self._checkpointer_context: Optional[Any] = None
-        self._checkpointer_resource: Optional[_AsyncCheckpointerResource] = None
+        self._checkpointer_context: Any | None = None
+        self._checkpointer_resource: _AsyncCheckpointerResource | None = None
         self._initialization_lock = asyncio.Lock()
         self._owns_checkpointer = True
         self._closed = False
 
         # Session state
-        self._current_thread_id: Optional[str] = None
-        self._current_execution_id: Optional[str] = None
+        self._current_thread_id: str | None = None
+        self._current_execution_id: str | None = None
         self._current_checkpoint_ns: str = ""
         
         # Initialize checkpointer
@@ -303,7 +304,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         self.set_workflow_graph(graph, force_recompile)
         await self._ensure_checkpointer_initialized()
     
-    def get_config(self) -> Dict[str, Any]:
+    def get_config(self) -> dict[str, Any]:
         """Get LangGraph config dict for current session."""
         config = {"configurable": {"thread_id": self._current_thread_id}}
         if self._current_checkpoint_ns:
@@ -318,7 +319,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         self, 
         execution_id: str,
         initial_state: ExecutionState
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Initialize async session for execution.
         
@@ -347,7 +348,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
     async def aset_current_session(
         self, 
         session_id: str,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
     ) -> bool:
         """
         Set current session asynchronously.
@@ -375,8 +376,8 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
         state: ExecutionState,
         node_id: str,
         trigger: CheckpointTrigger,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None
     ) -> str:
         """
         Save checkpoint asynchronously.
@@ -480,7 +481,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
     # Execution (Async)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    async def aexecute(self, initial_state: Dict[str, Any]) -> Dict[str, Any]:
+    async def aexecute(self, initial_state: dict[str, Any]) -> dict[str, Any]:
         """
         Execute workflow asynchronously.
         
@@ -508,9 +509,9 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
     
     async def astream(
         self, 
-        initial_state: Dict[str, Any],
+        initial_state: dict[str, Any],
         stream_mode: str = "updates"
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Stream execution events asynchronously.
         
@@ -550,8 +551,8 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
     
     async def aupdate_state(
         self, 
-        values: Dict[str, Any], 
-        as_node: Optional[str] = None
+        values: dict[str, Any],
+        as_node: str | None = None
     ) -> bool:
         """
         Update state asynchronously.
@@ -579,7 +580,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
             logger.error(f"Failed to update state: {e}")
             return False
     
-    async def aget_current_state(self) -> Dict[str, Any]:
+    async def aget_current_state(self) -> dict[str, Any]:
         """
         Get current state asynchronously.
         
@@ -606,7 +607,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
     # Additional Async Operations
     # ═══════════════════════════════════════════════════════════════════════════
     
-    async def aget_checkpoints(self, limit: int = 100) -> List[Dict[str, Any]]:
+    async def aget_checkpoints(self, limit: int = 100) -> list[dict[str, Any]]:
         """
         Get checkpoint history asynchronously.
         
@@ -641,7 +642,7 @@ class AsyncLangGraphStateAdapter(IAsyncStateAdapter):
     async def acreate_fork(
         self,
         fork_thread_id: str,
-        from_checkpoint_id: Optional[str] = None
+        from_checkpoint_id: str | None = None
     ) -> "AsyncLangGraphStateAdapter":
         """
         Create a fork asynchronously from current or specified checkpoint.

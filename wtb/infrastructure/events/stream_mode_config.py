@@ -24,8 +24,8 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
 from enum import Enum
+from typing import Any
 
 
 class StreamMode(Enum):
@@ -67,16 +67,16 @@ class StreamModeConfig:
         max_token_count: Max LLM tokens to capture per event (for messages mode)
         custom_event_types: List of custom event types to capture
     """
-    modes: List[str] = field(default_factory=lambda: ["updates"])
+    modes: list[str] = field(default_factory=lambda: ["updates"])
     include_inputs: bool = False
     include_outputs: bool = True
     filter_internal: bool = True
-    max_token_count: Optional[int] = None
-    custom_event_types: List[str] = field(default_factory=list)
+    max_token_count: int | None = None
+    custom_event_types: list[str] = field(default_factory=list)
     
     # Event filtering
-    node_name_filter: Optional[List[str]] = None  # Only capture these nodes
-    exclude_node_names: Optional[List[str]] = None  # Exclude these nodes
+    node_name_filter: list[str] | None = None  # Only capture these nodes
+    exclude_node_names: list[str] | None = None  # Exclude these nodes
     
     # Timing
     emit_timing_events: bool = True
@@ -176,7 +176,7 @@ class StreamModeConfig:
     @classmethod
     def custom(
         cls,
-        modes: List[str],
+        modes: list[str],
         include_inputs: bool = False,
         include_outputs: bool = True,
         filter_internal: bool = True,
@@ -200,7 +200,7 @@ class StreamModeConfig:
             filter_internal=filter_internal,
         )
     
-    def get_modes(self) -> List[str]:
+    def get_modes(self) -> list[str]:
         """
         Get list of enabled stream modes.
         
@@ -209,7 +209,7 @@ class StreamModeConfig:
         """
         return self.modes.copy()
     
-    def should_include_event(self, event: Dict[str, Any]) -> bool:
+    def should_include_event(self, event: dict[str, Any]) -> bool:
         """
         Check if event should be included based on filters.
         
@@ -235,7 +235,7 @@ class StreamModeConfig:
         
         return True
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serialize to dictionary.
         
@@ -255,7 +255,7 @@ class StreamModeConfig:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "StreamModeConfig":
+    def from_dict(cls, data: dict[str, Any]) -> "StreamModeConfig":
         """
         Deserialize from dictionary.
         

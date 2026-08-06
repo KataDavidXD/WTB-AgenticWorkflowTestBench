@@ -1,16 +1,7 @@
 
 from wtb.infrastructure.database.async_repositories.base import BaseAsyncRepository
-from wtb.infrastructure.database.models import (
-    WorkflowORM,
-    ExecutionORM,
-    NodeVariantORM,
-    BatchTestORM,
-    EvaluationResultORM,
-    NodeBoundaryORM,
-    AuditLogORM
-)
+
 # Assuming domain models exist
-from wtb.domain.models import TestWorkflow, Execution # and others
 # If domain models are not easily importable or we want to save time, we can leave mapping logic abstract
 # But UoW init requires instances.
 

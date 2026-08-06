@@ -29,34 +29,32 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
 
-from wtb.domain.models.file_processing import (
-    FileCommit,
-    FileMemento,
-    BlobId,
-    CommitId,
-    CheckpointFileLink,
-    CommitStatus,
-)
 from wtb.domain.interfaces.file_processing_repository import (
     IBlobRepository,
-    IFileCommitRepository,
     ICheckpointFileLinkRepository,
+    IFileCommitRepository,
+)
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
 )
 from wtb.infrastructure.database.file_processing_orm import (
+    CheckpointFileLinkORM,
     FileBlobORM,
     FileCommitORM,
     FileMementoORM,
-    CheckpointFileLinkORM,
 )
 from wtb.infrastructure.database.mappers import (
     BlobStorageCore,
-    FileCommitMapper,
     CheckpointFileLinkMapper,
+    FileCommitMapper,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,7 +134,7 @@ class SQLAlchemyBlobRepository(IBlobRepository):
         logger.debug(f"Saved blob {BlobStorageCore.get_short_id(blob_id.value)}... ({len(content)} bytes)")
         return blob_id
     
-    def get(self, blob_id: BlobId) -> Optional[bytes]:
+    def get(self, blob_id: BlobId) -> bytes | None:
         """
         Retrieve content by blob ID.
         
@@ -230,7 +228,7 @@ class SQLAlchemyBlobRepository(IBlobRepository):
         
         logger.debug(f"Restored blob {blob_id.short}... to {output_path}")
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get storage statistics."""
         result = self._session.execute(
             select(
@@ -265,7 +263,7 @@ class SQLAlchemyBlobRepository(IBlobRepository):
         
         return file_path
     
-    def _read_content(self, storage_location: str) -> Optional[bytes]:
+    def _read_content(self, storage_location: str) -> bytes | None:
         """Read content from filesystem."""
         path = Path(storage_location)
         if not path.exists():
@@ -354,7 +352,7 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         
         logger.debug(f"Saved commit {commit.commit_id.short}... ({commit.file_count} files)")
     
-    def get_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id(self, commit_id: CommitId) -> FileCommit | None:
         """
         Get commit by ID with mementos loaded.
         
@@ -370,7 +368,7 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         
         return self._orm_to_domain(commit_orm, load_mementos=True)
     
-    def get_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id_without_mementos(self, commit_id: CommitId) -> FileCommit | None:
         """
         Get commit without loading mementos.
         
@@ -382,7 +380,7 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         
         return self._orm_to_domain(commit_orm, load_mementos=False)
     
-    def get_all(self, limit: int = 100, offset: int = 0) -> List[FileCommit]:
+    def get_all(self, limit: int = 100, offset: int = 0) -> list[FileCommit]:
         """
         Get all commits, ordered by timestamp descending.
         
@@ -398,7 +396,7 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         results = self._session.execute(stmt).scalars().all()
         return [self._orm_to_domain(orm, load_mementos=False) for orm in results]
     
-    def get_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+    def get_by_execution_id(self, execution_id: str) -> list[FileCommit]:
         """Get commits for a WTB execution."""
         stmt = (
             select(FileCommitORM)
@@ -409,7 +407,7 @@ class SQLAlchemyFileCommitRepository(IFileCommitRepository):
         results = self._session.execute(stmt).scalars().all()
         return [self._orm_to_domain(orm, load_mementos=False) for orm in results]
     
-    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> FileCommit | None:
         """Get commit linked to checkpoint."""
         stmt = (
             select(FileCommitORM)
@@ -494,7 +492,7 @@ class SQLAlchemyCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         
         logger.debug(f"Linked checkpoint {link.checkpoint_id} to commit {link.commit_id.short}...")
     
-    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> CheckpointFileLink | None:
         """Get link by checkpoint ID."""
         link_orm = self._session.get(CheckpointFileLinkORM, checkpoint_id)
         if not link_orm:
@@ -502,7 +500,7 @@ class SQLAlchemyCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         
         return self._orm_to_domain(link_orm)
     
-    def get_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
+    def get_by_commit(self, commit_id: CommitId) -> list[CheckpointFileLink]:
         """Get all links for a commit."""
         stmt = (
             select(CheckpointFileLinkORM)
@@ -536,7 +534,7 @@ class SQLAlchemyCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
         
         return count
     
-    def list_all(self, limit: int = 10000) -> List[CheckpointFileLink]:
+    def list_all(self, limit: int = 10000) -> list[CheckpointFileLink]:
         """List all checkpoint file links."""
         stmt = select(CheckpointFileLinkORM).limit(limit)
         results = self._session.execute(stmt).scalars().all()
@@ -560,8 +558,8 @@ class InMemoryBlobRepository(IBlobRepository):
     """
     
     def __init__(self):
-        self._blobs: Dict[str, bytes] = {}
-        self._metadata: Dict[str, Dict] = {}
+        self._blobs: dict[str, bytes] = {}
+        self._metadata: dict[str, dict] = {}
     
     def save(self, content: bytes) -> BlobId:
         blob_id = BlobId.from_content(content)
@@ -578,7 +576,7 @@ class InMemoryBlobRepository(IBlobRepository):
         
         return blob_id
     
-    def get(self, blob_id: BlobId) -> Optional[bytes]:
+    def get(self, blob_id: BlobId) -> bytes | None:
         return self._blobs.get(blob_id.value)
     
     def exists(self, blob_id: BlobId) -> bool:
@@ -605,7 +603,7 @@ class InMemoryBlobRepository(IBlobRepository):
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(content)
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         total_size = sum(len(b) for b in self._blobs.values())
         return {
             "blob_count": len(self._blobs),
@@ -620,18 +618,18 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
     """
     
     def __init__(self):
-        self._commits: Dict[str, FileCommit] = {}
+        self._commits: dict[str, FileCommit] = {}
     
     def save(self, commit: FileCommit) -> None:
         self._commits[commit.commit_id.value] = commit
     
-    def get_by_id(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id(self, commit_id: CommitId) -> FileCommit | None:
         return self._commits.get(commit_id.value)
     
-    def get_by_id_without_mementos(self, commit_id: CommitId) -> Optional[FileCommit]:
+    def get_by_id_without_mementos(self, commit_id: CommitId) -> FileCommit | None:
         return self._commits.get(commit_id.value)
     
-    def get_all(self, limit: int = 100, offset: int = 0) -> List[FileCommit]:
+    def get_all(self, limit: int = 100, offset: int = 0) -> list[FileCommit]:
         commits = sorted(
             self._commits.values(),
             key=lambda c: c.timestamp,
@@ -639,13 +637,13 @@ class InMemoryFileCommitRepository(IFileCommitRepository):
         )
         return commits[offset:offset + limit]
     
-    def get_by_execution_id(self, execution_id: str) -> List[FileCommit]:
+    def get_by_execution_id(self, execution_id: str) -> list[FileCommit]:
         return [
             c for c in self._commits.values()
             if c.execution_id == execution_id
         ]
     
-    def get_by_checkpoint_id(self, checkpoint_id: str) -> Optional[FileCommit]:
+    def get_by_checkpoint_id(self, checkpoint_id: str) -> FileCommit | None:
         for commit in self._commits.values():
             if commit.checkpoint_id == checkpoint_id:
                 return commit
@@ -667,15 +665,15 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
     """
     
     def __init__(self):
-        self._links: Dict[int, CheckpointFileLink] = {}
+        self._links: dict[int, CheckpointFileLink] = {}
     
     def add(self, link: CheckpointFileLink) -> None:
         self._links[link.checkpoint_id] = link
     
-    def get_by_checkpoint(self, checkpoint_id: str) -> Optional[CheckpointFileLink]:
+    def get_by_checkpoint(self, checkpoint_id: str) -> CheckpointFileLink | None:
         return self._links.get(checkpoint_id)
     
-    def get_by_commit(self, commit_id: CommitId) -> List[CheckpointFileLink]:
+    def get_by_commit(self, commit_id: CommitId) -> list[CheckpointFileLink]:
         return [
             link for link in self._links.values()
             if link.commit_id.value == commit_id.value
@@ -696,7 +694,7 @@ class InMemoryCheckpointFileLinkRepository(ICheckpointFileLinkRepository):
             del self._links[cp_id]
         return len(to_delete)
     
-    def list_all(self, limit: int = 10000) -> List[CheckpointFileLink]:
+    def list_all(self, limit: int = 10000) -> list[CheckpointFileLink]:
         """List all checkpoint file links."""
         links = list(self._links.values())
         return links[:limit]

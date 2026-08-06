@@ -44,7 +44,6 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Set
 
 from wtb.domain.interfaces.file_tracking import (
     FileCleanupResult,
@@ -77,10 +76,10 @@ class FileCleanupService(IFileCleanupService):
         target_checkpoint_id: str,
         execution_id: str,
         current_workspace_path: Path,
-        track_patterns: List[str],
-        exclude_patterns: List[str],
+        track_patterns: list[str],
+        exclude_patterns: list[str],
         file_tracking_service: IFileTrackingService,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Identify files created after target checkpoint.
         
@@ -146,8 +145,8 @@ class FileCleanupService(IFileCleanupService):
         self,
         checkpoint_id: str,
         execution_id: str,
-        orphaned_paths: List[str],
-        backup_dir: Optional[Path] = None,
+        orphaned_paths: list[str],
+        backup_dir: Path | None = None,
         dry_run: bool = False,
         max_files: int = 100,
     ) -> FileCleanupResult:
@@ -196,10 +195,10 @@ class FileCleanupService(IFileCleanupService):
                 dry_run=dry_run,
             )
         
-        deleted_paths: List[str] = []
-        backed_up_paths: List[str] = []
-        skipped_paths: List[str] = []
-        errors: List[str] = []
+        deleted_paths: list[str] = []
+        backed_up_paths: list[str] = []
+        skipped_paths: list[str] = []
+        errors: list[str] = []
         
         # Create backup directory if needed
         if backup_dir and not dry_run:
@@ -235,7 +234,7 @@ class FileCleanupService(IFileCleanupService):
                     deleted_paths.append(file_path)
                     logger.info(f"Deleted orphaned file: {file_path}")
                     
-            except PermissionError as e:
+            except PermissionError:
                 error_msg = f"Permission denied: {file_path}"
                 logger.warning(error_msg)
                 errors.append(error_msg)
@@ -272,9 +271,9 @@ class FileCleanupService(IFileCleanupService):
     def _discover_files(
         self,
         workspace_path: Path,
-        track_patterns: List[str],
-        exclude_patterns: List[str],
-    ) -> Set[str]:
+        track_patterns: list[str],
+        exclude_patterns: list[str],
+    ) -> set[str]:
         """
         Discover files in workspace matching track patterns.
         
@@ -286,7 +285,7 @@ class FileCleanupService(IFileCleanupService):
         Returns:
             Set of matching file paths (as strings)
         """
-        discovered: Set[str] = set()
+        discovered: set[str] = set()
         
         if not workspace_path.exists():
             logger.warning(f"Workspace path does not exist: {workspace_path}")
@@ -318,7 +317,7 @@ class FileCleanupService(IFileCleanupService):
         
         return discovered
     
-    def _matches_patterns(self, path: str, patterns: List[str]) -> bool:
+    def _matches_patterns(self, path: str, patterns: list[str]) -> bool:
         """
         Check if path matches any of the glob patterns.
         
@@ -353,7 +352,7 @@ class FileCleanupService(IFileCleanupService):
             p = workspace_path / p
         return str(p.resolve())
     
-    def _backup_file(self, file_path: str, backup_dir: Path) -> Optional[str]:
+    def _backup_file(self, file_path: str, backup_dir: Path) -> str | None:
         """
         Backup file to backup directory.
         

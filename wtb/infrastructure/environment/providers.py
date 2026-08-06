@@ -23,20 +23,20 @@ Usage:
     # Returns env_path, python_path for Ray to use
 """
 
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
-from weakref import WeakValueDictionary
-from dataclasses import dataclass, field
-from pathlib import Path
 import hashlib
 import json
 import logging
 import sys
 import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
+from weakref import WeakValueDictionary
 
 from wtb.domain.interfaces.batch_runner import IEnvironmentProvider
 
 if TYPE_CHECKING:
-    from wtb.infrastructure.environment.venv_cache import VenvCacheManager, VenvSpec
+    from wtb.infrastructure.environment.venv_cache import VenvCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +50,13 @@ class InProcessEnvironmentProvider(IEnvironmentProvider):
     """
     
     def __init__(self):
-        self._environments: Dict[str, Dict[str, Any]] = {}
+        self._environments: dict[str, dict[str, Any]] = {}
     
     def create_environment(
         self,
         variant_id: str,
-        config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Create a no-op environment (just stores config).
         
@@ -74,12 +74,12 @@ class InProcessEnvironmentProvider(IEnvironmentProvider):
     def cleanup_environment(
         self,
         variant_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> None:
         """Remove environment reference."""
         self._environments.pop(variant_id, None)
     
-    def get_runtime_env(self, variant_id: str) -> Optional[Dict[str, Any]]:
+    def get_runtime_env(self, variant_id: str) -> dict[str, Any] | None:
         """Return None (no runtime env needed)."""
         return None
 
@@ -92,13 +92,13 @@ class RayRuntimeEnvConfig:
     See: https://docs.ray.io/en/latest/ray-core/handling-dependencies.html
     """
     pip: list = field(default_factory=list)
-    conda: Optional[Dict[str, Any]] = None
-    env_vars: Dict[str, str] = field(default_factory=dict)
-    working_dir: Optional[str] = None
+    conda: dict[str, Any] | None = None
+    env_vars: dict[str, str] = field(default_factory=dict)
+    working_dir: str | None = None
     py_modules: list = field(default_factory=list)
     excludes: list = field(default_factory=list)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to Ray runtime_env dict."""
         env = {}
         
@@ -140,7 +140,7 @@ class RayEnvironmentProvider(IEnvironmentProvider):
         runtime_env = provider.get_runtime_env("variant-1")
     """
     
-    def __init__(self, base_env: Optional[Dict[str, Any]] = None):
+    def __init__(self, base_env: dict[str, Any] | None = None):
         """
         Initialize provider.
         
@@ -148,13 +148,13 @@ class RayEnvironmentProvider(IEnvironmentProvider):
             base_env: Base runtime_env to extend for all variants
         """
         self._base_env = base_env or {}
-        self._environments: Dict[str, RayRuntimeEnvConfig] = {}
+        self._environments: dict[str, RayRuntimeEnvConfig] = {}
     
     def create_environment(
         self,
         variant_id: str,
-        config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Create a Ray runtime_env.
         
@@ -193,7 +193,7 @@ class RayEnvironmentProvider(IEnvironmentProvider):
     def cleanup_environment(
         self,
         variant_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> None:
         """
         Cleanup an environment.
@@ -206,7 +206,7 @@ class RayEnvironmentProvider(IEnvironmentProvider):
         """
         self._environments.pop(variant_id, None)
     
-    def get_runtime_env(self, variant_id: str) -> Optional[Dict[str, Any]]:
+    def get_runtime_env(self, variant_id: str) -> dict[str, Any] | None:
         """
         Get Ray runtime_env for a variant.
         
@@ -221,7 +221,7 @@ class RayEnvironmentProvider(IEnvironmentProvider):
             return None
         return env_config.to_dict()
     
-    def list_environments(self) -> Dict[str, Dict[str, Any]]:
+    def list_environments(self) -> dict[str, dict[str, Any]]:
         """List all created environments."""
         return {
             vid: config.to_dict()
@@ -275,7 +275,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         timeout_seconds: float = 120.0,  # Environment creation can take time
         default_python: str = "3.12",
         venv_cache: Optional["VenvCacheManager"] = None,
-        event_bus: Optional[Any] = None,
+        event_bus: Any | None = None,
     ):
         """
         Initialize gRPC provider.
@@ -290,7 +290,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         self._grpc_address = grpc_address
         self._timeout = timeout_seconds
         self._default_python = default_python
-        self._environments: Dict[str, Dict[str, Any]] = {}  # variant_id -> env_info
+        self._environments: dict[str, dict[str, Any]] = {}  # variant_id -> env_info
         self._env_lock = threading.Lock()
         self._operation_locks: WeakValueDictionary[
             str, threading.RLock
@@ -307,6 +307,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         """Initialize gRPC channel and stub."""
         try:
             import grpc
+
             from wtb.infrastructure.environment.uv_manager.grpc_generated import (
                 env_manager_pb2_grpc as pb2_grpc,
             )
@@ -348,8 +349,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def create_environment(
         self,
         variant_id: str,
-        config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
         """Serialize create against cleanup for the same environment key."""
         with self._get_operation_lock(variant_id):
             return self._create_environment_serialized(variant_id, config)
@@ -357,8 +358,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def _create_environment_serialized(
         self,
         variant_id: str,
-        config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Provision environment via gRPC.
         
@@ -396,7 +397,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
 
         if self._stub is None:
             logger.warning(f"gRPC not available, returning stub response for {variant_id}")
-            stub_info: Dict[str, Any] = {
+            stub_info: dict[str, Any] = {
                 "type": "grpc_uv_stub",
                 "variant_id": variant_id,
             }
@@ -415,7 +416,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             packages = config.get("packages", [])
             python_version = config.get("python_version", self._default_python)
 
-            pending_info: Dict[str, Any] = {
+            pending_info: dict[str, Any] = {
                 "type": "grpc_uv_pending",
                 "workflow_id": workflow_id,
                 "node_id": node_id,
@@ -474,8 +475,8 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def _delete_remote_environment(
         self,
         environment_id: str,
-        env_info: Dict[str, Any],
-        timeout: Optional[float] = None,
+        env_info: dict[str, Any],
+        timeout: float | None = None,
     ) -> None:
         """Delete one remote environment and validate its business status."""
         if (
@@ -530,7 +531,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def cleanup_environment(
         self,
         variant_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> None:
         """Serialize cleanup against create for the same environment key."""
         with self._get_operation_lock(variant_id):
@@ -540,7 +541,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def _cleanup_environment_serialized(
         self,
         variant_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> None:
         """
         Cleanup environment.
@@ -576,7 +577,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
             if self._environments.get(variant_id) is env_info:
                 self._environments.pop(variant_id, None)
     
-    def get_runtime_env(self, variant_id: str) -> Optional[Dict[str, Any]]:
+    def get_runtime_env(self, variant_id: str) -> dict[str, Any] | None:
         """
         Get Ray-compatible runtime environment specification.
         
@@ -593,7 +594,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         env_path = env_info.get("env_path", "")
         python_path = env_info.get("python_path", "")
         venv_path = env_info.get("venv_path", "")
-        runtime_env: Dict[str, Any] = {
+        runtime_env: dict[str, Any] = {
             "type": env_info.get("type", "grpc_uv"),
             "env_path": env_path,
             "python_path": python_path,
@@ -609,10 +610,10 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         self,
         workspace_id: str,
         workspace_path: str,
-        python_version: Optional[str] = None,
-        packages: Optional[List[str]] = None,
+        python_version: str | None = None,
+        packages: list[str] | None = None,
         use_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Serialize the complete workspace environment lifecycle by key."""
         with self._get_operation_lock(workspace_id):
             return self._create_workspace_environment_serialized(
@@ -627,10 +628,10 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         self,
         workspace_id: str,
         workspace_path: str,
-        python_version: Optional[str] = None,
-        packages: Optional[List[str]] = None,
+        python_version: str | None = None,
+        packages: list[str] | None = None,
         use_cache: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create environment bound to a specific workspace.
         
@@ -735,9 +736,9 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
     def _compute_spec_hash(
         self,
         python_version: str,
-        packages: List[str],
-        requirements_content: Optional[str] = None,
-        lock_file_content: Optional[str] = None,
+        packages: list[str],
+        requirements_content: str | None = None,
+        lock_file_content: str | None = None,
     ) -> str:
         """Compute hash for venv specification.
         
@@ -760,7 +761,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         python_version: str,
         spec_hash: str,
         from_cache: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Build environment info dictionary."""
         venv_path = f"{env_path}/.venv"
         return {
@@ -863,7 +864,7 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         workspace_id: str,
         venv_path: str,
         python_version: str,
-        packages: List[str],
+        packages: list[str],
         spec_hash: str,
     ) -> None:
         """Publish VenvCreatedEvent."""
@@ -903,11 +904,11 @@ class GrpcEnvironmentProvider(IEnvironmentProvider):
         except Exception as e:
             logger.warning(f"Failed to publish venv reused event: {e}")
     
-    def list_environments(self) -> Dict[str, Dict[str, Any]]:
+    def list_environments(self) -> dict[str, dict[str, Any]]:
         """List all created environments."""
         return dict(self._environments)
     
-    def get_env_status(self, variant_id: str) -> Dict[str, Any]:
+    def get_env_status(self, variant_id: str) -> dict[str, Any]:
         """
         Query the Docker service for the real status of a provisioned
         environment using the ``GetEnvStatus`` gRPC RPC.

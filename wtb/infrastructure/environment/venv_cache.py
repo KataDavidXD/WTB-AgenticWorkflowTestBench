@@ -26,14 +26,12 @@ Related Documents:
 import hashlib
 import json
 import logging
-import os
 import shutil
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +47,10 @@ class VenvSpec:
     Specification for a virtual environment.
     """
     python_version: str
-    packages: List[str]
-    requirements_content: Optional[str] = None
-    lock_file_content: Optional[str] = None
-    extra_env_vars: Dict[str, str] = field(default_factory=dict)
+    packages: list[str]
+    requirements_content: str | None = None
+    lock_file_content: str | None = None
+    extra_env_vars: dict[str, str] = field(default_factory=dict)
     
     def compute_hash(self) -> str:
         """
@@ -70,7 +68,7 @@ class VenvSpec:
         spec_json = json.dumps(spec_data, sort_keys=True)
         return hashlib.sha256(spec_json.encode()).hexdigest()[:16]
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "python_version": self.python_version,
@@ -81,7 +79,7 @@ class VenvSpec:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VenvSpec":
+    def from_dict(cls, data: dict[str, Any]) -> "VenvSpec":
         """Create from dictionary."""
         return cls(
             python_version=data.get("python_version", "3.12"),
@@ -120,7 +118,7 @@ class VenvCacheEntry:
         """Age in hours since creation."""
         return (datetime.now() - self.created_at).total_seconds() / 3600
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "spec_hash": self.spec_hash,
@@ -133,7 +131,7 @@ class VenvCacheEntry:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VenvCacheEntry":
+    def from_dict(cls, data: dict[str, Any]) -> "VenvCacheEntry":
         """Create from dictionary."""
         return cls(
             spec_hash=data["spec_hash"],
@@ -151,7 +149,7 @@ class VenvCacheConfig:
     """
     Configuration for VenvCacheManager.
     """
-    cache_dir: Optional[Path] = None
+    cache_dir: Path | None = None
     max_size_gb: float = 10.0
     max_age_days: int = 30
     max_entries: int = 100
@@ -238,7 +236,7 @@ class VenvCacheManager:
             cache.put(spec)
     """
     
-    def __init__(self, config: Optional[VenvCacheConfig] = None):
+    def __init__(self, config: VenvCacheConfig | None = None):
         """
         Initialize VenvCacheManager.
         
@@ -249,7 +247,7 @@ class VenvCacheManager:
         self._lock = threading.RLock()
         
         # In-memory index: spec_hash -> VenvCacheEntry
-        self._entries: Dict[str, VenvCacheEntry] = {}
+        self._entries: dict[str, VenvCacheEntry] = {}
         
         # Statistics
         self._stats = CacheStats()
@@ -317,7 +315,7 @@ class VenvCacheManager:
     # Cache Operations
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get(self, spec_hash: str) -> Optional[VenvCacheEntry]:
+    def get(self, spec_hash: str) -> VenvCacheEntry | None:
         """
         Get cached venv by specification hash.
         
@@ -345,7 +343,7 @@ class VenvCacheManager:
             self._stats.misses += 1
             return None
     
-    def get_by_spec(self, spec: VenvSpec) -> Optional[VenvCacheEntry]:
+    def get_by_spec(self, spec: VenvSpec) -> VenvCacheEntry | None:
         """
         Get cached venv by specification.
         
@@ -513,7 +511,7 @@ class VenvCacheManager:
         
         return self._evict_lru()
     
-    def _evict_lru(self, target_free_bytes: Optional[int] = None) -> int:
+    def _evict_lru(self, target_free_bytes: int | None = None) -> int:
         """
         Evict least recently used entries.
         
@@ -606,7 +604,7 @@ class VenvCacheManager:
     # Query
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def list_entries(self) -> List[VenvCacheEntry]:
+    def list_entries(self) -> list[VenvCacheEntry]:
         """List all cache entries."""
         with self._lock:
             return list(self._entries.values())
@@ -661,7 +659,7 @@ class VenvCacheManager:
 
 
 def create_venv_cache(
-    cache_dir: Optional[Path] = None,
+    cache_dir: Path | None = None,
     max_size_gb: float = 10.0,
     max_age_days: int = 30,
 ) -> VenvCacheManager:

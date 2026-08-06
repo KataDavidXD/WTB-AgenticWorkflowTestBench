@@ -14,18 +14,17 @@ Usage:
     # Export via prometheus_client
 """
 
-from typing import Optional, Dict, Any, Callable
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
+from typing import Any
 
 from wtb.domain.events import (
-    WTBEvent,
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
+    ExecutionStartedEvent,
     NodeCompletedEvent,
     NodeFailedEvent,
+    NodeStartedEvent,
 )
 from wtb.domain.events.checkpoint_events import CheckpointCreated
 
@@ -33,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # Try to import prometheus_client, but don't fail if not available
 try:
-    from prometheus_client import Counter, Histogram, Gauge, Info
+    from prometheus_client import Counter, Gauge, Histogram, Info
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -136,10 +135,10 @@ class MetricsEventListener:
         self._default_workflow_id = default_workflow_id
         
         # Track workflow context for execution_id → workflow_id mapping
-        self._workflow_context: Dict[str, str] = {}
+        self._workflow_context: dict[str, str] = {}
         
         # Track active executions for timing
-        self._execution_start_times: Dict[str, datetime] = {}
+        self._execution_start_times: dict[str, datetime] = {}
         
         if self._enabled:
             self._subscribe_to_events()
@@ -350,7 +349,7 @@ class InMemoryMetricsCollector:
     def __init__(self, event_bus: Any):
         """Initialize collector."""
         self._event_bus = event_bus
-        self._metrics: Dict[str, Any] = {
+        self._metrics: dict[str, Any] = {
             "executions_total": {"completed": 0, "failed": 0},
             "active_executions": 0,
             "node_executions_total": {},
@@ -359,7 +358,7 @@ class InMemoryMetricsCollector:
             "execution_durations": [],
             "node_durations": {},
         }
-        self._workflow_context: Dict[str, str] = {}
+        self._workflow_context: dict[str, str] = {}
         
         self._subscribe_to_events()
     
@@ -411,7 +410,7 @@ class InMemoryMetricsCollector:
     def _on_checkpoint_created(self, event: CheckpointCreated) -> None:
         self._metrics["checkpoints_total"] += 1
     
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         """Get collected metrics."""
         return self._metrics.copy()
     

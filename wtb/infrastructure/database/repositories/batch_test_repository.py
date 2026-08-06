@@ -1,11 +1,17 @@
 """Batch test repository implementation."""
 
 import json
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import IBatchTestRepository
-from wtb.domain.models import BatchTest, BatchTestStatus, VariantCombination, BatchTestResult
+from wtb.domain.models import (
+    BatchTest,
+    BatchTestResult,
+    BatchTestStatus,
+    VariantCombination,
+)
+
 from ..models import BatchTestORM
 from .base import BaseRepository
 
@@ -77,7 +83,7 @@ class BatchTestRepository(BaseRepository[BatchTest, BatchTestORM], IBatchTestRep
             metadata_=json.dumps(domain.metadata),
         )
     
-    def find_by_workflow(self, workflow_id: str) -> List[BatchTest]:
+    def find_by_workflow(self, workflow_id: str) -> list[BatchTest]:
         """Find batch tests for a workflow."""
         orms = (
             self._session.query(BatchTestORM)
@@ -87,7 +93,7 @@ class BatchTestRepository(BaseRepository[BatchTest, BatchTestORM], IBatchTestRep
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_pending(self) -> List[BatchTest]:
+    def find_pending(self) -> list[BatchTest]:
         """Find pending batch tests."""
         orms = (
             self._session.query(BatchTestORM)

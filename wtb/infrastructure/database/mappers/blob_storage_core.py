@@ -18,7 +18,7 @@ Design:
 
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Any
 
 
 class BlobStorageCore:
@@ -95,7 +95,7 @@ class BlobStorageCore:
         return objects_path / dir_name
     
     @staticmethod
-    def compute_temp_path(storage_path: Path, suffix: Optional[str] = None) -> Path:
+    def compute_temp_path(storage_path: Path, suffix: str | None = None) -> Path:
         """
         Compute temporary path for atomic writes.
         
@@ -166,7 +166,7 @@ class BlobStorageCore:
         storage_location: str,
         content_size: int,
         reference_count: int = 1,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create dictionary for ORM model creation.
         
@@ -190,7 +190,7 @@ class BlobStorageCore:
         }
     
     @staticmethod
-    def compute_stats(blob_count: int, total_size: int) -> Dict[str, Any]:
+    def compute_stats(blob_count: int, total_size: int) -> dict[str, Any]:
         """
         Compute storage statistics dictionary.
         
@@ -208,7 +208,7 @@ class BlobStorageCore:
         }
     
     @classmethod
-    def setup_storage_structure(cls, storage_path: Path) -> Tuple[Path, Path]:
+    def setup_storage_structure(cls, storage_path: Path) -> tuple[Path, Path]:
         """
         Setup storage directory structure.
         
@@ -245,9 +245,9 @@ class FileCommitMapper:
             FileCommit domain model
         """
         from wtb.domain.models.file_processing import (
+            BlobId,
             FileCommit,
             FileMemento,
-            BlobId,
         )
         
         mementos = []

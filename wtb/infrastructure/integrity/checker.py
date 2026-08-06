@@ -5,16 +5,14 @@ Checks referential integrity between WTB, AgentGit, and FileTracker databases.
 Detects dangling references, orphan data, and state inconsistencies.
 """
 
-from typing import Optional, List, Any, Protocol
-from datetime import datetime, timedelta
-import time
 import logging
+import time
+from datetime import datetime, timedelta
+from typing import Any, Protocol
 
 from wtb.domain.models.integrity import (
-    IntegrityReport,
     IntegrityIssue,
-    IntegrityIssueType,
-    IntegritySeverity,
+    IntegrityReport,
     RepairAction,
 )
 from wtb.domain.models.node_boundary import NodeStatus
@@ -27,11 +25,11 @@ logger = logging.getLogger(__name__)
 class ICheckpointRepository(Protocol):
     """Protocol for AgentGit checkpoint repository access."""
     
-    def get_by_id(self, checkpoint_id: str) -> Optional[Any]:
+    def get_by_id(self, checkpoint_id: str) -> Any | None:
         """Get checkpoint by ID."""
         ...
     
-    def list_all(self, limit: int = 1000) -> List[Any]:
+    def list_all(self, limit: int = 1000) -> list[Any]:
         """List all checkpoints."""
         ...
 
@@ -63,7 +61,7 @@ class IntegrityChecker:
     def __init__(
         self,
         wtb_db_url: str,
-        checkpoint_repo: Optional[ICheckpointRepository] = None,
+        checkpoint_repo: ICheckpointRepository | None = None,
         outbox_stuck_threshold_hours: float = 1.0,
     ):
         """

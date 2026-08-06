@@ -27,17 +27,15 @@ import os
 import threading
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
 
 from wtb.domain.interfaces.file_tracking import (
-    IFileTrackingService,
-    TrackedFile,
-    FileTrackingResult,
+    CheckpointLinkError,
+    CommitNotFoundError,
     FileRestoreResult,
     FileTrackingLink,
-    FileTrackingError,
-    CommitNotFoundError,
-    CheckpointLinkError,
+    FileTrackingResult,
+    IFileTrackingService,
+    TrackedFile,
 )
 
 
@@ -75,12 +73,12 @@ class MockFileTrackingService(IFileTrackingService):
         self._lock = threading.RLock()
         
         # State storage
-        self._commits: Dict[str, Dict] = {}  # commit_id -> commit data
-        self._checkpoint_links: Dict[str, str] = {}  # checkpoint_id -> commit_id
-        self._tracked_files: Dict[str, List[TrackedFile]] = {}  # commit_id -> files
+        self._commits: dict[str, dict] = {}  # commit_id -> commit data
+        self._checkpoint_links: dict[str, str] = {}  # checkpoint_id -> commit_id
+        self._tracked_files: dict[str, list[TrackedFile]] = {}  # commit_id -> files
         
         # Operation log for test verification
-        self._operation_log: List[Dict] = []
+        self._operation_log: list[dict] = []
     
     def _log_operation(self, operation: str, **kwargs):
         """Log operation for test verification."""
@@ -114,8 +112,8 @@ class MockFileTrackingService(IFileTrackingService):
     
     def track_files(
         self,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track specified files and create a commit.
@@ -131,7 +129,9 @@ class MockFileTrackingService(IFileTrackingService):
             if self._simulate_file_existence:
                 for path in file_paths:
                     if not os.path.exists(path):
-                        from wtb.domain.interfaces.file_tracking import FileNotFoundError as FTFileNotFoundError
+                        from wtb.domain.interfaces.file_tracking import (
+                            FileNotFoundError as FTFileNotFoundError,
+                        )
                         raise FTFileNotFoundError(f"File not found: {path}")
             
             commit_id = str(uuid.uuid4())
@@ -181,8 +181,8 @@ class MockFileTrackingService(IFileTrackingService):
     def track_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files AND link to checkpoint in single operation.
@@ -322,7 +322,7 @@ class MockFileTrackingService(IFileTrackingService):
     def get_commit_for_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the file commit ID linked to a checkpoint.
         
@@ -338,7 +338,7 @@ class MockFileTrackingService(IFileTrackingService):
     def get_tracked_files(
         self,
         commit_id: str,
-    ) -> List[TrackedFile]:
+    ) -> list[TrackedFile]:
         """
         Get list of tracked files for a commit.
         
@@ -360,7 +360,7 @@ class MockFileTrackingService(IFileTrackingService):
     def get_files_at_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get file paths that existed at a specific checkpoint.
 
@@ -400,7 +400,7 @@ class MockFileTrackingService(IFileTrackingService):
         with self._lock:
             return len(self._checkpoint_links)
     
-    def get_all_tracked_paths(self) -> List[str]:
+    def get_all_tracked_paths(self) -> list[str]:
         """Get all tracked file paths (for testing)."""
         with self._lock:
             paths = []
@@ -408,7 +408,7 @@ class MockFileTrackingService(IFileTrackingService):
                 paths.extend(f.file_path for f in tracked)
             return paths
     
-    def get_operation_log(self) -> List[Dict]:
+    def get_operation_log(self) -> list[dict]:
         """Get operation log (for testing)."""
         with self._lock:
             return self._operation_log.copy()
@@ -421,7 +421,7 @@ class MockFileTrackingService(IFileTrackingService):
             self._tracked_files.clear()
             self._operation_log.clear()
     
-    def get_commit(self, commit_id: str) -> Optional[Dict]:
+    def get_commit(self, commit_id: str) -> dict | None:
         """Get commit data by ID (for testing)."""
         with self._lock:
             return self._commits.get(commit_id)

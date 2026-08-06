@@ -6,13 +6,13 @@ v1.7 ISS-006 Resolution: Added lifecycle management with:
 - create_managed_processor: Factory for production use
 """
 
-from .processor import OutboxProcessor
 from .lifecycle import (
-    OutboxLifecycleManager,
-    LifecycleStatus,
     HealthStatus,
+    LifecycleStatus,
+    OutboxLifecycleManager,
     create_managed_processor,
 )
+from .processor import OutboxProcessor
 
 __all__ = [
     "OutboxProcessor",

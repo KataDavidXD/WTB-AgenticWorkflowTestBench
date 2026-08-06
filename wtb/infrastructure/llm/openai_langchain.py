@@ -12,19 +12,20 @@ the optional LLM dependencies are not installed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from contextlib import closing
-from pathlib import Path
-from threading import RLock
-from typing import Any, Dict, Iterable, List, Optional, Tuple
 import hashlib
 import json
 import os
 import sqlite3
 import time
+from collections.abc import Iterable
+from contextlib import closing
+from dataclasses import dataclass, field
+from pathlib import Path
+from threading import RLock
+from typing import Any
 
 
-def _normalize_base_url(base_url: Optional[str]) -> Optional[str]:
+def _normalize_base_url(base_url: str | None) -> str | None:
     """Normalize provider URLs so equivalent values share caches."""
     if base_url is None:
         return None
@@ -54,10 +55,10 @@ class LangChainOpenAIConfig:
     """
 
     api_key: str = field(default="", repr=False)
-    base_url: Optional[str] = "https://api.openai.com/v1"
+    base_url: str | None = "https://api.openai.com/v1"
     default_text_model: str = "gpt-4o-mini"
     default_embedding_model: str = "text-embedding-3-small"
-    response_cache_path: Optional[str] = None
+    response_cache_path: str | None = None
     response_cache_enabled: bool = True
     debug: bool = False
 
@@ -72,8 +73,8 @@ class LangChainOpenAIConfig:
     @classmethod
     def from_env(
         cls,
-        response_cache_path: Optional[str] = None,
-        response_cache_enabled: Optional[bool] = None,
+        response_cache_path: str | None = None,
+        response_cache_enabled: bool | None = None,
     ) -> "LangChainOpenAIConfig":
         """Build config from common OpenAI-style environment variables."""
         api_key = os.getenv("OPENAI_API_KEY", os.getenv("LLM_API_KEY", ""))
@@ -108,7 +109,7 @@ class LangChainOpenAIConfig:
         """True when persistent response caching is fully configured."""
         return self.response_cache_enabled and bool(self.response_cache_path)
 
-    def cache_identity(self) -> Tuple[Any, ...]:
+    def cache_identity(self) -> tuple[Any, ...]:
         """Stable identity used by the memoized service factory."""
         return (
             self.api_key,
@@ -171,7 +172,7 @@ class _SQLiteTextResponseCache:
             )
             conn.commit()
 
-    def get(self, cache_key: str) -> Optional[str]:
+    def get(self, cache_key: str) -> str | None:
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
                 "SELECT response_text FROM text_generation_cache WHERE cache_key = ?",
@@ -216,8 +217,8 @@ class LangChainOpenAIService:
     def __init__(self, config: LangChainOpenAIConfig):
         self.config = config
         self._openai_client: Any = None
-        self._chat_models: Dict[Tuple[str, float, Optional[int]], Any] = {}
-        self._embedding_models: Dict[str, Any] = {}
+        self._chat_models: dict[tuple[str, float, int | None], Any] = {}
+        self._embedding_models: dict[str, Any] = {}
         self._client_lock = RLock()
         self._cache = (
             _SQLiteTextResponseCache(config.response_cache_path)
@@ -262,7 +263,7 @@ class LangChainOpenAIService:
         with self._client_lock:
             if self._openai_client is None:
                 client_class = self._load_openai_client_class()
-                kwargs: Dict[str, Any] = {"api_key": self.config.api_key}
+                kwargs: dict[str, Any] = {"api_key": self.config.api_key}
                 if self.config.base_url:
                     kwargs["base_url"] = self.config.base_url
                 self._openai_client = client_class(**kwargs)
@@ -270,9 +271,9 @@ class LangChainOpenAIService:
 
     def get_chat_model(
         self,
-        model: Optional[str] = None,
+        model: str | None = None,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> Any:
         """Return a cached ChatOpenAI wrapper for a specific parameter set."""
         resolved_model = model or self.config.default_text_model
@@ -280,7 +281,7 @@ class LangChainOpenAIService:
         with self._client_lock:
             if cache_key not in self._chat_models:
                 chat_class = self._load_chat_model_class()
-                kwargs: Dict[str, Any] = {
+                kwargs: dict[str, Any] = {
                     "model": resolved_model,
                     "temperature": float(temperature),
                     "api_key": self.config.api_key,
@@ -292,13 +293,13 @@ class LangChainOpenAIService:
                 self._chat_models[cache_key] = chat_class(**kwargs)
             return self._chat_models[cache_key]
 
-    def get_embedding_model(self, model: Optional[str] = None) -> Any:
+    def get_embedding_model(self, model: str | None = None) -> Any:
         """Return a cached OpenAIEmbeddings wrapper for a model."""
         resolved_model = model or self.config.default_embedding_model
         with self._client_lock:
             if resolved_model not in self._embedding_models:
                 embedding_class = self._load_embedding_model_class()
-                kwargs: Dict[str, Any] = {
+                kwargs: dict[str, Any] = {
                     "model": resolved_model,
                     "api_key": self.config.api_key,
                 }
@@ -310,10 +311,10 @@ class LangChainOpenAIService:
     def generate_text(
         self,
         prompt: str,
-        model: Optional[str] = None,
-        system_prompt: Optional[str] = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate text and return only the text payload."""
         return self.generate_text_result(
@@ -327,10 +328,10 @@ class LangChainOpenAIService:
     def generate_text_result(
         self,
         prompt: str,
-        model: Optional[str] = None,
-        system_prompt: Optional[str] = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> TextGenerationResult:
         """
         Generate text with detailed cache metadata.
@@ -367,7 +368,7 @@ class LangChainOpenAIService:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        messages: List[Any] = []
+        messages: list[Any] = []
         if system_prompt:
             messages.append(("system", system_prompt))
         messages.append(("human", prompt))
@@ -392,14 +393,14 @@ class LangChainOpenAIService:
     def generate_embeddings(
         self,
         texts: Iterable[str],
-        model: Optional[str] = None,
-    ) -> List[List[float]]:
+        model: str | None = None,
+    ) -> list[list[float]]:
         """Generate embeddings using a cached OpenAIEmbeddings wrapper."""
         text_list = list(texts)
         embedding_model = self.get_embedding_model(model=model)
         return list(embedding_model.embed_documents(text_list))
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Return persistent cache information plus in-process counters."""
         entries = self._cache.count() if self._cache is not None else 0
         return {
@@ -431,7 +432,7 @@ class LangChainOpenAIService:
         if isinstance(content, str):
             return content
         if isinstance(content, list):
-            parts: List[str] = []
+            parts: list[str] = []
             for item in content:
                 if isinstance(item, str):
                     parts.append(item)
@@ -443,7 +444,7 @@ class LangChainOpenAIService:
         return str(content)
 
 
-_SERVICE_CACHE: Dict[Tuple[Any, ...], LangChainOpenAIService] = {}
+_SERVICE_CACHE: dict[tuple[Any, ...], LangChainOpenAIService] = {}
 _SERVICE_CACHE_LOCK = RLock()
 
 

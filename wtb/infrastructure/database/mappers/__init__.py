@@ -12,12 +12,12 @@ Purpose:
 - Eliminate ~500 lines of duplicated code between sync/async repos
 """
 
-from .outbox_mapper import OutboxMapper
 from .blob_storage_core import (
     BlobStorageCore,
-    FileCommitMapper,
     CheckpointFileLinkMapper,
+    FileCommitMapper,
 )
+from .outbox_mapper import OutboxMapper
 
 __all__ = [
     "OutboxMapper",

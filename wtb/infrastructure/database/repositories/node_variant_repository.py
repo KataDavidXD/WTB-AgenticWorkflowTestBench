@@ -1,11 +1,12 @@
 """Node variant repository implementation."""
 
 import json
-from typing import Optional, List
+
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import INodeVariantRepository
 from wtb.domain.models import NodeVariant, WorkflowNode
+
 from ..models import NodeVariantORM
 from .base import BaseRepository
 
@@ -99,7 +100,7 @@ class NodeVariantRepository(BaseRepository[NodeVariant, NodeVariantORM], INodeVa
         except (TypeError, ValueError):
             return f"<non-serializable:{type(obj).__name__}>"
     
-    def find_by_workflow(self, workflow_id: str) -> List[NodeVariant]:
+    def find_by_workflow(self, workflow_id: str) -> list[NodeVariant]:
         """Find all variants for a workflow."""
         orms = (
             self._session.query(NodeVariantORM)
@@ -108,7 +109,7 @@ class NodeVariantRepository(BaseRepository[NodeVariant, NodeVariantORM], INodeVa
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_by_node(self, workflow_id: str, node_id: str) -> List[NodeVariant]:
+    def find_by_node(self, workflow_id: str, node_id: str) -> list[NodeVariant]:
         """Find variants for a specific node."""
         orms = (
             self._session.query(NodeVariantORM)
@@ -117,7 +118,7 @@ class NodeVariantRepository(BaseRepository[NodeVariant, NodeVariantORM], INodeVa
         )
         return [self._to_domain(orm) for orm in orms]
     
-    def find_active(self, workflow_id: str) -> List[NodeVariant]:
+    def find_active(self, workflow_id: str) -> list[NodeVariant]:
         """Find active variants for a workflow."""
         orms = (
             self._session.query(NodeVariantORM)

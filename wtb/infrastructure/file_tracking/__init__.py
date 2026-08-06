@@ -47,11 +47,13 @@ Usage:
     cleanup_service = FileCleanupService()
 """
 
-from wtb.infrastructure.file_tracking.mock_service import MockFileTrackingService
-from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
-from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
-from wtb.infrastructure.file_tracking.ray_filetracker_service import RayFileTrackerService
 from wtb.infrastructure.file_tracking.cleanup_service import FileCleanupService
+from wtb.infrastructure.file_tracking.filetracker_service import FileTrackerService
+from wtb.infrastructure.file_tracking.mock_service import MockFileTrackingService
+from wtb.infrastructure.file_tracking.ray_filetracker_service import (
+    RayFileTrackerService,
+)
+from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
 
 __all__ = [
     "MockFileTrackingService",

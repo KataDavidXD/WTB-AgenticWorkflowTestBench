@@ -33,22 +33,40 @@ Usage:
     print(trail.format_display())
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable, Type, TYPE_CHECKING
 from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 from wtb.domain.events import (
-    WTBEvent,
-    ExecutionStartedEvent, ExecutionCompletedEvent, ExecutionFailedEvent,
-    ExecutionPausedEvent, ExecutionResumedEvent, ExecutionCancelledEvent,
-    NodeStartedEvent, NodeCompletedEvent, NodeFailedEvent, NodeSkippedEvent,
-    CheckpointCreatedEvent, RollbackPerformedEvent, BranchCreatedEvent,
+    BranchCreatedEvent,
+    CheckpointCreatedEvent,
+    ExecutionCancelledEvent,
+    ExecutionCompletedEvent,
+    ExecutionFailedEvent,
+    ExecutionPausedEvent,
+    ExecutionResumedEvent,
+    ExecutionStartedEvent,
+    NodeCompletedEvent,
+    NodeFailedEvent,
+    NodeSkippedEvent,
+    NodeStartedEvent,
+    RayActorFailedEvent,
+    RayActorInitializedEvent,
+    RayActorPoolCreatedEvent,
+    RayBackpressureAppliedEvent,
+    RayBatchTestCancelledEvent,
+    RayBatchTestCompletedEvent,
+    RayBatchTestFailedEvent,
     # Ray events
-    RayBatchTestStartedEvent, RayBatchTestCompletedEvent, RayBatchTestFailedEvent,
-    RayBatchTestCancelledEvent, RayActorPoolCreatedEvent, RayActorInitializedEvent,
-    RayActorFailedEvent, RayVariantExecutionStartedEvent, RayVariantExecutionCompletedEvent,
-    RayVariantExecutionFailedEvent, RayVariantFilesTrackedEvent, RayBackpressureAppliedEvent,
+    RayBatchTestStartedEvent,
+    RayVariantExecutionCompletedEvent,
+    RayVariantExecutionFailedEvent,
+    RayVariantExecutionStartedEvent,
+    RayVariantFilesTrackedEvent,
+    RollbackPerformedEvent,
+    WTBEvent,
 )
 
 if TYPE_CHECKING:
@@ -117,13 +135,13 @@ class WTBAuditEntry:
     event_type: WTBAuditEventType
     severity: WTBAuditSeverity
     message: str
-    execution_id: Optional[str] = None
-    node_id: Optional[str] = None
-    details: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    execution_id: str | None = None
+    node_id: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    duration_ms: float | None = None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "timestamp": self.timestamp.isoformat(),
@@ -138,7 +156,7 @@ class WTBAuditEntry:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WTBAuditEntry":
+    def from_dict(cls, data: dict[str, Any]) -> "WTBAuditEntry":
         """Create from dictionary."""
         return cls(
             timestamp=datetime.fromisoformat(data["timestamp"]),
@@ -188,14 +206,14 @@ class WTBAuditTrail:
     - Implements a flushing mechanism to avoid memory bloat
     - Use flush() to get and clear entries for persistence
     """
-    entries: List[WTBAuditEntry] = field(default_factory=list)
-    execution_id: Optional[str] = None
-    workflow_id: Optional[str] = None
-    started_at: Optional[datetime] = None
-    ended_at: Optional[datetime] = None
+    entries: list[WTBAuditEntry] = field(default_factory=list)
+    execution_id: str | None = None
+    workflow_id: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
     
     # Imported AgentGit audits (keyed by checkpoint_id or node_id)
-    _agentgit_audits: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    _agentgit_audits: dict[str, dict[str, Any]] = field(default_factory=dict)
     
     # ═══════════════════════════════════════════════════════════════
     # Entry Management
@@ -205,7 +223,7 @@ class WTBAuditTrail:
         """Add an audit entry."""
         self.entries.append(entry)
     
-    def flush(self) -> List[WTBAuditEntry]:
+    def flush(self) -> list[WTBAuditEntry]:
         """
         Clear and return current entries for persistence.
         
@@ -232,7 +250,7 @@ class WTBAuditTrail:
         if entry:
             self.add_entry(entry)
     
-    def _event_to_entry(self, event: WTBEvent) -> Optional[WTBAuditEntry]:
+    def _event_to_entry(self, event: WTBEvent) -> WTBAuditEntry | None:
         """Convert WTB event to audit entry."""
         
         # Execution events
@@ -600,7 +618,7 @@ class WTBAuditTrail:
     
     def import_agentgit_audit(
         self, 
-        audit_dict: Dict[str, Any], 
+        audit_dict: dict[str, Any],
         key: str
     ) -> None:
         """
@@ -612,7 +630,7 @@ class WTBAuditTrail:
         """
         self._agentgit_audits[key] = audit_dict
     
-    def get_agentgit_audit(self, key: str) -> Optional[Dict[str, Any]]:
+    def get_agentgit_audit(self, key: str) -> dict[str, Any] | None:
         """Get imported AgentGit audit by key."""
         return self._agentgit_audits.get(key)
     
@@ -620,19 +638,19 @@ class WTBAuditTrail:
     # Query Methods
     # ═══════════════════════════════════════════════════════════════
     
-    def get_errors(self) -> List[WTBAuditEntry]:
+    def get_errors(self) -> list[WTBAuditEntry]:
         """Get all error entries."""
         return [e for e in self.entries if e.severity == WTBAuditSeverity.ERROR]
     
-    def get_by_node(self, node_id: str) -> List[WTBAuditEntry]:
+    def get_by_node(self, node_id: str) -> list[WTBAuditEntry]:
         """Get entries for a specific node."""
         return [e for e in self.entries if e.node_id == node_id]
     
-    def get_by_type(self, event_type: WTBAuditEventType) -> List[WTBAuditEntry]:
+    def get_by_type(self, event_type: WTBAuditEventType) -> list[WTBAuditEntry]:
         """Get entries by event type."""
         return [e for e in self.entries if e.event_type == event_type]
     
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get summary statistics."""
         return {
             "total_entries": len(self.entries),
@@ -668,7 +686,7 @@ class WTBAuditTrail:
     # Serialization
     # ═══════════════════════════════════════════════════════════════
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "execution_id": self.execution_id,
@@ -681,7 +699,7 @@ class WTBAuditTrail:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WTBAuditTrail":
+    def from_dict(cls, data: dict[str, Any]) -> "WTBAuditTrail":
         """Create from dictionary."""
         trail = cls(
             execution_id=data.get("execution_id"),
@@ -784,7 +802,7 @@ class AuditEventListener:
     def __init__(
         self,
         audit_trail: WTBAuditTrail,
-        event_types: Optional[List[Type[WTBEvent]]] = None,
+        event_types: list[type[WTBEvent]] | None = None,
     ):
         """
         Initialize listener.
@@ -794,8 +812,8 @@ class AuditEventListener:
             event_types: Specific event types to listen for (all if None)
         """
         self.audit_trail = audit_trail
-        self._event_bus: Optional["WTBEventBus"] = None  # type: ignore
-        self._subscriptions: List[tuple] = []
+        self._event_bus: "WTBEventBus" | None = None  # type: ignore
+        self._subscriptions: list[tuple] = []
         
         # Default to all recordable event types
         self._event_types = event_types or [

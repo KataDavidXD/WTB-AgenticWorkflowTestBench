@@ -8,8 +8,8 @@ Contains implementations of ICheckpointStore for different backends:
 
 from .inmemory_checkpoint_store import InMemoryCheckpointStore
 from .langgraph_checkpoint_store import (
-    LangGraphCheckpointStore,
     LangGraphCheckpointConfig,
+    LangGraphCheckpointStore,
 )
 
 __all__ = [
