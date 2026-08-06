@@ -29,7 +29,7 @@ import sys
 import tempfile
 import time
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from wtb.sdk._example_graphs import create_linear_graph as _create_linear_graph
 
@@ -40,7 +40,7 @@ PASS = "PASS"
 FAIL = "FAIL"
 SKIP = "SKIP"
 
-results: List[Tuple[str, str, str]] = []
+results: list[tuple[str, str, str]] = []
 
 
 def record(name: str, status: str, detail: str = "") -> None:
@@ -55,10 +55,10 @@ def record(name: str, status: str, detail: str = "") -> None:
 # ---------------------------------------------------------------------------
 # Graph factories (SDK-only, minimal LangGraph)
 # ---------------------------------------------------------------------------
-_INIT_STATE: Dict[str, Any] = {"messages": [], "count": 0, "result": ""}
+_INIT_STATE: dict[str, Any] = {"messages": [], "count": 0, "result": ""}
 
 
-def _node_b_variant(state: Dict[str, Any]) -> Dict[str, Any]:
+def _node_b_variant(state: dict[str, Any]) -> dict[str, Any]:
     messages = state.get("messages", []) + ["B:variant"]
     return {
         "messages": messages,
@@ -128,12 +128,20 @@ def check_import() -> None:
 def check_sdk_imports() -> None:
     try:
         from wtb.sdk import (  # noqa: F401
-            WTBTestBench, WorkflowProject,
-            FileTrackingConfig, EnvironmentConfig, ExecutionConfig,
-            EnvSpec, RayConfig, NodeResourceConfig,
-            WorkspaceIsolationConfig, PauseStrategyConfig,
-            RollbackResult, ForkResult,
-            BatchRollbackResult, BatchForkResult,
+            BatchForkResult,
+            BatchRollbackResult,
+            EnvironmentConfig,
+            EnvSpec,
+            ExecutionConfig,
+            FileTrackingConfig,
+            ForkResult,
+            NodeResourceConfig,
+            PauseStrategyConfig,
+            RayConfig,
+            RollbackResult,
+            WorkflowProject,
+            WorkspaceIsolationConfig,
+            WTBTestBench,
         )
         record("sdk imports", PASS, "14 symbols")
     except Exception as exc:
@@ -150,10 +158,10 @@ def check_create_bench() -> None:
         record("create bench", FAIL, str(exc))
 
 
-def check_run_workflow() -> Optional[Any]:
+def check_run_workflow() -> Any | None:
     """Run a workflow end-to-end and return (bench, execution) for later checks."""
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject
+        from wtb.sdk import WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(mode="testing")
         project = WorkflowProject(name="smoke", graph_factory=_create_linear_graph)
@@ -169,7 +177,7 @@ def check_run_workflow() -> Optional[Any]:
         return None
 
 
-def check_checkpoints(ctx: Optional[Any]) -> Optional[list]:
+def check_checkpoints(ctx: Any | None) -> list | None:
     if ctx is None:
         record("checkpoints", SKIP, "workflow run failed")
         return None
@@ -184,7 +192,7 @@ def check_checkpoints(ctx: Optional[Any]) -> Optional[list]:
         return None
 
 
-def check_rollback(ctx: Optional[Any], cps: Optional[list]) -> None:
+def check_rollback(ctx: Any | None, cps: list | None) -> None:
     if ctx is None or not cps:
         record("rollback", SKIP, "no context/checkpoints")
         return
@@ -198,7 +206,7 @@ def check_rollback(ctx: Optional[Any], cps: Optional[list]) -> None:
         record("rollback", FAIL, str(exc))
 
 
-def check_fork(ctx: Optional[Any], cps: Optional[list]) -> None:
+def check_fork(ctx: Any | None, cps: list | None) -> None:
     if ctx is None or not cps:
         record("fork", SKIP, "no context/checkpoints")
         return
@@ -221,7 +229,7 @@ def check_single_variant_control_flow() -> None:
     """Single execution with node variant, rollback, resume, fork, resume."""
     tmp = tempfile.mkdtemp(prefix="wtb_single_variant_")
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject
+        from wtb.sdk import WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(mode="development", data_dir=tmp)
         project = WorkflowProject(name="single_variant", graph_factory=_create_linear_graph)
@@ -256,7 +264,7 @@ def check_single_variant_control_flow() -> None:
 def check_batch_sequential() -> None:
     """Batch test via sequential fallback (no Ray)."""
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject
+        from wtb.sdk import WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(mode="testing")
         project = WorkflowProject(name="batch_seq", graph_factory=_create_linear_graph)
@@ -289,7 +297,7 @@ def check_batch_rollback_resume_and_fork() -> None:
     """
     tmp = tempfile.mkdtemp(prefix="wtb_check_")
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject
+        from wtb.sdk import WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(mode="development", data_dir=tmp)
         project = WorkflowProject(name="br_test", graph_factory=_create_linear_graph)
@@ -360,7 +368,7 @@ def check_ray_batch(skip: bool = False) -> None:
     tmp = tempfile.mkdtemp(prefix="wtb_ray_")
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+        from wtb.sdk import ExecutionConfig, RayConfig, WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(
             mode="development",
@@ -409,7 +417,7 @@ def check_ray_batch_cache_metadata(skip: bool = False) -> None:
     tmp = tempfile.mkdtemp(prefix="wtb_ray_cache_")
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+        from wtb.sdk import ExecutionConfig, RayConfig, WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(
             mode="development",
@@ -479,7 +487,7 @@ def check_ray_batch_rollback_fork_cache(skip: bool = False) -> None:
     tmp = tempfile.mkdtemp(prefix="wtb_ray_rbfk_")
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+        from wtb.sdk import ExecutionConfig, RayConfig, WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(
             mode="development",
@@ -573,7 +581,7 @@ def check_ray_variant_rollback_resume_fork(skip: bool = False) -> None:
 
 
 def _check_ray_variant_control_flow(
-    grpc_url: Optional[str],
+    grpc_url: str | None,
     prefix: str,
     tmp_prefix: str,
 ) -> None:
@@ -581,7 +589,7 @@ def _check_ray_variant_control_flow(
     os.environ["WTB_RAY_STORAGE_ROOT"] = os.path.join(tmp, "ray_actors")
     bench = None
     try:
-        from wtb.sdk import WTBTestBench, WorkflowProject, ExecutionConfig, RayConfig
+        from wtb.sdk import ExecutionConfig, RayConfig, WorkflowProject, WTBTestBench
 
         bench = WTBTestBench.create(
             mode="development",
@@ -651,7 +659,7 @@ def _check_ray_variant_control_flow(
 # Tier 3 -- Venv service (GrpcEnvironmentProvider)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def check_venv_provider(grpc_url: Optional[str]) -> None:
+def check_venv_provider(grpc_url: str | None) -> None:
     if grpc_url is None:
         record("venv provider", SKIP, "no --grpc-url provided")
         return
@@ -692,7 +700,7 @@ def check_venv_provider(grpc_url: Optional[str]) -> None:
         traceback.print_exc()
 
 
-def check_venv_variant_rollback_resume_fork(grpc_url: Optional[str]) -> None:
+def check_venv_variant_rollback_resume_fork(grpc_url: str | None) -> None:
     """Ray batch with GrpcEnvironmentProvider plus variant/control operations."""
     if grpc_url is None:
         record("venv variant", SKIP, "no --grpc-url provided")
