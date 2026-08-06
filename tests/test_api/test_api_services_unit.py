@@ -17,10 +17,10 @@ Test Scenarios:
 - Error handling and rollback
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, AsyncMock, patch
-from typing import Dict, Any
+from unittest.mock import MagicMock
+
+import pytest
 
 # Skip if dependencies not installed
 pytest.importorskip("pydantic")
@@ -465,7 +465,6 @@ class TestInterfaceCompliance:
     
     def test_execution_service_implements_interface(self, execution_service):
         """Test ExecutionAPIService implements IExecutionAPIService."""
-        from wtb.domain.interfaces.api_services import IExecutionAPIService
         
         # Verify all interface methods exist
         assert hasattr(execution_service, "list_executions")
@@ -480,7 +479,6 @@ class TestInterfaceCompliance:
     
     def test_audit_service_implements_interface(self, audit_service):
         """Test AuditAPIService implements IAuditAPIService."""
-        from wtb.domain.interfaces.api_services import IAuditAPIService
         
         assert hasattr(audit_service, "query_events")
         assert hasattr(audit_service, "get_summary")
@@ -488,7 +486,6 @@ class TestInterfaceCompliance:
     
     def test_batch_test_service_implements_interface(self, batch_test_service):
         """Test BatchTestAPIService implements IBatchTestAPIService."""
-        from wtb.domain.interfaces.api_services import IBatchTestAPIService
         
         assert hasattr(batch_test_service, "create_batch_test")
         assert hasattr(batch_test_service, "get_batch_test")

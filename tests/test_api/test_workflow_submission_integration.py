@@ -19,27 +19,25 @@ Author: Senior Architect
 Date: 2026-01-15
 """
 
-import pytest
-from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
-from typing import Dict, Any, List, Callable
-import uuid
+from collections.abc import Callable
+from datetime import datetime
+from unittest.mock import MagicMock
 
+import pytest
+
+from wtb.sdk import BatchTestResult, Execution  # Domain models
+from wtb.sdk.test_bench import WTBTestBench
 from wtb.sdk.workflow_project import (
-    WorkflowProject,
-    FileTrackingConfig,
     EnvironmentConfig,
-    ExecutionConfig,
     EnvSpec,
+    ExecutionConfig,
+    FileTrackingConfig,
     NodeResourceConfig,
-    RayConfig,
     NodeVariant,
+    RayConfig,
+    WorkflowProject,
     WorkflowVariant,
 )
-from wtb.sdk.test_bench import WTBTestBench
-from wtb.sdk import Execution, BatchTestResult, Checkpoint  # Domain models
-from wtb.application.services.ray_batch_runner import VariantExecutionResult
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -60,22 +58,22 @@ def mock_graph_factory(mock_graph):
 
 
 @pytest.fixture
-def sample_node_implementations() -> Dict[str, Callable]:
+def sample_node_implementations() -> dict[str, Callable]:
     """Create sample node implementations for testing."""
     
-    def dense_retriever(state: Dict) -> Dict:
+    def dense_retriever(state: dict) -> dict:
         return {
             "documents": [{"id": "doc1", "content": "Dense result", "score": 0.95}],
             "retrieval_method": "dense",
         }
     
-    def bm25_retriever(state: Dict) -> Dict:
+    def bm25_retriever(state: dict) -> dict:
         return {
             "documents": [{"id": "doc2", "content": "BM25 result", "score": 0.80}],
             "retrieval_method": "bm25",
         }
     
-    def hybrid_retriever(state: Dict) -> Dict:
+    def hybrid_retriever(state: dict) -> dict:
         return {
             "documents": [
                 {"id": "doc1", "content": "Dense result", "score": 0.90},
@@ -84,14 +82,14 @@ def sample_node_implementations() -> Dict[str, Callable]:
             "retrieval_method": "hybrid",
         }
     
-    def cross_encoder_reranker(state: Dict) -> Dict:
+    def cross_encoder_reranker(state: dict) -> dict:
         docs = state.get("documents", [])
         return {"reranked_documents": sorted(docs, key=lambda x: x["score"], reverse=True)}
     
-    def openai_generator(state: Dict) -> Dict:
+    def openai_generator(state: dict) -> dict:
         return {"answer": "Generated answer from OpenAI", "model": "gpt-4"}
     
-    def local_generator(state: Dict) -> Dict:
+    def local_generator(state: dict) -> dict:
         return {"answer": "Generated answer from local LLM", "model": "local"}
     
     return {

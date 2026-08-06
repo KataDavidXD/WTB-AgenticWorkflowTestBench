@@ -18,16 +18,15 @@ Author: Senior Architect
 Date: 2026-01-15
 """
 
-import pytest
-import asyncio
-import tempfile
 import os
-import json
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, Any, Optional, Generator
-from unittest.mock import MagicMock, patch
+import tempfile
 import uuid
+from collections.abc import Generator
+from datetime import datetime, timezone
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
 
 # Skip if dependencies not available
 pytest.importorskip("fastapi")
@@ -41,19 +40,16 @@ from sqlalchemy.orm import sessionmaker
 from wtb.api.rest.app import create_app
 from wtb.api.rest.dependencies import (
     AppState,
-    set_app_state,
     reset_app_state,
-    ExecutionService,
-    AuditService,
+    set_app_state,
 )
 from wtb.infrastructure.events import (
-    WTBEventBus,
-    WTBAuditTrail,
     WTBAuditEntry,
     WTBAuditEventType,
     WTBAuditSeverity,
+    WTBAuditTrail,
+    WTBEventBus,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Database Fixtures
@@ -126,11 +122,11 @@ class MockExecutionController:
     """
     
     def __init__(self):
-        self._executions: Dict[str, MockExecution] = {}
-        self._checkpoints: Dict[str, Dict[str, Any]] = {}
+        self._executions: dict[str, MockExecution] = {}
+        self._checkpoints: dict[str, dict[str, Any]] = {}
         self._checkpoint_counter = 0
     
-    def create_execution(self, workflow_id: str, initial_state: Dict[str, Any]) -> MockExecution:
+    def create_execution(self, workflow_id: str, initial_state: dict[str, Any]) -> MockExecution:
         """Create new execution."""
         execution_id = str(uuid.uuid4())
         execution = MockExecution(execution_id, workflow_id)
@@ -165,7 +161,7 @@ class MockExecutionController:
         
         return execution
     
-    def resume(self, execution_id: str, modified_state: Optional[Dict] = None) -> MockExecution:
+    def resume(self, execution_id: str, modified_state: dict | None = None) -> MockExecution:
         """Resume execution."""
         execution = self.get_status(execution_id)
         execution.status.value = "running"
@@ -187,7 +183,7 @@ class MockExecutionController:
         
         return execution
     
-    def update_execution_state(self, execution_id: str, changes: Dict[str, Any]) -> bool:
+    def update_execution_state(self, execution_id: str, changes: dict[str, Any]) -> bool:
         """Update execution state."""
         execution = self.get_status(execution_id)
         execution.state.workflow_variables.update(changes)
