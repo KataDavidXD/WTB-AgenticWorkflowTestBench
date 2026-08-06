@@ -8,33 +8,32 @@ Provides:
 """
 
 from datetime import datetime
-from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Query
 
+from wtb.api.rest.dependencies import AuditService, get_audit_service
 from wtb.api.rest.models import (
-    AuditEventResponse,
     AuditEventListResponse,
-    AuditSummaryResponse,
-    AuditTimelineResponse,
-    AuditTimelineEntry,
+    AuditEventResponse,
     AuditEventTypeEnum,
     AuditSeverityEnum,
+    AuditSummaryResponse,
+    AuditTimelineEntry,
+    AuditTimelineResponse,
     PaginationMeta,
 )
-from wtb.api.rest.dependencies import get_audit_service, AuditService
 
 router = APIRouter(prefix="/api/v1/audit", tags=["Audit"])
 
 
 @router.get("/events", response_model=AuditEventListResponse)
 async def list_audit_events(
-    execution_id: Optional[str] = Query(None, description="Filter by execution ID"),
-    event_type: Optional[List[AuditEventTypeEnum]] = Query(None, description="Filter by event type"),
-    severity: Optional[List[AuditSeverityEnum]] = Query(None, description="Filter by severity"),
-    node_id: Optional[str] = Query(None, description="Filter by node ID"),
-    since: Optional[datetime] = Query(None, description="Events since this time"),
-    until: Optional[datetime] = Query(None, description="Events until this time"),
+    execution_id: str | None = Query(None, description="Filter by execution ID"),
+    event_type: list[AuditEventTypeEnum] | None = Query(None, description="Filter by event type"),
+    severity: list[AuditSeverityEnum] | None = Query(None, description="Filter by severity"),
+    node_id: str | None = Query(None, description="Filter by node ID"),
+    since: datetime | None = Query(None, description="Events since this time"),
+    until: datetime | None = Query(None, description="Events until this time"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     audit_service: AuditService = Depends(get_audit_service),
@@ -88,7 +87,7 @@ async def list_audit_events(
 
 @router.get("/summary", response_model=AuditSummaryResponse)
 async def get_audit_summary(
-    execution_id: Optional[str] = Query(None, description="Filter by execution ID"),
+    execution_id: str | None = Query(None, description="Filter by execution ID"),
     time_range: str = Query("1h", description="Time range: 1h, 6h, 24h, 7d"),
     audit_service: AuditService = Depends(get_audit_service),
 ) -> AuditSummaryResponse:

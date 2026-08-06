@@ -9,30 +9,29 @@ Provides:
 """
 
 from datetime import datetime, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from wtb.api.rest.dependencies import BatchTestService, get_batch_test_service
 from wtb.api.rest.models import (
     BatchTestCreateRequest,
-    BatchTestResponse,
     BatchTestListResponse,
-    BatchTestStatusEnum,
     BatchTestProgressSchema,
+    BatchTestResponse,
+    BatchTestStatusEnum,
     ComparisonMatrixResponse,
-    VariantResultSchema,
     PaginationMeta,
+    VariantResultSchema,
 )
-from wtb.api.rest.dependencies import get_batch_test_service, BatchTestService
 
 router = APIRouter(prefix="/api/v1/batch-tests", tags=["Batch Tests"])
 
 
 @router.get("", response_model=BatchTestListResponse)
 async def list_batch_tests(
-    workflow_id: Optional[str] = Query(None, description="Filter by workflow ID"),
-    status: Optional[BatchTestStatusEnum] = Query(None, description="Filter by status"),
+    workflow_id: str | None = Query(None, description="Filter by workflow ID"),
+    status: BatchTestStatusEnum | None = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     batch_test_service: BatchTestService = Depends(get_batch_test_service),
@@ -173,7 +172,7 @@ async def get_batch_test_results(
 @router.post("/{batch_test_id}/stop")
 async def stop_batch_test(
     batch_test_id: str,
-    reason: Optional[str] = Query(None, max_length=500),
+    reason: str | None = Query(None, max_length=500),
     batch_test_service: BatchTestService = Depends(get_batch_test_service),
 ) -> dict:
     """
@@ -220,8 +219,8 @@ async def stream_batch_test_progress(
     
     Use this for real-time progress monitoring in UI.
     """
-    import json
     import asyncio
+    import json
     
     async def event_generator():
         """Generate SSE events for progress updates."""

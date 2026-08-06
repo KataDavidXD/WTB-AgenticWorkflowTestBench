@@ -9,30 +9,27 @@ Provides:
 """
 
 from datetime import datetime, timezone
-from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from wtb.api.rest.models import (
-    WorkflowCreateRequest,
-    WorkflowUpdateRequest,
-    WorkflowResponse,
-    WorkflowListResponse,
-    WorkflowNodeSchema,
-    WorkflowEdgeSchema,
-    ExecutionCreateRequest,
-    ExecutionResponse,
-    ExecutionStatusEnum,
-    ExecutionStateSchema,
     BatchTestCreateRequest,
     BatchTestResponse,
     BatchTestStatusEnum,
-    VariantCreateRequest,
-    VariantResponse,
-    VariantListResponse,
+    ExecutionCreateRequest,
+    ExecutionResponse,
+    ExecutionStateSchema,
+    ExecutionStatusEnum,
     PaginationMeta,
+    VariantCreateRequest,
+    VariantListResponse,
+    VariantResponse,
+    WorkflowCreateRequest,
+    WorkflowListResponse,
+    WorkflowNodeSchema,
+    WorkflowResponse,
+    WorkflowUpdateRequest,
 )
-from wtb.api.rest.dependencies import get_app_state
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["Workflows"])
 
@@ -45,7 +42,7 @@ router = APIRouter(prefix="/api/v1/workflows", tags=["Workflows"])
 async def list_workflows(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    search: Optional[str] = Query(None, max_length=100),
+    search: str | None = Query(None, max_length=100),
 ) -> WorkflowListResponse:
     """
     List all workflows with optional search.

@@ -28,10 +28,10 @@ Proto Compilation:
 """
 
 from .servicer import (
-    WTBServicer,
-    create_grpc_server,
-    create_async_grpc_server,
     GRPC_AVAILABLE,
+    WTBServicer,
+    create_async_grpc_server,
+    create_grpc_server,
 )
 
 __all__ = [

@@ -19,16 +19,13 @@ SOLID Compliance:
 - ISP: Separate services for different concerns
 """
 
-from typing import Optional
-from functools import lru_cache
 
 from wtb.application.services import ExecutionController
 from wtb.infrastructure.events import (
-    WTBEventBus,
     WTBAuditTrail,
+    WTBEventBus,
     get_wtb_event_bus,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Application State (Singleton services)
@@ -47,9 +44,9 @@ class AppState:
     """
     
     def __init__(self):
-        self._event_bus: Optional[WTBEventBus] = None
-        self._audit_trail: Optional[WTBAuditTrail] = None
-        self._execution_controller: Optional[ExecutionController] = None
+        self._event_bus: WTBEventBus | None = None
+        self._audit_trail: WTBAuditTrail | None = None
+        self._execution_controller: ExecutionController | None = None
         self._unit_of_work = None  # IUnitOfWork
         self._initialized: bool = False
         
@@ -61,8 +58,8 @@ class AppState:
     
     def initialize(
         self,
-        event_bus: Optional[WTBEventBus] = None,
-        execution_controller: Optional[ExecutionController] = None,
+        event_bus: WTBEventBus | None = None,
+        execution_controller: ExecutionController | None = None,
         unit_of_work = None,
     ) -> None:
         """
@@ -129,7 +126,7 @@ class AppState:
         return self._audit_trail
     
     @property
-    def execution_controller(self) -> Optional[ExecutionController]:
+    def execution_controller(self) -> ExecutionController | None:
         """Get the execution controller instance."""
         return self._execution_controller
     
@@ -165,7 +162,7 @@ class AppState:
 
 
 # Global application state
-_app_state: Optional[AppState] = None
+_app_state: AppState | None = None
 
 
 def get_app_state() -> AppState:
@@ -304,8 +301,8 @@ class LegacyExecutionService:
     
     async def list_executions(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
+        workflow_id: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -321,7 +318,7 @@ class LegacyExecutionService:
             }
         }
     
-    async def get_execution(self, execution_id: str) -> Optional[dict]:
+    async def get_execution(self, execution_id: str) -> dict | None:
         """Get execution by ID."""
         try:
             execution = self._controller.get_status(execution_id)
@@ -350,8 +347,8 @@ class LegacyExecutionService:
     async def pause(
         self,
         execution_id: str,
-        reason: Optional[str] = None,
-        at_node: Optional[str] = None,
+        reason: str | None = None,
+        at_node: str | None = None,
     ) -> dict:
         """Pause execution."""
         execution = self._controller.pause(execution_id)
@@ -362,8 +359,8 @@ class LegacyExecutionService:
     async def resume(
         self,
         execution_id: str,
-        modified_state: Optional[dict] = None,
-        from_node: Optional[str] = None,
+        modified_state: dict | None = None,
+        from_node: str | None = None,
     ) -> dict:
         """Resume execution."""
         execution = self._controller.resume(execution_id, modified_state)
@@ -392,7 +389,7 @@ class LegacyExecutionService:
     async def inspect_state(
         self,
         execution_id: str,
-        keys: Optional[list] = None,
+        keys: list | None = None,
     ) -> dict:
         """Inspect execution state."""
         state = self._controller.get_state(execution_id)
@@ -425,12 +422,12 @@ class LegacyAuditService:
     
     async def query_events(
         self,
-        execution_id: Optional[str] = None,
-        event_types: Optional[list] = None,
-        severities: Optional[list] = None,
-        node_id: Optional[str] = None,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
+        execution_id: str | None = None,
+        event_types: list | None = None,
+        severities: list | None = None,
+        node_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict:
@@ -477,7 +474,7 @@ class LegacyAuditService:
     
     async def get_summary(
         self,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
         time_range: str = "1h",
     ) -> dict:
         """Get audit summary statistics."""
@@ -552,8 +549,8 @@ class LegacyBatchTestService:
         self,
         workflow_id: str,
         variants: list,
-        initial_state: Optional[dict] = None,
-        parallelism: Optional[int] = None,
+        initial_state: dict | None = None,
+        parallelism: int | None = None,
         use_ray: bool = True,
     ) -> str:
         """Create and start a batch test."""
@@ -570,7 +567,7 @@ class LegacyBatchTestService:
         
         return batch_test_id
     
-    async def get_batch_test(self, batch_test_id: str) -> Optional[dict]:
+    async def get_batch_test(self, batch_test_id: str) -> dict | None:
         """Get batch test by ID."""
         return self._batch_tests.get(batch_test_id)
     

@@ -8,31 +8,29 @@ Manages WebSocket connections with:
 - Integration with WTBEventBus
 """
 
-from typing import Dict, Set, Optional
-from datetime import datetime, timezone
 import asyncio
 import uuid
-import json
+from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from wtb.infrastructure.events import WTBEventBus, get_wtb_event_bus
 from wtb.domain.events import (
-    WTBEvent,
-    ExecutionStartedEvent,
+    BranchCreatedEvent,
+    CheckpointCreatedEvent,
+    ExecutionCancelledEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
     ExecutionPausedEvent,
     ExecutionResumedEvent,
-    ExecutionCancelledEvent,
-    NodeStartedEvent,
+    ExecutionStartedEvent,
     NodeCompletedEvent,
     NodeFailedEvent,
     NodeSkippedEvent,
-    CheckpointCreatedEvent,
+    NodeStartedEvent,
     RollbackPerformedEvent,
-    BranchCreatedEvent,
+    WTBEvent,
 )
+from wtb.infrastructure.events import WTBEventBus, get_wtb_event_bus
 
 
 class ConnectionManager:
@@ -49,15 +47,15 @@ class ConnectionManager:
     - Uses asyncio locks for connection management
     """
     
-    def __init__(self, event_bus: Optional[WTBEventBus] = None):
-        self._connections: Dict[str, WebSocket] = {}
-        self._subscriptions: Dict[str, Set[str]] = {}  # topic → {connection_ids}
-        self._connection_topics: Dict[str, Set[str]] = {}  # connection_id → {topics}
+    def __init__(self, event_bus: WTBEventBus | None = None):
+        self._connections: dict[str, WebSocket] = {}
+        self._subscriptions: dict[str, set[str]] = {}  # topic → {connection_ids}
+        self._connection_topics: dict[str, set[str]] = {}  # connection_id → {topics}
         self._event_bus = event_bus
         self._lock = asyncio.Lock()
         self._event_bridge_active = False
     
-    async def connect(self, websocket: WebSocket, client_id: Optional[str] = None) -> str:
+    async def connect(self, websocket: WebSocket, client_id: str | None = None) -> str:
         """
         Accept WebSocket connection.
         
@@ -153,7 +151,7 @@ class ConnectionManager:
             Number of clients message was sent to
         """
         sent_count = 0
-        clients_to_notify: Set[str] = set()
+        clients_to_notify: set[str] = set()
         
         async with self._lock:
             # Direct subscribers
@@ -187,7 +185,7 @@ class ConnectionManager:
             await self.disconnect(client_id)
             return False
     
-    def setup_event_bridge(self, event_bus: Optional[WTBEventBus] = None) -> None:
+    def setup_event_bridge(self, event_bus: WTBEventBus | None = None) -> None:
         """
         Setup bridge from WTB events to WebSocket topics.
         
@@ -243,13 +241,13 @@ class ConnectionManager:
         return len(self._connections)
     
     @property
-    def active_subscriptions(self) -> Dict[str, int]:
+    def active_subscriptions(self) -> dict[str, int]:
         """Get subscription counts per topic."""
         return {topic: len(clients) for topic, clients in self._subscriptions.items()}
 
 
 # Global connection manager
-_connection_manager: Optional[ConnectionManager] = None
+_connection_manager: ConnectionManager | None = None
 
 
 def get_connection_manager() -> ConnectionManager:
@@ -269,7 +267,7 @@ def set_connection_manager(manager: ConnectionManager) -> None:
 
 async def websocket_endpoint(
     websocket: WebSocket,
-    connection_manager: Optional[ConnectionManager] = None,
+    connection_manager: ConnectionManager | None = None,
 ) -> None:
     """
     WebSocket endpoint for real-time updates.
@@ -312,6 +310,6 @@ async def websocket_endpoint(
     
     except WebSocketDisconnect:
         await manager.disconnect(client_id)
-    except Exception as e:
+    except Exception:
         await manager.disconnect(client_id)
         raise

@@ -10,38 +10,35 @@ Provides fine-grained control over workflow executions:
 """
 
 from datetime import datetime, timezone
-from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
+from wtb.api.rest.dependencies import (
+    AuditService,
+    ExecutionService,
+    get_audit_service,
+    get_execution_service,
+)
 from wtb.api.rest.models import (
-    ExecutionCreateRequest,
-    ExecutionResponse,
+    AuditEventListResponse,
+    BranchCreateRequest,
+    BranchListResponse,
+    BranchResponse,
+    CheckpointListResponse,
+    CheckpointResponse,
+    ControlResponse,
+    ExecuteSingleNodeRequest,
     ExecutionListResponse,
+    ExecutionResponse,
     ExecutionStateSchema,
     ExecutionStatusEnum,
+    NodeExecutionStatusSchema,
+    PaginationMeta,
     PauseRequest,
     ResumeRequest,
     RollbackRequest,
     RollbackResponse,
     StateModifyRequest,
-    ControlResponse,
-    CheckpointResponse,
-    CheckpointListResponse,
-    BranchCreateRequest,
-    BranchResponse,
-    BranchListResponse,
-    NodeExecutionStatusSchema,
-    ExecuteSingleNodeRequest,
-    AuditEventListResponse,
-    PaginationMeta,
-    ErrorResponse,
-)
-from wtb.api.rest.dependencies import (
-    get_execution_service,
-    get_audit_service,
-    ExecutionService,
-    AuditService,
 )
 
 router = APIRouter(prefix="/api/v1/executions", tags=["Executions"])
@@ -53,8 +50,8 @@ router = APIRouter(prefix="/api/v1/executions", tags=["Executions"])
 
 @router.get("", response_model=ExecutionListResponse)
 async def list_executions(
-    workflow_id: Optional[str] = Query(None, description="Filter by workflow ID"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+    workflow_id: str | None = Query(None, description="Filter by workflow ID"),
+    status: str | None = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     execution_service: ExecutionService = Depends(get_execution_service),
@@ -174,7 +171,7 @@ async def resume_execution(
 @router.post("/{execution_id}/stop", response_model=ControlResponse)
 async def stop_execution(
     execution_id: str,
-    reason: Optional[str] = Query(None, max_length=500),
+    reason: str | None = Query(None, max_length=500),
     execution_service: ExecutionService = Depends(get_execution_service),
 ) -> ControlResponse:
     """
@@ -223,7 +220,7 @@ async def list_checkpoints(
 @router.post("/{execution_id}/checkpoints", response_model=CheckpointResponse)
 async def create_checkpoint(
     execution_id: str,
-    name: Optional[str] = Query(None, max_length=100),
+    name: str | None = Query(None, max_length=100),
     execution_service: ExecutionService = Depends(get_execution_service),
 ) -> CheckpointResponse:
     """
@@ -326,7 +323,7 @@ async def create_branch(
 @router.get("/{execution_id}/state")
 async def get_execution_state(
     execution_id: str,
-    keys: Optional[List[str]] = Query(None, description="Specific keys to retrieve"),
+    keys: list[str] | None = Query(None, description="Specific keys to retrieve"),
     execution_service: ExecutionService = Depends(get_execution_service),
 ) -> dict:
     """
@@ -430,7 +427,7 @@ async def execute_single_node(
 async def skip_node(
     execution_id: str,
     node_id: str,
-    reason: Optional[str] = Query(None, max_length=500),
+    reason: str | None = Query(None, max_length=500),
 ) -> ControlResponse:
     """
     Skip a node in the execution path.
@@ -473,7 +470,11 @@ async def get_execution_audit(
     """
     Get audit trail for an execution.
     """
-    from wtb.api.rest.models import AuditEventResponse, AuditEventTypeEnum, AuditSeverityEnum
+    from wtb.api.rest.models import (
+        AuditEventResponse,
+        AuditEventTypeEnum,
+        AuditSeverityEnum,
+    )
     
     result = await audit_service.get_trail_for_execution(
         execution_id=execution_id,
