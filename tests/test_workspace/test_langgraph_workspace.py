@@ -13,39 +13,15 @@ Design Reference:
 - docs/LangGraph/TIME_TRAVEL.md
 """
 
-import json
 import os
-import shutil
-import tempfile
-import time
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
-import uuid
 
 import pytest
-
-from wtb.domain.models.workspace import (
-    Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
-    compute_venv_spec_hash,
-)
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceCleanedUpEvent,
-    ForkRequestedEvent,
-    ForkCompletedEvent,
-)
-from wtb.infrastructure.workspace.manager import WorkspaceManager
-
 
 # Skip if LangGraph not available
 langgraph_available = False
 try:
-    from langgraph.graph import StateGraph, END
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import END, StateGraph
     langgraph_available = True
 except ImportError:
     pass
@@ -58,18 +34,18 @@ pytestmark = pytest.mark.skipif(not langgraph_available, reason="LangGraph not i
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if langgraph_available:
-    from typing import TypedDict, Annotated
     from operator import add
+    from typing import Annotated, TypedDict
     
     class SimpleState(TypedDict):
-        messages: Annotated[List[str], add]
+        messages: Annotated[list[str], add]
         count: int
     
     class FileState(TypedDict):
-        messages: Annotated[List[str], add]
+        messages: Annotated[list[str], add]
         count: int
-        files_written: List[str]
-        last_checkpoint_ref: Optional[str]  # Renamed to avoid reserved name
+        files_written: list[str]
+        last_checkpoint_ref: str | None  # Renamed to avoid reserved name
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

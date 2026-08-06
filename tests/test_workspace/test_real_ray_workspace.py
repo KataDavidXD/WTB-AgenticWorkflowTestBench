@@ -18,33 +18,22 @@ Requirements:
 import json
 import os
 import shutil
-import sys
-import tempfile
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch
 import uuid
+from pathlib import Path
 
 import pytest
 
+from wtb.domain.events.workspace_events import (
+    WorkspaceCreatedEvent,
+)
 from wtb.domain.models.workspace import (
     Workspace,
     WorkspaceConfig,
     WorkspaceStrategy,
 )
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceCleanedUpEvent,
-)
 from wtb.infrastructure.workspace.manager import (
     WorkspaceManager,
-    create_file_link,
 )
-
 
 # Skip entire module if Ray not available
 ray_available = False
@@ -147,12 +136,12 @@ class TestRealRayParallelExecution:
         
         @ray.remote
         def create_workspace_remote(
-            config_dict: Dict,
+            config_dict: dict,
             batch_id: str,
             variant_name: str,
             execution_id: str,
-            source_paths: List[str],
-        ) -> Dict:
+            source_paths: list[str],
+        ) -> dict:
             """Remote function to create workspace."""
             config = WorkspaceConfig(
                 enabled=config_dict["enabled"],
@@ -214,11 +203,11 @@ class TestRealRayParallelExecution:
         
         @ray.remote
         def execute_variant_remote(
-            config_dict: Dict,
+            config_dict: dict,
             batch_id: str,
             variant_name: str,
-            source_paths: List[str],
-        ) -> Dict:
+            source_paths: list[str],
+        ) -> dict:
             """Remote function simulating variant execution."""
             config = WorkspaceConfig(
                 enabled=config_dict["enabled"],
@@ -327,7 +316,7 @@ class TestRayActorPoolWorkspace:
         class WorkspaceActor:
             """Ray actor managing workspace lifecycle."""
             
-            def __init__(self, config_dict: Dict):
+            def __init__(self, config_dict: dict):
                 self.config = WorkspaceConfig(
                     enabled=config_dict["enabled"],
                     strategy=WorkspaceStrategy(config_dict["strategy"]),
@@ -344,8 +333,8 @@ class TestRayActorPoolWorkspace:
                 batch_id: str,
                 variant_name: str,
                 execution_id: str,
-                source_paths: List[str],
-            ) -> Dict:
+                source_paths: list[str],
+            ) -> dict:
                 self._workspace = self.manager.create_workspace(
                     batch_id=batch_id,
                     variant_name=variant_name,
@@ -354,7 +343,7 @@ class TestRayActorPoolWorkspace:
                 )
                 return self._workspace.to_dict()
             
-            def execute(self, data: Dict) -> Dict:
+            def execute(self, data: dict) -> dict:
                 if not self._workspace:
                     raise RuntimeError("Workspace not created")
                 
@@ -423,7 +412,7 @@ class TestRayActorPoolWorkspace:
         
         @ray.remote
         class FailingActor:
-            def __init__(self, config_dict: Dict):
+            def __init__(self, config_dict: dict):
                 self.config = WorkspaceConfig(
                     enabled=config_dict["enabled"],
                     strategy=WorkspaceStrategy(config_dict["strategy"]),
@@ -438,8 +427,8 @@ class TestRayActorPoolWorkspace:
                 self,
                 batch_id: str,
                 variant_name: str,
-                source_paths: List[str],
-            ) -> Dict:
+                source_paths: list[str],
+            ) -> dict:
                 ws = self.manager.create_workspace(
                     batch_id=batch_id,
                     variant_name=variant_name,
@@ -507,11 +496,11 @@ class TestRayBatchTestWorkspace:
         
         @ray.remote
         def run_variant(
-            config_dict: Dict,
+            config_dict: dict,
             batch_id: str,
             variant_name: str,
-            input_data: Dict,
-        ) -> Dict:
+            input_data: dict,
+        ) -> dict:
             """Run single variant in isolated workspace."""
             config = WorkspaceConfig(
                 enabled=config_dict["enabled"],
@@ -598,7 +587,7 @@ class TestRayBatchTestWorkspace:
         
         @ray.remote
         def create_and_return_workspace(
-            config_dict: Dict,
+            config_dict: dict,
             batch_id: str,
             variant_name: str,
         ) -> str:

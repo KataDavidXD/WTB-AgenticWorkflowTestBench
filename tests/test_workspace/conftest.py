@@ -13,53 +13,44 @@ Design Reference: docs/issues/WORKSPACE_ISOLATION_DESIGN.md
 import json
 import os
 import shutil
-import sys
 import tempfile
-import threading
 import uuid
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+
+# Ray event imports
+from wtb.domain.events.ray_events import (
+    RayBatchTestCompletedEvent,
+    RayBatchTestStartedEvent,
+    RayVariantExecutionCompletedEvent,
+    RayVariantExecutionStartedEvent,
+)
+from wtb.domain.events.workspace_events import (
+    WorkspaceActivatedEvent,
+    WorkspaceCleanedUpEvent,
+    WorkspaceCreatedEvent,
+    WorkspaceDeactivatedEvent,
+)
 
 # Workspace imports
 from wtb.domain.models.workspace import (
     Workspace,
     WorkspaceConfig,
     WorkspaceStrategy,
-    LinkMethod,
-    compute_venv_spec_hash,
-)
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceActivatedEvent,
-    WorkspaceDeactivatedEvent,
-    WorkspaceCleanedUpEvent,
-    ForkRequestedEvent,
-    ForkCompletedEvent,
-)
-from wtb.infrastructure.workspace.manager import (
-    WorkspaceManager,
-    create_file_link,
 )
 
 # Event system imports
 from wtb.infrastructure.events import (
-    WTBEventBus,
-    WTBAuditTrail,
     AuditEventListener,
+    WTBAuditTrail,
+    WTBEventBus,
 )
-
-# Ray event imports
-from wtb.domain.events.ray_events import (
-    RayBatchTestStartedEvent,
-    RayBatchTestCompletedEvent,
-    RayVariantExecutionStartedEvent,
-    RayVariantExecutionCompletedEvent,
+from wtb.infrastructure.workspace.manager import (
+    WorkspaceManager,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Temporary Directory Fixtures
@@ -88,7 +79,7 @@ def module_temp_dir():
 
 
 @pytest.fixture
-def sample_project_files(workspace_temp_dir) -> Dict[str, Path]:
+def sample_project_files(workspace_temp_dir) -> dict[str, Path]:
     """Create a sample project with various file types."""
     project_dir = workspace_temp_dir / "sample_project"
     project_dir.mkdir(parents=True)
@@ -141,7 +132,7 @@ def retrieve(query: str, k: int = 10):
 
 
 @pytest.fixture
-def large_sample_project(workspace_temp_dir) -> Dict[str, Path]:
+def large_sample_project(workspace_temp_dir) -> dict[str, Path]:
     """Create a larger sample project for performance tests."""
     project_dir = workspace_temp_dir / "large_project"
     project_dir.mkdir(parents=True)
@@ -154,7 +145,7 @@ def large_sample_project(workspace_temp_dir) -> Dict[str, Path]:
     
     for i in range(100):
         file_path = data_dir / f"data_{i:03d}.csv"
-        content = f"id,value\n" + "\n".join([f"{j},{j*100}" for j in range(100)])
+        content = "id,value\n" + "\n".join([f"{j},{j*100}" for j in range(100)])
         file_path.write_text(content)
     
     files["data_dir"] = data_dir
@@ -206,7 +197,7 @@ def workspace_config_no_hardlinks(workspace_temp_dir) -> WorkspaceConfig:
 
 
 @pytest.fixture
-def workspace_config_dict(workspace_temp_dir) -> Dict[str, Any]:
+def workspace_config_dict(workspace_temp_dir) -> dict[str, Any]:
     """Create workspace config as dict for Ray transmission."""
     return {
         "enabled": True,
@@ -244,7 +235,7 @@ def audit_listener(event_bus, audit_trail) -> AuditEventListener:
 
 
 @pytest.fixture
-def event_collector(event_bus) -> Dict[str, List]:
+def event_collector(event_bus) -> dict[str, list]:
     """Create event collector for workspace events."""
     collector = {
         "workspace_created": [],
@@ -403,12 +394,13 @@ def memory_checkpointer():
 def simple_workflow(memory_checkpointer):
     """Create simple linear workflow for testing."""
     try:
-        from langgraph.graph import StateGraph, END
-        from typing import TypedDict, Annotated
         from operator import add
+        from typing import Annotated, TypedDict
+
+        from langgraph.graph import END, StateGraph
         
         class SimpleState(TypedDict):
-            messages: Annotated[List[str], add]
+            messages: Annotated[list[str], add]
             count: int
         
         def node_a(state: SimpleState) -> dict:
@@ -440,12 +432,13 @@ def simple_workflow(memory_checkpointer):
 def branching_workflow(memory_checkpointer):
     """Create branching workflow for rollback/fork testing."""
     try:
-        from langgraph.graph import StateGraph, END
-        from typing import TypedDict, Annotated
         from operator import add
+        from typing import Annotated, TypedDict
+
+        from langgraph.graph import END, StateGraph
         
         class BranchState(TypedDict):
-            messages: Annotated[List[str], add]
+            messages: Annotated[list[str], add]
             count: int
             branch: str
         
@@ -567,8 +560,8 @@ def in_memory_file_repos():
     """Create in-memory file processing repositories."""
     from tests.test_file_processing.conftest import (
         InMemoryBlobRepository,
-        InMemoryFileCommitRepository,
         InMemoryCheckpointFileLinkRepository,
+        InMemoryFileCommitRepository,
     )
     
     return {
@@ -618,9 +611,9 @@ def batch_context():
 def create_variant_workspaces(
     manager: WorkspaceManager,
     batch_id: str,
-    variants: List[str],
-    source_paths: Optional[List[Path]] = None,
-) -> List[Workspace]:
+    variants: list[str],
+    source_paths: list[Path] | None = None,
+) -> list[Workspace]:
     """Helper to create workspaces for multiple variants."""
     workspaces = []
     for variant in variants:
@@ -637,7 +630,7 @@ def create_variant_workspaces(
 def simulate_variant_execution(
     workspace: Workspace,
     variant_name: str,
-    output_data: Dict[str, Any],
+    output_data: dict[str, Any],
 ) -> Path:
     """Helper to simulate variant execution in workspace."""
     original_cwd = Path.cwd()
@@ -664,7 +657,7 @@ def simulate_variant_execution(
 @pytest.fixture
 def create_variant_workspaces_helper(workspace_manager):
     """Fixture providing variant workspace creation helper."""
-    def _create(batch_id: str, variants: List[str], source_paths=None):
+    def _create(batch_id: str, variants: list[str], source_paths=None):
         return create_variant_workspaces(
             workspace_manager, batch_id, variants, source_paths
         )

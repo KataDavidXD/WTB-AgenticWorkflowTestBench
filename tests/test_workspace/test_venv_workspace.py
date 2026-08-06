@@ -12,32 +12,19 @@ Design Reference: docs/issues/WORKSPACE_ISOLATION_DESIGN.md (Section 10)
 """
 
 import json
-import os
-import shutil
 import sys
-import tempfile
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
-import uuid
 
 import pytest
 
-from wtb.domain.models.workspace import (
-    Workspace,
-    WorkspaceConfig,
-    WorkspaceStrategy,
-    compute_venv_spec_hash,
-)
 from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
     VenvCreatedEvent,
     VenvInvalidatedEvent,
     VenvMismatchWarningEvent,
 )
-from wtb.infrastructure.workspace.manager import WorkspaceManager
-
+from wtb.domain.models.workspace import (
+    Workspace,
+    compute_venv_spec_hash,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test: Venv Spec Hash Computation
