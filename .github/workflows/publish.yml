@@ -27,6 +27,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Verify release commit comes from main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tag must point to a commit on main." >&2
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
