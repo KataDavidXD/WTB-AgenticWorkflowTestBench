@@ -9,18 +9,17 @@ Tests for:
 These tests verify DDD compliance and domain logic correctness.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from typing import Dict, Any
+
+import pytest
 
 from wtb.domain.models.checkpoint import (
-    CheckpointId,
     Checkpoint,
-    ExecutionHistory,
+    CheckpointId,
     CheckpointNotFoundError,
+    ExecutionHistory,
     InvalidRollbackTargetError,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures

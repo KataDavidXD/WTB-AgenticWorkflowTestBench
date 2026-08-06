@@ -9,9 +9,7 @@ Verifies that the architecture issues documented in new_issues.md are resolved:
 - MEDIUM-001: SRP Violation → file_processing.py split into package
 """
 
-import pytest
 from datetime import datetime
-from dataclasses import fields
 
 
 class TestCheckpointFileLinkConsolidation:
@@ -19,8 +17,9 @@ class TestCheckpointFileLinkConsolidation:
     
     def test_checkpoint_file_link_is_primary_model(self):
         """CheckpointFileLink should be the primary model for checkpoint-file links."""
-        from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
         import uuid
+
+        from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
         
         # Create a valid UUID for CommitId
         test_uuid = str(uuid.uuid4())
@@ -41,8 +40,9 @@ class TestCheckpointFileLinkConsolidation:
     
     def test_checkpoint_file_link_uses_rich_value_object(self):
         """CheckpointFileLink should use CommitId value object, not primitive string."""
-        from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
         import uuid
+
+        from wtb.domain.models.file_processing import CheckpointFileLink, CommitId
         
         test_uuid = str(uuid.uuid4())
         
@@ -61,10 +61,10 @@ class TestCheckpointFileLinkConsolidation:
     def test_checkpoint_file_link_factory_method(self):
         """CheckpointFileLink.create() should work with FileCommit."""
         from wtb.domain.models.file_processing import (
-            CheckpointFileLink, 
-            FileCommit, 
-            FileMemento,
             BlobId,
+            CheckpointFileLink,
+            FileCommit,
+            FileMemento,
         )
         
         # Create a commit with mementos
@@ -111,8 +111,9 @@ class TestRepositoryConsolidation:
     
     def test_sqlalchemy_repository_implements_interface(self):
         """SQLAlchemyCheckpointFileLinkRepository should implement the interface."""
-        from wtb.domain.interfaces import ICheckpointFileLinkRepository
-        from wtb.infrastructure.database.repositories import SQLAlchemyCheckpointFileLinkRepository
+        from wtb.infrastructure.database.repositories import (
+            SQLAlchemyCheckpointFileLinkRepository,
+        )
         
         # Check it has the required methods
         assert hasattr(SQLAlchemyCheckpointFileLinkRepository, 'add')
@@ -121,8 +122,9 @@ class TestRepositoryConsolidation:
     
     def test_inmemory_repository_implements_interface(self):
         """InMemoryCheckpointFileLinkRepository should implement the interface."""
-        from wtb.domain.interfaces import ICheckpointFileLinkRepository
-        from wtb.infrastructure.database.repositories import InMemoryCheckpointFileLinkRepository
+        from wtb.infrastructure.database.repositories import (
+            InMemoryCheckpointFileLinkRepository,
+        )
         
         repo = InMemoryCheckpointFileLinkRepository()
         
@@ -184,8 +186,8 @@ class TestEventBaseClassUnification:
     
     def test_file_processing_events_use_wtb_event(self):
         """File processing events should use WTBEvent base."""
-        from wtb.domain.events.file_processing_events import FileCommitCreatedEvent
         from wtb.domain.events.execution_events import WTBEvent
+        from wtb.domain.events.file_processing_events import FileCommitCreatedEvent
         
         assert issubclass(FileCommitCreatedEvent, WTBEvent)
 
@@ -268,16 +270,10 @@ class TestFileProcessingSRPCompliance:
         """All imports should work from package __init__.py."""
         from wtb.domain.models.file_processing import (
             BlobId,
-            CommitId,
-            FileMemento,
-            FileCommit,
             CheckpointFileLink,
-            CommitStatus,
-            FileProcessingError,
-            DuplicateFileError,
-            InvalidBlobIdError,
-            InvalidCommitIdError,
-            CommitAlreadyFinalized,
+            CommitId,
+            FileCommit,
+            FileMemento,
         )
         
         # All should be importable
@@ -293,13 +289,17 @@ class TestCheckpointFileLinkORM:
     
     def test_checkpoint_file_link_orm_exists(self):
         """CheckpointFileLinkORM should exist in file_processing_orm."""
-        from wtb.infrastructure.database.file_processing_orm import CheckpointFileLinkORM
+        from wtb.infrastructure.database.file_processing_orm import (
+            CheckpointFileLinkORM,
+        )
         
         assert CheckpointFileLinkORM is not None
     
     def test_checkpoint_file_link_orm_table_name(self):
         """CheckpointFileLinkORM should use checkpoint_file_links table."""
-        from wtb.infrastructure.database.file_processing_orm import CheckpointFileLinkORM
+        from wtb.infrastructure.database.file_processing_orm import (
+            CheckpointFileLinkORM,
+        )
         
         assert CheckpointFileLinkORM.__tablename__ == "checkpoint_file_links"
     

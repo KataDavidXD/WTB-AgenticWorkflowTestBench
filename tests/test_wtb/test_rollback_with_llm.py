@@ -17,14 +17,14 @@ Usage:
     pytest tests/test_wtb/test_rollback_with_llm.py -v -s
 """
 
+import json
 import os
 import sys
-import json
-import pytest
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from pathlib import Path
+from typing import Any
 
+import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -55,11 +55,8 @@ except ImportError:
 
 # WTB imports - following the architecture pattern
 from wtb.infrastructure.database import (
-    get_database_config,
     setup_all_databases,
-    redirect_agentgit_database,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LLM Client for Testing
@@ -99,7 +96,7 @@ class LLMClientHelper:
         
         print(f"[LLM] Using REAL LLM: model={self.model}, base_url={self.base_url or 'default'}")
     
-    def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
+    def chat(self, messages: list[dict[str, str]], **kwargs) -> str:
         """Send chat completion request to REAL LLM."""
         print(f"[LLM] Sending {len(messages)} messages to {self.model}...")
         
@@ -161,9 +158,9 @@ class SessionManagerHelper:
     def create_internal_session(
         self, 
         external_session_id: int, 
-        conversation_history: List[Dict[str, str]],
-        parent_session_id: Optional[int] = None,
-        branch_checkpoint_id: Optional[int] = None
+        conversation_history: list[dict[str, str]],
+        parent_session_id: int | None = None,
+        branch_checkpoint_id: int | None = None
     ) -> int:
         """Create an internal session with conversation history."""
         import uuid
@@ -193,9 +190,9 @@ class SessionManagerHelper:
         self,
         internal_session_id: int,
         name: str,
-        conversation_history: List[Dict[str, str]],
-        state_data: Dict[str, Any],
-        metadata: Dict[str, Any] = None
+        conversation_history: list[dict[str, str]],
+        state_data: dict[str, Any],
+        metadata: dict[str, Any] = None
     ) -> int:
         """Create a checkpoint with full state."""
         checkpoint_data = {
@@ -227,7 +224,7 @@ class SessionManagerHelper:
             conn.commit()
             return result.lastrowid
     
-    def get_checkpoint(self, checkpoint_id: int) -> Optional[Dict[str, Any]]:
+    def get_checkpoint(self, checkpoint_id: int) -> dict[str, Any] | None:
         """Get checkpoint data."""
         with self.engine.connect() as conn:
             result = conn.execute(text(
@@ -238,7 +235,7 @@ class SessionManagerHelper:
                 return dict(row._mapping)
         return None
     
-    def get_internal_session(self, session_id: int) -> Optional[Dict[str, Any]]:
+    def get_internal_session(self, session_id: int) -> dict[str, Any] | None:
         """Get internal session data."""
         with self.engine.connect() as conn:
             result = conn.execute(text(
@@ -249,7 +246,7 @@ class SessionManagerHelper:
                 return dict(row._mapping)
         return None
     
-    def get_conversation_history(self, session_id: int) -> List[Dict[str, str]]:
+    def get_conversation_history(self, session_id: int) -> list[dict[str, str]]:
         """Get conversation history for a session."""
         session = self.get_internal_session(session_id)
         if session and session["conversation_history"]:
@@ -259,7 +256,7 @@ class SessionManagerHelper:
     def update_conversation_history(
         self, 
         session_id: int, 
-        history: List[Dict[str, str]]
+        history: list[dict[str, str]]
     ):
         """Update conversation history for a session."""
         with self.engine.connect() as conn:
@@ -270,7 +267,7 @@ class SessionManagerHelper:
             """), {"history": json.dumps(history), "id": session_id})
             conn.commit()
     
-    def restore_from_checkpoint(self, checkpoint_id: int) -> Dict[str, Any]:
+    def restore_from_checkpoint(self, checkpoint_id: int) -> dict[str, Any]:
         """Restore state from a checkpoint."""
         checkpoint = self.get_checkpoint(checkpoint_id)
         if not checkpoint:
@@ -283,7 +280,7 @@ class SessionManagerHelper:
             "metadata": data.get("metadata", {}),
         }
     
-    def get_all_sessions(self, external_session_id: int) -> List[Dict[str, Any]]:
+    def get_all_sessions(self, external_session_id: int) -> list[dict[str, Any]]:
         """Get all internal sessions for an external session."""
         with self.engine.connect() as conn:
             result = conn.execute(text("""
@@ -293,7 +290,7 @@ class SessionManagerHelper:
             """), {"ext_id": external_session_id})
             return [dict(row._mapping) for row in result.fetchall()]
     
-    def get_session_checkpoints(self, internal_session_id: int) -> List[Dict[str, Any]]:
+    def get_session_checkpoints(self, internal_session_id: int) -> list[dict[str, Any]]:
         """Get all checkpoints for a session."""
         with self.engine.connect() as conn:
             result = conn.execute(text("""
@@ -577,7 +574,7 @@ class TestRollbackWithLLM:
         
         # Verify all sessions under external session
         all_sessions = session_manager.get_all_sessions(ext_session_id)
-        assert len(all_sessions) == 3, f"Should have 3 internal sessions"
+        assert len(all_sessions) == 3, "Should have 3 internal sessions"
         
         # Verify checkpoints
         for i, session_id in enumerate(session_ids):

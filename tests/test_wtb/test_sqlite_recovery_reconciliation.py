@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import copy
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -20,9 +20,11 @@ from wtb.domain.models import (
     Execution,
     ExecutionState,
     ExecutionStatus,
-    TestWorkflow as WorkflowDefinition,
     WorkflowEdge,
     WorkflowNode,
+)
+from wtb.domain.models import (
+    TestWorkflow as WorkflowDefinition,
 )
 from wtb.infrastructure.adapters.sqlite_state_adapter import SqliteStateAdapter
 from wtb.infrastructure.database.unit_of_work import SQLAlchemyUnitOfWork

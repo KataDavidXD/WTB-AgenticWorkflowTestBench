@@ -10,8 +10,10 @@ from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
     ExecutionStatus,
-    TestWorkflow as WorkflowDefinition,
     WorkflowNode,
+)
+from wtb.domain.models.workflow import (
+    TestWorkflow as WorkflowDefinition,
 )
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
 from wtb.sdk import BatchTestResult, WTBTestBench

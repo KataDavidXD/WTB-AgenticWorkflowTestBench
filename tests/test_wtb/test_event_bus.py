@@ -4,23 +4,18 @@ Tests for WTBEventBus.
 Tests thread-safety, bounded history, and event handling.
 """
 
-import pytest
 import threading
 from datetime import datetime, timedelta
-from typing import List
 
+from wtb.domain.events import (
+    ExecutionCompletedEvent,
+    ExecutionStartedEvent,
+)
 from wtb.infrastructure.events.wtb_event_bus import (
     WTBEventBus,
     get_wtb_event_bus,
-    set_wtb_event_bus,
     reset_wtb_event_bus,
-)
-from wtb.domain.events import (
-    ExecutionStartedEvent,
-    ExecutionCompletedEvent,
-    ExecutionFailedEvent,
-    NodeStartedEvent,
-    NodeCompletedEvent,
+    set_wtb_event_bus,
 )
 
 
@@ -41,7 +36,7 @@ class TestWTBEventBusBasics:
     def test_subscribe_and_publish(self):
         """Can subscribe to events and receive them."""
         bus = WTBEventBus()
-        received_events: List = []
+        received_events: list = []
         
         def handler(event):
             received_events.append(event)
@@ -61,8 +56,8 @@ class TestWTBEventBusBasics:
     def test_multiple_subscribers(self):
         """Multiple subscribers receive the same event."""
         bus = WTBEventBus()
-        received1: List = []
-        received2: List = []
+        received1: list = []
+        received2: list = []
         
         bus.subscribe(ExecutionStartedEvent, lambda e: received1.append(e))
         bus.subscribe(ExecutionStartedEvent, lambda e: received2.append(e))
@@ -76,8 +71,8 @@ class TestWTBEventBusBasics:
     def test_type_specific_subscription(self):
         """Subscribers only receive their event type."""
         bus = WTBEventBus()
-        started_events: List = []
-        completed_events: List = []
+        started_events: list = []
+        completed_events: list = []
         
         bus.subscribe(ExecutionStartedEvent, lambda e: started_events.append(e))
         bus.subscribe(ExecutionCompletedEvent, lambda e: completed_events.append(e))
@@ -91,7 +86,7 @@ class TestWTBEventBusBasics:
     def test_unsubscribe(self):
         """Can unsubscribe from events."""
         bus = WTBEventBus()
-        received: List = []
+        received: list = []
         
         def handler(event):
             received.append(event)
@@ -109,7 +104,7 @@ class TestWTBEventBusBasics:
     def test_handler_exception_doesnt_break_other_handlers(self):
         """Exception in one handler doesn't prevent others from running."""
         bus = WTBEventBus()
-        received: List = []
+        received: list = []
         
         def failing_handler(event):
             raise ValueError("Intentional failure")
@@ -246,7 +241,7 @@ class TestWTBEventBusThreadSafety:
     def test_concurrent_subscribe_publish(self):
         """Subscribe and publish can happen concurrently."""
         bus = WTBEventBus()
-        received: List = []
+        received: list = []
         lock = threading.Lock()
         
         def handler(event):
@@ -324,7 +319,7 @@ class TestWTBEventBusPublishAll:
     def test_publish_all(self):
         """Can publish multiple events at once."""
         bus = WTBEventBus()
-        received: List = []
+        received: list = []
         
         bus.subscribe(ExecutionStartedEvent, lambda e: received.append(e))
         

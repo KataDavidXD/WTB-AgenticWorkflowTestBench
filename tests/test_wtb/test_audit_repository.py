@@ -2,10 +2,13 @@
 Tests for Audit Log Repository.
 """
 
-import pytest
 from datetime import datetime
-from wtb.infrastructure.database import SQLAlchemyUnitOfWork, InMemoryUnitOfWork
+
+import pytest
+
 from wtb.domain.models.audit import AuditEntry
+from wtb.infrastructure.database import InMemoryUnitOfWork, SQLAlchemyUnitOfWork
+
 
 class TestAuditLogRepository:
     """Test suite for AuditLogRepository."""

@@ -18,32 +18,29 @@ Usage:
 """
 
 import base64
-
-import pytest
 import os
 import threading
-from datetime import datetime
-from unittest.mock import MagicMock, patch, PropertyMock
-from typing import Dict, Any
 import time
+from datetime import datetime
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from wtb.application.services.ray_batch_runner import RAY_AVAILABLE
+from wtb.domain.interfaces.batch_runner import (
+    BatchRunnerError,
+    BatchRunnerProgress,
+    BatchRunnerStatus,
+    IBatchTestRunner,
+)
 from wtb.domain.models.batch_test import (
     BatchTest,
+    BatchTestResult,
     BatchTestStatus,
     VariantCombination,
-    BatchTestResult,
 )
-from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
-from wtb.domain.interfaces.batch_runner import (
-    IBatchTestRunner,
-    BatchRunnerStatus,
-    BatchRunnerProgress,
-    BatchRunnerError,
-)
+from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
 from wtb.infrastructure.database import InMemoryUnitOfWork
-from wtb.infrastructure.adapters import InMemoryStateAdapter
-from wtb.application.services.ray_batch_runner import RAY_AVAILABLE
-
 
 # ═══════════════════════════════════════════════════════════════
 # Fixtures
@@ -403,7 +400,11 @@ class TestVariantExecutionActorResultContract:
         workflow_variables,
         expected,
     ):
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
 
         actor = self._make_actor(tmp_path, monkeypatch)
         execution = Execution(
@@ -519,7 +520,11 @@ class TestVariantExecutionActorResultContract:
         monkeypatch,
         sample_workflow,
     ):
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
 
         actor = self._make_actor(tmp_path, monkeypatch)
         created_execution = Execution(
@@ -597,7 +602,11 @@ class TestVariantExecutionActorResultContract:
         failure_site,
         error_message,
     ):
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
 
         actor = self._make_actor(tmp_path, monkeypatch)
         persisted_execution = Execution(
@@ -766,7 +775,11 @@ class TestVariantExecutionActorResultContract:
         monkeypatch,
         sample_workflow,
     ):
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
         from wtb.infrastructure.adapters import InMemoryStateAdapter
 
         actor = self._make_actor(tmp_path, monkeypatch)
@@ -862,7 +875,11 @@ class TestVariantExecutionActorResultContract:
         monkeypatch,
         sample_workflow,
     ):
-        from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+        from wtb.domain.models.workflow import (
+            Execution,
+            ExecutionState,
+            ExecutionStatus,
+        )
         from wtb.infrastructure.adapters import InMemoryStateAdapter
 
         actor = self._make_uninitialized_actor(tmp_path, monkeypatch)
@@ -1159,9 +1176,9 @@ class TestRayBatchTestRunnerUnit:
     def test_empty_combinations_raises(self, sample_workflow):
         """Empty variant combinations raises error."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
 
         if not RAY_AVAILABLE:
@@ -1541,7 +1558,10 @@ class TestRayBatchTestRunnerUnit:
         event_bridge.on_variant_execution_failed.assert_called_once()
 
     def test_deadline_cleanup_supports_legacy_single_argument_provider(self):
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
 
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -1571,7 +1591,10 @@ class TestRayBatchTestRunnerUnit:
         self,
         already_initialized,
     ):
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
 
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -1599,7 +1622,10 @@ class TestRayBatchTestRunnerUnit:
         assert shutdown.call_count == (0 if already_initialized else 1)
 
     def test_rollback_coordinator_owns_dependencies_created_by_runner(self):
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
 
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -1639,9 +1665,9 @@ class TestRayBatchTestRunnerUnit:
     def test_get_status_idle(self, sample_batch_test):
         """Status is IDLE when not running."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
 
         if not RAY_AVAILABLE:
@@ -1661,9 +1687,9 @@ class TestRayBatchTestRunnerUnit:
     def test_get_progress_not_running(self, sample_batch_test):
         """Progress is None when not running."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
 
         if not RAY_AVAILABLE:
@@ -1683,9 +1709,9 @@ class TestRayBatchTestRunnerUnit:
     def test_cancel_not_running(self, sample_batch_test):
         """Cancel returns False when not running."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
 
         if not RAY_AVAILABLE:
@@ -1784,7 +1810,10 @@ class TestRayBatchTestRunnerUnit:
         assert runner._orphaned_refs == [ref]
     def test_cancel_waits_for_pool_creation_and_kills_new_actors(self, sample_batch_test):
         """Cancellation must not return while actor creation is still in flight."""
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
 
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -1846,7 +1875,10 @@ class TestRayBatchTestRunnerUnit:
 
     def test_cancel_cannot_return_before_inflight_submission_is_killed(self, sample_batch_test):
         """Submission and actor termination must share one synchronization boundary."""
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
 
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -1932,7 +1964,10 @@ class TestRayBatchTestRunnerUnit:
         self, sample_batch_test
     ):
         """An unconfirmed actor stop must propagate to the run caller."""
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
 
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -3511,9 +3546,9 @@ class TestRayBatchTestRunnerUnit:
     def test_shutdown_cleans_state(self):
         """Shutdown cleans up runner state."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
         
         if not RAY_AVAILABLE:
@@ -3534,9 +3569,9 @@ class TestRayBatchTestRunnerUnit:
     def test_shutdown_preserves_environment_provider_for_cleanup_retry(self):
         """Failed env cleanup must remain visible and retryable."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
 
         if not RAY_AVAILABLE:
@@ -3739,11 +3774,12 @@ class TestRayBatchTestRunnerIntegration:
         temp_data_dir,
     ):
         """Progress is tracked during execution."""
+        import threading
+
         from wtb.application.services.ray_batch_runner import (
             RayBatchTestRunner,
             RayConfig,
         )
-        import threading
         
         def workflow_loader(wf_id, uow):
             return sample_workflow
@@ -3791,11 +3827,12 @@ class TestRayBatchTestRunnerIntegration:
         temp_data_dir,
     ):
         """Can cancel a running batch test."""
+        import threading
+
         from wtb.application.services.ray_batch_runner import (
             RayBatchTestRunner,
             RayConfig,
         )
-        import threading
         
         # Create batch test with many variants to give time to cancel
         large_batch = BatchTest(
@@ -3975,9 +4012,7 @@ class TestBatchTestRunnerFactoryRay:
     
     def test_create_ray_runner(self):
         """Factory can create Ray runner when available."""
-        from wtb.application.factories import BatchTestRunnerFactory
         from wtb.application.services.ray_batch_runner import RAY_AVAILABLE
-        from wtb.config import WTBConfig, RayConfig
         
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
@@ -4030,10 +4065,10 @@ class TestBatchTestRunnerFactoryRay:
         """Factory selects Ray runner when ray_enabled=True."""
         from wtb.application.factories import BatchTestRunnerFactory
         from wtb.application.services.ray_batch_runner import (
-            RayBatchTestRunner,
             RAY_AVAILABLE,
+            RayBatchTestRunner,
         )
-        from wtb.config import WTBConfig, RayConfig
+        from wtb.config import RayConfig, WTBConfig
         
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")

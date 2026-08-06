@@ -7,9 +7,9 @@ Tests:
 - OutboxProcessor
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+
+import pytest
 
 from wtb.domain.models.outbox import (
     OutboxEvent,
@@ -17,8 +17,8 @@ from wtb.domain.models.outbox import (
     OutboxStatus,
 )
 from wtb.infrastructure.database.inmemory_unit_of_work import (
-    InMemoryUnitOfWork,
     InMemoryOutboxRepository,
+    InMemoryUnitOfWork,
 )
 
 

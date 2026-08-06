@@ -10,13 +10,8 @@ Design Reference: docs/issues/WORKSPACE_ISOLATION_DESIGN.md (Section 13.5)
 import json
 import os
 import shutil
-import sys
 import tempfile
-import time
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -25,15 +20,9 @@ from wtb.domain.models.workspace import (
     WorkspaceConfig,
     WorkspaceStrategy,
 )
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceCleanedUpEvent,
-)
 from wtb.infrastructure.workspace.manager import (
     WorkspaceManager,
-    create_file_link,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

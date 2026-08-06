@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from wtb.application.services.execution_controller import ExecutionController
+from wtb.domain.interfaces.node_executor import NodeExecutionResult
 from wtb.domain.models import (
     Execution,
     ExecutionState,
@@ -16,12 +17,11 @@ from wtb.domain.models import (
     WorkflowEdge,
     WorkflowNode,
 )
-from wtb.domain.interfaces.node_executor import NodeExecutionResult
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 
 
-def _paused_execution(workflow_id: str, variables: Dict[str, Any]) -> Execution:
+def _paused_execution(workflow_id: str, variables: dict[str, Any]) -> Execution:
     return Execution(
         workflow_id=workflow_id,
         status=ExecutionStatus.PAUSED,
@@ -65,8 +65,8 @@ def test_resume_keeps_modified_state_in_node_executor_result() -> None:
 class _GraphStateAdapter(InMemoryStateAdapter):
     def __init__(self) -> None:
         super().__init__()
-        self.values: Dict[str, Any] = {"original": True}
-        self.updated_values: list[Dict[str, Any]] = []
+        self.values: dict[str, Any] = {"original": True}
+        self.updated_values: list[dict[str, Any]] = []
 
     def supports_graph_execution(self) -> bool:
         return True
@@ -76,14 +76,14 @@ class _GraphStateAdapter(InMemoryStateAdapter):
 
     def update_state(
         self,
-        values: Dict[str, Any],
+        values: dict[str, Any],
         as_node: str | None = None,
     ) -> bool:
         self.updated_values.append(dict(values))
         self.values.update(values)
         return True
 
-    def execute(self, initial_state: Dict[str, Any] | None) -> Dict[str, Any]:
+    def execute(self, initial_state: dict[str, Any] | None) -> dict[str, Any]:
         if initial_state:
             self.values.update(initial_state)
         return dict(self.values)
@@ -120,7 +120,7 @@ class _RejectedGraphSessionAdapter(_GraphStateAdapter):
 class _RejectedGraphUpdateAdapter(_GraphStateAdapter):
     def update_state(
         self,
-        values: Dict[str, Any],
+        values: dict[str, Any],
         as_node: str | None = None,
     ) -> bool:
         return False
@@ -329,7 +329,7 @@ class _RecordingNodeExecutor:
     def execute(
         self,
         node: WorkflowNode,
-        context: Dict[str, Any],
+        context: dict[str, Any],
     ) -> NodeExecutionResult:
         self.calls.append(node.id)
         return NodeExecutionResult(

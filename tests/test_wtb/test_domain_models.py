@@ -4,23 +4,27 @@ Unit tests for WTB Domain Models.
 Tests the core domain entities, value objects, and aggregates.
 """
 
-import pytest
-from datetime import datetime
 from unittest.mock import patch
 
+import pytest
+
 from wtb.domain.models import (
-    WorkflowNode,
-    WorkflowEdge,
-    TestWorkflow,
-    ExecutionState,
     Execution,
+    ExecutionState,
     ExecutionStatus,
     NodeVariant,
+    TestWorkflow,
+    WorkflowEdge,
+    WorkflowNode,
 )
+from wtb.domain.models.batch_test import (
+    BatchTest,
+    BatchTestResult,
+    BatchTestStatus,
+    VariantCombination,
+)
+from wtb.domain.models.evaluation import EvaluationResult
 from wtb.domain.models.node_boundary import NodeBoundary
-from wtb.domain.models.batch_test import BatchTest, BatchTestStatus, VariantCombination, BatchTestResult
-from wtb.domain.models.evaluation import EvaluationResult, MetricValue
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WorkflowNode Tests

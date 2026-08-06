@@ -4,18 +4,19 @@ Unit tests for NodeReplacer.
 Tests node variant management and hot-swapping functionality.
 """
 
-import pytest
-from typing import Optional, List, Dict, Any
 
+import builtins
+
+import pytest
+
+from wtb.application.services.node_replacer import NodeReplacer
+from wtb.domain.interfaces.repositories import INodeVariantRepository
 from wtb.domain.models import (
     NodeVariant,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.domain.interfaces.repositories import INodeVariantRepository
-from wtb.application.services.node_replacer import NodeReplacer
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Mock Repository
@@ -25,12 +26,12 @@ class MockNodeVariantRepository(INodeVariantRepository):
     """In-memory node variant repository for testing."""
     
     def __init__(self):
-        self._storage: Dict[str, NodeVariant] = {}
+        self._storage: dict[str, NodeVariant] = {}
     
-    def get(self, id: str) -> Optional[NodeVariant]:
+    def get(self, id: str) -> NodeVariant | None:
         return self._storage.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[NodeVariant]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[NodeVariant]:
         items = list(self._storage.values())
         return items[offset:offset + limit]
     
@@ -51,16 +52,16 @@ class MockNodeVariantRepository(INodeVariantRepository):
     def exists(self, id: str) -> bool:
         return id in self._storage
     
-    def find_by_workflow(self, workflow_id: str) -> List[NodeVariant]:
+    def find_by_workflow(self, workflow_id: str) -> builtins.list[NodeVariant]:
         return [v for v in self._storage.values() if v.workflow_id == workflow_id]
     
-    def find_by_node(self, workflow_id: str, node_id: str) -> List[NodeVariant]:
+    def find_by_node(self, workflow_id: str, node_id: str) -> builtins.list[NodeVariant]:
         return [
             v for v in self._storage.values()
             if v.workflow_id == workflow_id and v.original_node_id == node_id
         ]
     
-    def find_active(self, workflow_id: str) -> List[NodeVariant]:
+    def find_active(self, workflow_id: str) -> builtins.list[NodeVariant]:
         return [
             v for v in self._storage.values()
             if v.workflow_id == workflow_id and v.is_active

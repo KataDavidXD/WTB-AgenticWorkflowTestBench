@@ -25,17 +25,13 @@ Design Reference:
 - docs/Project_Init/WORKFLOW_TEST_BENCH_ARCHITECTURE.md (Section 13.9, 13.10)
 """
 
-import json
 import os
 import shutil
-import sys
 import tempfile
-import time
 import threading
-from datetime import datetime, timedelta
+import time
+from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -64,52 +60,39 @@ pytestmark = [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if RAY_AVAILABLE:
-    from wtb.domain.models.batch_test import (
-        BatchTest,
-        BatchTestStatus,
-        VariantCombination,
-        BatchTestResult,
-    )
-    from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
-    from wtb.domain.models.workspace import (
-        Workspace,
-        WorkspaceConfig,
-        WorkspaceStrategy,
-        compute_venv_spec_hash,
-    )
-    from wtb.domain.events.workspace_events import (
-        WorkspaceCreatedEvent,
-        WorkspaceCleanedUpEvent,
-    )
-    from wtb.domain.interfaces.batch_runner import (
-        IBatchTestRunner,
-        BatchRunnerStatus,
-        BatchRunnerProgress,
-    )
-    from wtb.infrastructure.workspace.manager import WorkspaceManager
-    from wtb.infrastructure.environment.venv_cache import (
-        VenvCacheManager,
-        VenvCacheConfig,
-        VenvSpec,
-        VenvCacheEntry,
-    )
     from wtb.application.services.actor_lifecycle import (
-        ActorLifecycleManager,
         ActorConfig,
+        ActorLifecycleManager,
         ActorResources,
         PauseStrategy,
-        RollbackStrategy,
-        SessionType,
         PauseStrategySelector,
-        PausedActorState,
-        ActorHandle,
+        SessionType,
     )
     from wtb.application.services.ray_batch_runner import (
         RayBatchTestRunner,
         RayConfig,
-        VariantExecutionResult,
+    )
+    from wtb.domain.interfaces.batch_runner import (
+        BatchRunnerStatus,
+    )
+    from wtb.domain.models.batch_test import (
+        BatchTest,
+        BatchTestStatus,
+        VariantCombination,
+    )
+    from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
+    from wtb.domain.models.workspace import (
+        Workspace,
+        WorkspaceConfig,
+        WorkspaceStrategy,
+    )
+    from wtb.infrastructure.environment.venv_cache import (
+        VenvCacheConfig,
+        VenvCacheManager,
+        VenvSpec,
     )
     from wtb.infrastructure.events.wtb_event_bus import get_wtb_event_bus
+    from wtb.infrastructure.workspace.manager import WorkspaceManager
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -434,6 +417,7 @@ class TestWorkspaceIsolationE2E:
             def activate_workspace(self, workspace_data: dict):
                 """Activate workspace and change CWD."""
                 import os
+
                 from wtb.domain.models.workspace import Workspace
                 
                 ws = Workspace.from_dict(workspace_data)
@@ -770,9 +754,10 @@ class TestVenvCacheE2E:
         def check_cache_from_actor(cache_dir: str, spec_dict: dict):
             """Check cache from within Ray actor."""
             from pathlib import Path
+
             from wtb.infrastructure.environment.venv_cache import (
-                VenvCacheManager, 
                 VenvCacheConfig,
+                VenvCacheManager,
                 VenvSpec,
             )
             
@@ -956,8 +941,8 @@ class TestEventBusIntegration:
     ):
         """Test workspace lifecycle events are published."""
         from wtb.domain.events.workspace_events import (
-            WorkspaceCreatedEvent,
             WorkspaceCleanedUpEvent,
+            WorkspaceCreatedEvent,
         )
         
         event_bus = get_wtb_event_bus()
@@ -1001,8 +986,8 @@ class TestEventBusIntegration:
         """Test actor lifecycle events are published."""
         from wtb.domain.events.workspace_events import (
             ActorCreatedEvent,
-            ActorResetEvent,
             ActorKilledEvent,
+            ActorResetEvent,
         )
         
         event_bus = get_wtb_event_bus()

@@ -12,7 +12,6 @@ from wtb.infrastructure.database.async_unit_of_work import (
 )
 from wtb.infrastructure.database.engine_cache import get_engine
 
-
 MIGRATION_PATH = (
     Path(__file__).parents[2]
     / "wtb"

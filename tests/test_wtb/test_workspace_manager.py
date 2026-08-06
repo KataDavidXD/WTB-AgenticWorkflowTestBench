@@ -20,39 +20,28 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from wtb.domain.events.workspace_events import (
+    OrphanWorkspaceDetectedEvent,
+    WorkspaceCleanedUpEvent,
+    WorkspaceCreatedEvent,
+)
 from wtb.domain.models.workspace import (
+    LinkMethod,
     Workspace,
     WorkspaceConfig,
     WorkspaceStrategy,
-    LinkMethod,
-    LinkResult,
-    OrphanWorkspace,
-    CleanupReport,
     compute_venv_spec_hash,
 )
-from wtb.domain.events.workspace_events import (
-    WorkspaceCreatedEvent,
-    WorkspaceActivatedEvent,
-    WorkspaceDeactivatedEvent,
-    WorkspaceCleanedUpEvent,
-    FileSnapshotCreatedEvent,
-    OrphanWorkspaceDetectedEvent,
-    OrphanCleanupCompletedEvent,
-)
 from wtb.infrastructure.workspace.manager import (
-    WorkspaceManager,
-    WorkspaceManagerError,
-    WorkspaceNotFoundError,
-    WorkspaceCreationError,
     WorkspaceCleanupError,
+    WorkspaceManager,
+    WorkspaceNotFoundError,
     create_file_link,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

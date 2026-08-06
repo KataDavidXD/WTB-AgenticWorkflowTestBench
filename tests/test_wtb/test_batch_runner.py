@@ -7,29 +7,29 @@ Tests IBatchTestRunner interface, ThreadPoolBatchTestRunner, and BatchTestRunner
 import base64
 import threading
 import time
-import pytest
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from wtb.domain.models.batch_test import (
-    BatchTest,
-    BatchTestStatus,
-    VariantCombination,
-    BatchTestResult,
-)
-from wtb.domain.models.workflow import TestWorkflow
-from wtb.domain.interfaces.batch_runner import (
-    IBatchTestRunner,
-    BatchRunnerStatus,
-    BatchRunnerProgress,
-    BatchRunnerError,
-)
+import pytest
+
+from wtb.application.factories import BatchTestRunnerFactory
 from wtb.application.services.batch_test_runner import ThreadPoolBatchTestRunner
 from wtb.application.services.ray_batch_runner import RAY_AVAILABLE
 from wtb.config import RayConfig
-from wtb.application.factories import BatchTestRunnerFactory
-from wtb.infrastructure.database import InMemoryUnitOfWork
+from wtb.domain.interfaces.batch_runner import (
+    BatchRunnerError,
+    BatchRunnerProgress,
+    BatchRunnerStatus,
+    IBatchTestRunner,
+)
+from wtb.domain.models.batch_test import (
+    BatchTest,
+    BatchTestResult,
+    BatchTestStatus,
+    VariantCombination,
+)
+from wtb.domain.models.workflow import TestWorkflow
 from wtb.infrastructure.adapters import InMemoryStateAdapter
+from wtb.infrastructure.database import InMemoryUnitOfWork
 
 
 class TestRayConfig:
@@ -345,6 +345,7 @@ class TestThreadPoolBatchTestRunner:
     def test_variant_config_isolated_from_workflow_mutation(self, mode):
         """Workflow mutation cannot corrupt the combination used by later cases."""
         from types import SimpleNamespace
+
         from wtb.domain.models.workflow import ExecutionStatus
 
         combo = VariantCombination(
@@ -546,6 +547,7 @@ class TestThreadPoolBatchTestRunner:
     ):
         """Invalid worker metrics fail that cell without corrupting the batch."""
         from types import SimpleNamespace
+
         from wtb.domain.models.workflow import ExecutionStatus
 
         workflow = SimpleNamespace(id="wf-invalid-metric")
@@ -736,6 +738,7 @@ class TestThreadPoolBatchTestRunner:
     ):
         """A configured graph cannot silently downgrade to legacy execution."""
         from types import SimpleNamespace
+
         from wtb.domain.models.workflow import ExecutionStatus
 
         workflow = SimpleNamespace(id="wf-required-graph")
@@ -1031,7 +1034,9 @@ class TestEnvironmentProviders:
     
     def test_inprocess_provider(self):
         """InProcessEnvironmentProvider works."""
-        from wtb.infrastructure.environment.providers import InProcessEnvironmentProvider
+        from wtb.infrastructure.environment.providers import (
+            InProcessEnvironmentProvider,
+        )
         
         provider = InProcessEnvironmentProvider()
         
@@ -1101,7 +1106,10 @@ class TestRayBatchTestRunner:
     )
     def test_create_ray_runner(self):
         """Can create Ray runner (requires Ray)."""
-        from wtb.application.services.ray_batch_runner import RayBatchTestRunner, RayConfig
+        from wtb.application.services.ray_batch_runner import (
+            RayBatchTestRunner,
+            RayConfig,
+        )
         
         runner = RayBatchTestRunner(
             config=RayConfig.for_testing(),

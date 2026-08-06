@@ -10,24 +10,22 @@ Tests cover:
 - Resource cleanup
 """
 
+from datetime import timedelta
+from unittest.mock import MagicMock
+
 import pytest
-from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
 
 from wtb.application.services.actor_lifecycle import (
-    ActorLifecycleManager,
     ActorConfig,
-    ActorResources,
     ActorHandle,
+    ActorLifecycleManager,
+    ActorResources,
     PauseStrategy,
-    PausedActorState,
+    PauseStrategySelector,
     RollbackStrategy,
     SessionType,
-    PauseStrategySelector,
     create_actor_lifecycle_manager,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

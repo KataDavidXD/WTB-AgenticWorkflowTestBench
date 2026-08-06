@@ -9,26 +9,27 @@ Quality Improvements (2026-01-16):
 - Better error messages for debugging
 """
 
-import pytest
-from typing import Optional, List, Dict, Any
 
-from wtb.domain.models import (
-    Execution,
-    ExecutionStatus,
-    ExecutionState,
-    TestWorkflow,
-    WorkflowNode,
-    WorkflowEdge,
+import builtins
+
+import pytest
+
+from wtb.application.services.execution_controller import (
+    DefaultNodeExecutor,
+    ExecutionController,
 )
 from wtb.domain.interfaces.repositories import IExecutionRepository, IWorkflowRepository
+from wtb.domain.models import (
+    Execution,
+    ExecutionState,
+    ExecutionStatus,
+    TestWorkflow,
+    WorkflowEdge,
+    WorkflowNode,
+)
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
-from wtb.application.services.execution_controller import ExecutionController, DefaultNodeExecutor
 
 # Test helpers for better assertions
-from tests.helpers.assertions import (
-    assert_execution_completed,
-    assert_execution_paused,
-)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -39,12 +40,12 @@ class MockExecutionRepository(IExecutionRepository):
     """In-memory execution repository for testing."""
     
     def __init__(self):
-        self._storage: Dict[str, Execution] = {}
+        self._storage: dict[str, Execution] = {}
     
-    def get(self, id: str) -> Optional[Execution]:
+    def get(self, id: str) -> Execution | None:
         return self._storage.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[Execution]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[Execution]:
         items = list(self._storage.values())
         return items[offset:offset + limit]
     
@@ -65,23 +66,23 @@ class MockExecutionRepository(IExecutionRepository):
     def exists(self, id: str) -> bool:
         return id in self._storage
     
-    def find_by_workflow(self, workflow_id: str, status: Optional[str] = None) -> List[Execution]:
+    def find_by_workflow(self, workflow_id: str, status: str | None = None) -> builtins.list[Execution]:
         results = [e for e in self._storage.values() if e.workflow_id == workflow_id]
         if status:
             results = [e for e in results if e.status.value == status]
         return results
     
-    def find_by_status(self, status: str) -> List[Execution]:
+    def find_by_status(self, status: str) -> builtins.list[Execution]:
         return [e for e in self._storage.values() if e.status.value == status]
     
-    def count_by_status(self) -> Dict[str, int]:
+    def count_by_status(self) -> dict[str, int]:
         counts = {}
         for e in self._storage.values():
             key = e.status.value
             counts[key] = counts.get(key, 0) + 1
         return counts
     
-    def find_running(self) -> List[Execution]:
+    def find_running(self) -> builtins.list[Execution]:
         return [e for e in self._storage.values() if e.status == ExecutionStatus.RUNNING]
 
 
@@ -89,12 +90,12 @@ class MockWorkflowRepository(IWorkflowRepository):
     """In-memory workflow repository for testing."""
     
     def __init__(self):
-        self._storage: Dict[str, TestWorkflow] = {}
+        self._storage: dict[str, TestWorkflow] = {}
     
-    def get(self, id: str) -> Optional[TestWorkflow]:
+    def get(self, id: str) -> TestWorkflow | None:
         return self._storage.get(id)
     
-    def list(self, limit: int = 100, offset: int = 0) -> List[TestWorkflow]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[TestWorkflow]:
         items = list(self._storage.values())
         return items[offset:offset + limit]
     
@@ -115,17 +116,17 @@ class MockWorkflowRepository(IWorkflowRepository):
     def exists(self, id: str) -> bool:
         return id in self._storage
     
-    def list_all(self) -> List[TestWorkflow]:
+    def list_all(self) -> builtins.list[TestWorkflow]:
         """List all workflows without pagination."""
         return list(self._storage.values())
     
-    def find_by_name(self, name: str) -> Optional[TestWorkflow]:
+    def find_by_name(self, name: str) -> TestWorkflow | None:
         for w in self._storage.values():
             if w.name == name:
                 return w
         return None
     
-    def find_by_version(self, name: str, version: str) -> Optional[TestWorkflow]:
+    def find_by_version(self, name: str, version: str) -> TestWorkflow | None:
         for w in self._storage.values():
             if w.name == name and w.version == version:
                 return w

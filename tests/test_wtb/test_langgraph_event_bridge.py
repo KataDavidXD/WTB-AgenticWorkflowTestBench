@@ -7,34 +7,30 @@ including event transformation, metrics collection, and configuration.
 Run with: pytest tests/test_wtb/test_langgraph_event_bridge.py -v
 """
 
-import pytest
-from datetime import datetime
-from typing import Dict, Any, List
-from unittest.mock import MagicMock, AsyncMock, patch
-import asyncio
+from unittest.mock import MagicMock
 
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    StreamModeConfig,
-    LangGraphEventBridge,
-    NodeExecutionTracker,
-    create_event_bridge,
-    create_event_bridge_for_testing,
-    InMemoryMetricsCollector,
-)
+import pytest
+
 from wtb.domain.events import (
-    ExecutionStartedEvent,
     ExecutionCompletedEvent,
     ExecutionFailedEvent,
-    NodeStartedEvent,
-    NodeCompletedEvent,
-    NodeFailedEvent,
+    ExecutionStartedEvent,
     LangGraphAuditEvent,
     LangGraphAuditEventType,
+    NodeCompletedEvent,
+    NodeFailedEvent,
+    NodeStartedEvent,
     create_audit_event_from_langgraph,
     create_checkpoint_audit_event,
 )
-
+from wtb.infrastructure.events import (
+    InMemoryMetricsCollector,
+    LangGraphEventBridge,
+    NodeExecutionTracker,
+    StreamModeConfig,
+    WTBEventBus,
+    create_event_bridge_for_testing,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

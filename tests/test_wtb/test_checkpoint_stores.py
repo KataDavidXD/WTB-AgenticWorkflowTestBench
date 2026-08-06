@@ -8,20 +8,19 @@ Tests for:
 These tests verify ICheckpointStore contract compliance.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from typing import List
+
+import pytest
 
 from wtb.domain.models.checkpoint import (
-    CheckpointId,
     Checkpoint,
+    CheckpointId,
     ExecutionHistory,
 )
 from wtb.infrastructure.stores.inmemory_checkpoint_store import (
     InMemoryCheckpointStore,
     InMemoryCheckpointStoreFactory,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -48,7 +47,7 @@ def sample_checkpoint() -> Checkpoint:
 
 
 @pytest.fixture
-def sample_checkpoints() -> List[Checkpoint]:
+def sample_checkpoints() -> list[Checkpoint]:
     """Multiple sample checkpoints for testing."""
     now = datetime.now()
     return [
@@ -158,7 +157,7 @@ class TestInMemoryCheckpointStore:
     # Execution-based Operations
     # ─────────────────────────────────────────────────────────────────────────
     
-    def test_load_by_execution(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_load_by_execution(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test loading all checkpoints for an execution."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -173,7 +172,7 @@ class TestInMemoryCheckpointStore:
         loaded = store.load_by_execution("nonexistent")
         assert loaded == []
     
-    def test_load_history(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_load_history(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test loading as ExecutionHistory aggregate."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -187,7 +186,7 @@ class TestInMemoryCheckpointStore:
         # Verify domain logic is available
         assert history.get_completed_nodes() == ["node_a", "node_b"]
     
-    def test_load_latest(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_load_latest(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test loading latest checkpoint."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -203,7 +202,7 @@ class TestInMemoryCheckpointStore:
         latest = store.load_latest("nonexistent")
         assert latest is None
     
-    def test_delete_by_execution(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_delete_by_execution(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test deleting all checkpoints for an execution."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -218,7 +217,7 @@ class TestInMemoryCheckpointStore:
         count = store.delete_by_execution("nonexistent")
         assert count == 0
     
-    def test_count(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_count(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test counting checkpoints for an execution."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -296,7 +295,7 @@ class TestInMemoryCheckpointStore:
     # Testing Utilities
     # ─────────────────────────────────────────────────────────────────────────
     
-    def test_reset(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_reset(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test reset clears all data."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -334,7 +333,7 @@ class TestInMemoryCheckpointStore:
         exec_ids = store.get_all_execution_ids()
         assert set(exec_ids) == {"exec-001", "exec-002"}
     
-    def test_get_total_checkpoint_count(self, store: InMemoryCheckpointStore, sample_checkpoints: List[Checkpoint]):
+    def test_get_total_checkpoint_count(self, store: InMemoryCheckpointStore, sample_checkpoints: list[Checkpoint]):
         """Test getting total checkpoint count."""
         for cp in sample_checkpoints:
             store.save(cp)
@@ -405,8 +404,8 @@ class TestLangGraphCheckpointStoreBasic:
     def test_import(self):
         """Test that LangGraphCheckpointStore can be imported."""
         from wtb.infrastructure.stores.langgraph_checkpoint_store import (
-            LangGraphCheckpointStore,
             LangGraphCheckpointConfig,
+            LangGraphCheckpointStore,
         )
         
         assert LangGraphCheckpointStore is not None
@@ -414,14 +413,18 @@ class TestLangGraphCheckpointStoreBasic:
     
     def test_config_for_testing(self):
         """Test creating testing config."""
-        from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointConfig
+        from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+            LangGraphCheckpointConfig,
+        )
         
         config = LangGraphCheckpointConfig.for_testing()
         assert config.checkpointer_type == "memory"
     
     def test_config_for_development(self):
         """Test creating development config."""
-        from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointConfig
+        from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+            LangGraphCheckpointConfig,
+        )
         
         config = LangGraphCheckpointConfig.for_development("test.db")
         assert config.checkpointer_type == "sqlite"
@@ -429,7 +432,9 @@ class TestLangGraphCheckpointStoreBasic:
     
     def test_config_for_production(self):
         """Test creating production config."""
-        from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointConfig
+        from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+            LangGraphCheckpointConfig,
+        )
         
         config = LangGraphCheckpointConfig.for_production("postgresql://test")
         assert config.checkpointer_type == "postgres"
@@ -437,7 +442,9 @@ class TestLangGraphCheckpointStoreBasic:
     
     def test_create_for_testing(self):
         """Test creating store for testing."""
-        from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointStore
+        from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+            LangGraphCheckpointStore,
+        )
         
         store = LangGraphCheckpointStore.create_for_testing()
         assert store is not None
@@ -445,7 +452,9 @@ class TestLangGraphCheckpointStoreBasic:
     
     def test_thread_id_conversion(self):
         """Test thread_id conversion."""
-        from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointStore
+        from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+            LangGraphCheckpointStore,
+        )
         
         store = LangGraphCheckpointStore.create_for_testing()
         
@@ -457,7 +466,9 @@ class TestLangGraphCheckpointStoreBasic:
     
     def test_get_config(self):
         """Test building LangGraph config."""
-        from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointStore
+        from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+            LangGraphCheckpointStore,
+        )
         
         store = LangGraphCheckpointStore.create_for_testing()
         

@@ -3,12 +3,11 @@ End-to-end integration test for full file tracking with rollback scenario.
 Migrated from test_file_tracking_rollback.py.
 """
 
-import pytest
-from pathlib import Path
 from typing import TypedDict
-from langgraph.graph import StateGraph, END
 
-from wtb.sdk import WTBTestBench, WorkflowProject
+from langgraph.graph import END, StateGraph
+
+from wtb.sdk import WorkflowProject, WTBTestBench
 
 
 class WorkflowState(TypedDict):

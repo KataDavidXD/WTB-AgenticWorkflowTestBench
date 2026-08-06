@@ -9,21 +9,21 @@ Tests cover:
 - Cache statistics
 """
 
-import pytest
-import tempfile
 import shutil
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from wtb.infrastructure.environment.venv_cache import (
-    VenvCacheManager,
+    CacheStats,
     VenvCacheConfig,
     VenvCacheEntry,
+    VenvCacheManager,
     VenvSpec,
-    CacheStats,
     create_venv_cache,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

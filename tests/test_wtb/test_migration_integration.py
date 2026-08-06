@@ -5,32 +5,22 @@ Tests the migration from wtb_checkpoint_files to checkpoint_file_links.
 Uses in-memory SQLite for fast, isolated testing.
 """
 
-import pytest
-import tempfile
 import uuid
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-from sqlalchemy import create_engine, text, inspect
+import pytest
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 
-from wtb.infrastructure.database.models import Base
-from wtb.infrastructure.database.file_processing_orm import (
-    CheckpointFileLinkORM,
-    FileCommitORM,
-    FileMementoORM,
-    FileBlobORM,
-)
-from wtb.infrastructure.database.repositories import (
-    SQLAlchemyCheckpointFileLinkRepository,
-    InMemoryCheckpointFileLinkRepository,
-)
 from wtb.domain.models.file_processing import (
     CheckpointFileLink,
     CommitId,
-    FileCommit,
-    FileMemento,
-    BlobId,
+)
+from wtb.infrastructure.database.models import Base
+from wtb.infrastructure.database.repositories import (
+    InMemoryCheckpointFileLinkRepository,
+    SQLAlchemyCheckpointFileLinkRepository,
 )
 
 

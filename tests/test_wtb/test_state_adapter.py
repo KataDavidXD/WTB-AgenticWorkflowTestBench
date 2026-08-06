@@ -5,10 +5,9 @@ Tests the in-memory implementation of IStateAdapter interface.
 """
 
 import pytest
-from datetime import datetime
 
-from wtb.domain.models import ExecutionState
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
+from wtb.domain.models import ExecutionState
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
 from wtb.infrastructure.adapters.sqlite_state_adapter import SqliteStateAdapter
 

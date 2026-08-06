@@ -11,25 +11,12 @@ Usage:
     pytest tests/test_wtb/test_parity_checker.py -v
 """
 
-import pytest
 import os
 import time
-from datetime import datetime
-from unittest.mock import MagicMock, patch
-from typing import Dict, Any
+from unittest.mock import MagicMock
 
-from wtb.domain.models.batch_test import (
-    BatchTest,
-    BatchTestStatus,
-    BatchTestResult,
-    VariantCombination,
-)
-from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
-from wtb.domain.interfaces.batch_runner import (
-    IBatchTestRunner,
-    BatchRunnerStatus,
-    BatchRunnerProgress,
-)
+import pytest
+
 from wtb.application.services.parity_checker import (
     ParityChecker,
     ParityCheckerConfig,
@@ -37,7 +24,17 @@ from wtb.application.services.parity_checker import (
     ParityDiscrepancy,
     ParityDiscrepancyType,
 )
-
+from wtb.domain.interfaces.batch_runner import (
+    BatchRunnerStatus,
+    IBatchTestRunner,
+)
+from wtb.domain.models.batch_test import (
+    BatchTest,
+    BatchTestResult,
+    BatchTestStatus,
+    VariantCombination,
+)
+from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
 
 # ═══════════════════════════════════════════════════════════════
 # Fixtures
@@ -590,8 +587,8 @@ class TestParityCheckerIntegration:
     def threadpool_runner(self):
         """Create ThreadPool runner."""
         from wtb.application.services.batch_test_runner import ThreadPoolBatchTestRunner
-        from wtb.infrastructure.database import InMemoryUnitOfWork
         from wtb.infrastructure.adapters import InMemoryStateAdapter
+        from wtb.infrastructure.database import InMemoryUnitOfWork
         
         runner = ThreadPoolBatchTestRunner(
             max_workers=2,
@@ -608,9 +605,9 @@ class TestParityCheckerIntegration:
     def test_real_parity_check(self, threadpool_runner, sample_batch_test):
         """Integration test with real runners."""
         from wtb.application.services.ray_batch_runner import (
+            RAY_AVAILABLE,
             RayBatchTestRunner,
             RayConfig,
-            RAY_AVAILABLE,
         )
         
         if not RAY_AVAILABLE:
