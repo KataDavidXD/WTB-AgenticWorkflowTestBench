@@ -22,12 +22,7 @@ import warnings
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .state_adapter import (
-        IStateAdapter,
-        CheckpointTrigger,
-        CheckpointInfo,
-        NodeBoundaryInfo,
-    )
+    pass
 
 
 def _emit_deprecation_warning(name: str, alternative: str) -> None:

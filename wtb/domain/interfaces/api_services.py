@@ -30,11 +30,10 @@ ACID Compliance:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, AsyncIterator
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-
+from typing import Any
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Result DTOs for API Operations
@@ -47,16 +46,16 @@ class ExecutionDTO:
     id: str
     workflow_id: str
     status: str
-    state: Dict[str, Any]
-    breakpoints: List[str] = field(default_factory=list)
-    current_node_id: Optional[str] = None
-    error: Optional[str] = None
-    error_node_id: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    state: dict[str, Any]
+    breakpoints: list[str] = field(default_factory=list)
+    current_node_id: str | None = None
+    error: str | None = None
+    error_node_id: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     checkpoint_count: int = 0
     nodes_executed: int = 0
-    thread_id: Optional[str] = None
+    thread_id: str | None = None
 
 
 @dataclass
@@ -64,9 +63,9 @@ class ControlResultDTO:
     """Result of a control operation (pause, resume, stop)."""
     success: bool
     status: str
-    checkpoint_id: Optional[str] = None
-    message: Optional[str] = None
-    error: Optional[str] = None
+    checkpoint_id: str | None = None
+    message: str | None = None
+    error: str | None = None
 
 
 @dataclass
@@ -74,11 +73,11 @@ class RollbackResultDTO:
     """Result of a rollback operation."""
     success: bool
     to_checkpoint: str
-    new_session_id: Optional[str] = None
+    new_session_id: str | None = None
     tools_reversed: int = 0
     files_restored: int = 0
-    restored_state: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None  # Error message if success=False
+    restored_state: dict[str, Any] | None = None
+    error: str | None = None  # Error message if success=False
 
 
 @dataclass
@@ -86,18 +85,18 @@ class CheckpointDTO:
     """Data Transfer Object for Checkpoint."""
     id: str
     execution_id: str
-    node_id: Optional[str] = None
+    node_id: str | None = None
     trigger_type: str = "auto"
-    created_at: Optional[datetime] = None
-    state_snapshot: Optional[Dict[str, Any]] = None
+    created_at: datetime | None = None
+    state_snapshot: dict[str, Any] | None = None
     has_file_commit: bool = False
-    file_commit_id: Optional[str] = None
+    file_commit_id: str | None = None
 
 
 @dataclass
 class PaginatedResultDTO:
     """Paginated result container."""
-    items: List[Any]
+    items: list[Any]
     total: int
     limit: int
     offset: int
@@ -112,27 +111,27 @@ class AuditEventDTO:
     event_type: str
     severity: str
     message: str
-    execution_id: Optional[str] = None
-    node_id: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    execution_id: str | None = None
+    node_id: str | None = None
+    details: dict[str, Any] | None = None
+    error: str | None = None
+    duration_ms: float | None = None
 
 
 @dataclass
 class AuditSummaryDTO:
     """Audit summary statistics."""
     total_events: int
-    execution_id: Optional[str] = None
+    execution_id: str | None = None
     time_range: str = "1h"
-    events_by_type: Dict[str, int] = field(default_factory=dict)
-    events_by_severity: Dict[str, int] = field(default_factory=dict)
+    events_by_type: dict[str, int] = field(default_factory=dict)
+    events_by_severity: dict[str, int] = field(default_factory=dict)
     error_rate: float = 0.0
     checkpoint_count: int = 0
     rollback_count: int = 0
     nodes_executed: int = 0
     nodes_failed: int = 0
-    avg_node_duration_ms: Optional[float] = None
+    avg_node_duration_ms: float | None = None
 
 
 @dataclass
@@ -144,12 +143,12 @@ class BatchTestDTO:
     variant_count: int
     variants_completed: int = 0
     variants_failed: int = 0
-    created_at: Optional[datetime] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_ms: Optional[float] = None
-    comparison_matrix: Optional[Dict[str, Any]] = None
-    best_variant: Optional[str] = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    comparison_matrix: dict[str, Any] | None = None
+    best_variant: str | None = None
 
 
 @dataclass
@@ -159,8 +158,8 @@ class BatchTestProgressDTO:
     total: int
     completed: int
     failed: int
-    current: Optional[str] = None
-    eta_seconds: Optional[float] = None
+    current: str | None = None
+    eta_seconds: float | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -184,8 +183,8 @@ class IExecutionAPIService(ABC):
     @abstractmethod
     async def list_executions(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
+        workflow_id: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> PaginatedResultDTO:
@@ -204,7 +203,7 @@ class IExecutionAPIService(ABC):
         pass
     
     @abstractmethod
-    async def get_execution(self, execution_id: str) -> Optional[ExecutionDTO]:
+    async def get_execution(self, execution_id: str) -> ExecutionDTO | None:
         """
         Get execution by ID.
         
@@ -220,8 +219,8 @@ class IExecutionAPIService(ABC):
     async def pause_execution(
         self,
         execution_id: str,
-        reason: Optional[str] = None,
-        at_node: Optional[str] = None,
+        reason: str | None = None,
+        at_node: str | None = None,
     ) -> ControlResultDTO:
         """
         Pause a running execution.
@@ -242,8 +241,8 @@ class IExecutionAPIService(ABC):
     async def resume_execution(
         self,
         execution_id: str,
-        modified_state: Optional[Dict[str, Any]] = None,
-        from_node: Optional[str] = None,
+        modified_state: dict[str, Any] | None = None,
+        from_node: str | None = None,
     ) -> ControlResultDTO:
         """
         Resume a paused execution.
@@ -264,7 +263,7 @@ class IExecutionAPIService(ABC):
     async def stop_execution(
         self,
         execution_id: str,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> ControlResultDTO:
         """
         Stop and cancel an execution.
@@ -306,8 +305,8 @@ class IExecutionAPIService(ABC):
     async def get_execution_state(
         self,
         execution_id: str,
-        keys: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        keys: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Get current execution state.
         
@@ -324,8 +323,8 @@ class IExecutionAPIService(ABC):
     async def modify_execution_state(
         self,
         execution_id: str,
-        changes: Dict[str, Any],
-        reason: Optional[str] = None,
+        changes: dict[str, Any],
+        reason: str | None = None,
     ) -> ControlResultDTO:
         """
         Modify execution state (human-in-the-loop).
@@ -347,7 +346,7 @@ class IExecutionAPIService(ABC):
         self,
         execution_id: str,
         limit: int = 100,
-    ) -> List[CheckpointDTO]:
+    ) -> list[CheckpointDTO]:
         """
         List checkpoints for an execution.
         
@@ -380,12 +379,12 @@ class IAuditAPIService(ABC):
     @abstractmethod
     async def query_events(
         self,
-        execution_id: Optional[str] = None,
-        event_types: Optional[List[str]] = None,
-        severities: Optional[List[str]] = None,
-        node_id: Optional[str] = None,
-        since: Optional[datetime] = None,
-        until: Optional[datetime] = None,
+        execution_id: str | None = None,
+        event_types: list[str] | None = None,
+        severities: list[str] | None = None,
+        node_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> PaginatedResultDTO:
@@ -410,7 +409,7 @@ class IAuditAPIService(ABC):
     @abstractmethod
     async def get_summary(
         self,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
         time_range: str = "1h",
     ) -> AuditSummaryDTO:
         """
@@ -430,7 +429,7 @@ class IAuditAPIService(ABC):
         self,
         execution_id: str,
         include_debug: bool = False,
-    ) -> List[AuditEventDTO]:
+    ) -> list[AuditEventDTO]:
         """
         Get execution timeline for visualization.
         
@@ -464,9 +463,9 @@ class IBatchTestAPIService(ABC):
     async def create_batch_test(
         self,
         workflow_id: str,
-        variants: List[Dict[str, Any]],
-        initial_state: Optional[Dict[str, Any]] = None,
-        parallelism: Optional[int] = None,
+        variants: list[dict[str, Any]],
+        initial_state: dict[str, Any] | None = None,
+        parallelism: int | None = None,
         use_ray: bool = True,
     ) -> BatchTestDTO:
         """
@@ -487,7 +486,7 @@ class IBatchTestAPIService(ABC):
         pass
     
     @abstractmethod
-    async def get_batch_test(self, batch_test_id: str) -> Optional[BatchTestDTO]:
+    async def get_batch_test(self, batch_test_id: str) -> BatchTestDTO | None:
         """
         Get batch test by ID.
         
@@ -502,8 +501,8 @@ class IBatchTestAPIService(ABC):
     @abstractmethod
     async def list_batch_tests(
         self,
-        workflow_id: Optional[str] = None,
-        status: Optional[str] = None,
+        workflow_id: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> PaginatedResultDTO:
@@ -541,7 +540,7 @@ class IBatchTestAPIService(ABC):
     async def cancel_batch_test(
         self,
         batch_test_id: str,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> ControlResultDTO:
         """
         Cancel a running batch test.
@@ -568,13 +567,13 @@ class WorkflowDTO:
     """Data Transfer Object for Workflow."""
     id: str
     name: str
-    description: Optional[str] = None
-    nodes: List[Dict[str, Any]] = field(default_factory=list)
-    edges: List[Dict[str, Any]] = field(default_factory=list)
-    entry_point: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    description: str | None = None
+    nodes: list[dict[str, Any]] = field(default_factory=list)
+    edges: list[dict[str, Any]] = field(default_factory=list)
+    entry_point: str | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     version: int = 1
 
 
@@ -589,17 +588,17 @@ class IWorkflowAPIService(ABC):
     async def create_workflow(
         self,
         name: str,
-        nodes: List[Dict[str, Any]],
+        nodes: list[dict[str, Any]],
         entry_point: str,
-        description: Optional[str] = None,
-        edges: Optional[List[Dict[str, Any]]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        description: str | None = None,
+        edges: list[dict[str, Any]] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> WorkflowDTO:
         """Create a new workflow definition."""
         pass
     
     @abstractmethod
-    async def get_workflow(self, workflow_id: str) -> Optional[WorkflowDTO]:
+    async def get_workflow(self, workflow_id: str) -> WorkflowDTO | None:
         """Get workflow by ID."""
         pass
     

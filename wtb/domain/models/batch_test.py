@@ -5,21 +5,21 @@ Represents a batch A/B test with multiple variant combinations.
 Orchestrates parallel execution and comparison.
 """
 
+import math
+import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
 from datetime import datetime
 from enum import Enum
-import math
 from numbers import Real
-import uuid
+from typing import Any
 
 
-def normalize_finite_metrics(metrics: Dict[str, Any]) -> Dict[str, float]:
+def normalize_finite_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     """Return numeric finite metrics or reject the entire metric payload."""
     if not isinstance(metrics, dict):
         raise ValueError("metrics must be a dictionary of finite real numbers")
 
-    normalized: Dict[str, float] = {}
+    normalized: dict[str, float] = {}
     for name, value in metrics.items():
         if isinstance(value, bool) or not isinstance(value, Real):
             raise ValueError(f"metric '{name}' must be a finite real number")
@@ -74,18 +74,18 @@ class VariantCombination:
         )
     """
     name: str  # Human-readable name (e.g., "Config A")
-    variants: Dict[str, str] = field(default_factory=dict)  # node_id -> variant_id
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    variants: dict[str, str] = field(default_factory=dict)  # node_id -> variant_id
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # v1.8: Graph factory reference for distributed execution with checkpoints
-    graph_factory_module: Optional[str] = None  # e.g., "examples.ray_batch_demo.run_demo"
-    graph_factory_name: Optional[str] = None    # e.g., "create_demo_graph"
+    graph_factory_module: str | None = None  # e.g., "examples.ray_batch_demo.run_demo"
+    graph_factory_name: str | None = None    # e.g., "create_demo_graph"
 
     # Thread-local fallback for graph objects that cloudpickle cannot safely
     # round-trip. Deliberately excluded from to_dict() and value equality.
-    _runtime_graph: Optional[Any] = field(default=None, repr=False, compare=False)
+    _runtime_graph: Any | None = field(default=None, repr=False, compare=False)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "name": self.name,
             "variants": self.variants,
@@ -99,7 +99,7 @@ class VariantCombination:
         return result
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VariantCombination":
+    def from_dict(cls, data: dict[str, Any]) -> "VariantCombination":
         return cls(
             name=data.get("name", ""),
             variants=data.get("variants", {}),
@@ -129,21 +129,21 @@ class BatchTestResult:
     combination_name: str
     execution_id: str
     success: bool
-    metrics: Dict[str, float] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
     overall_score: float = 0.0
     duration_ms: int = 0
-    error_message: Optional[str] = None
+    error_message: str | None = None
     # v1.8: Rollback support fields
-    file_commit_id: Optional[str] = None      # FileTracker commit ID
+    file_commit_id: str | None = None      # FileTracker commit ID
     checkpoint_count: int = 0                  # Number of checkpoints
-    last_checkpoint_id: Optional[str] = None   # Most recent checkpoint ID
-    test_case_index: Optional[int] = None       # Multi-case result identity
+    last_checkpoint_id: str | None = None   # Most recent checkpoint ID
+    test_case_index: int | None = None       # Multi-case result identity
     
     def __post_init__(self) -> None:
         self.metrics = normalize_finite_metrics(self.metrics)
         self.overall_score = normalize_finite_score(self.overall_score)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "combination_name": self.combination_name,
             "execution_id": self.execution_id,
@@ -160,7 +160,7 @@ class BatchTestResult:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BatchTestResult":
+    def from_dict(cls, data: dict[str, Any]) -> "BatchTestResult":
         return cls(
             combination_name=data.get("combination_name", ""),
             execution_id=data.get("execution_id", ""),
@@ -194,33 +194,33 @@ class BatchTest:
     workflow_id: str = ""
     
     # Configuration
-    variant_combinations: List[VariantCombination] = field(default_factory=list)
+    variant_combinations: list[VariantCombination] = field(default_factory=list)
     parallel_count: int = 1  # Max concurrent executions
     
     # Initial state for all runs
-    initial_state: Dict[str, Any] = field(default_factory=dict)
+    initial_state: dict[str, Any] = field(default_factory=dict)
     
     # Status
     status: BatchTestStatus = BatchTestStatus.PENDING
     
     # Timing
     created_at: datetime = field(default_factory=datetime.now)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     
     # Results
-    execution_ids: List[str] = field(default_factory=list)
-    results: List[BatchTestResult] = field(default_factory=list)
-    comparison_matrix: Optional[Dict[str, Any]] = None
+    execution_ids: list[str] = field(default_factory=list)
+    results: list[BatchTestResult] = field(default_factory=list)
+    comparison_matrix: dict[str, Any] | None = None
     
     # Best variant
-    best_combination_name: Optional[str] = None
+    best_combination_name: str | None = None
     
     # Metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # Transient: workflow object cache (not persisted, avoids UoW lookup)
-    _workflow: Optional[Any] = field(default=None, repr=False, compare=False)
+    _workflow: Any | None = field(default=None, repr=False, compare=False)
     
     # === Lifecycle Methods ===
     
@@ -284,17 +284,17 @@ class BatchTest:
         except (TypeError, ValueError):
             return 1
 
-    def _results_by_combination(self) -> Dict[str, List[BatchTestResult]]:
+    def _results_by_combination(self) -> dict[str, list[BatchTestResult]]:
         """Group results while preserving combination insertion order."""
-        grouped: Dict[str, List[BatchTestResult]] = {}
+        grouped: dict[str, list[BatchTestResult]] = {}
         for result in self.results:
             grouped.setdefault(result.combination_name, []).append(result)
         return grouped
 
-    def _aggregate_scores(self) -> Dict[str, float]:
+    def _aggregate_scores(self) -> dict[str, float]:
         """Average complete per-case scores for each combination."""
         expected = self._expected_test_case_count()
-        aggregate_scores: Dict[str, float] = {}
+        aggregate_scores: dict[str, float] = {}
         for name, results in self._results_by_combination().items():
             if len(results) != expected:
                 continue
@@ -315,7 +315,7 @@ class BatchTest:
             return
         
         expected = self._expected_test_case_count()
-        candidates: List[tuple[float, str]] = []
+        candidates: list[tuple[float, str]] = []
         for name, results in self._results_by_combination().items():
             if len(results) != expected or any(not result.success for result in results):
                 continue
@@ -333,7 +333,7 @@ class BatchTest:
         if candidates:
             _, self.best_combination_name = max(candidates, key=lambda item: item[0])
     
-    def build_comparison_matrix(self) -> Dict[str, Any]:
+    def build_comparison_matrix(self) -> dict[str, Any]:
         """Build a comparison matrix of all results."""
         if not self.results:
             return {}
@@ -382,7 +382,7 @@ class BatchTest:
     
     # === Query Methods ===
     
-    def get_duration_seconds(self) -> Optional[float]:
+    def get_duration_seconds(self) -> float | None:
         """Get total duration in seconds."""
         if not self.started_at:
             return None
@@ -424,7 +424,7 @@ class BatchTest:
     
     # === Serialization ===
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "id": self.id,
@@ -446,7 +446,7 @@ class BatchTest:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BatchTest":
+    def from_dict(cls, data: dict[str, Any]) -> "BatchTest":
         """Deserialize from dictionary."""
         bt = cls(
             id=data.get("id", str(uuid.uuid4())),

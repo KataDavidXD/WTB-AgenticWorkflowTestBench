@@ -4,10 +4,10 @@ Node-related domain events.
 Published during node execution within a workflow.
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any
-import uuid
+from typing import Any
 
 
 @dataclass
@@ -28,8 +28,8 @@ class NodeEvent:
 class NodeStartedEvent(NodeEvent):
     """Published when a node starts execution."""
     node_type: str = ""
-    context: Dict[str, Any] = field(default_factory=dict)
-    entry_checkpoint_id: Optional[str] = None
+    context: dict[str, Any] = field(default_factory=dict)
+    entry_checkpoint_id: str | None = None
 
 
 @dataclass
@@ -38,8 +38,8 @@ class NodeCompletedEvent(NodeEvent):
     result: Any = None
     duration_ms: float = 0.0
     tool_invocations: int = 0
-    exit_checkpoint_id: Optional[str] = None
-    output_variables: Dict[str, Any] = field(default_factory=dict)
+    exit_checkpoint_id: str | None = None
+    output_variables: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -55,5 +55,5 @@ class NodeFailedEvent(NodeEvent):
 class NodeSkippedEvent(NodeEvent):
     """Published when a node is skipped (e.g., condition not met)."""
     reason: str = ""
-    condition: Optional[str] = None
+    condition: str | None = None
 

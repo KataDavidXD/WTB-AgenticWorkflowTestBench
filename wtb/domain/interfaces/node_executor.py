@@ -6,8 +6,8 @@ Allows different execution strategies (local, remote, mock).
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Any
 
 from ..models.workflow import WorkflowNode
 
@@ -17,10 +17,10 @@ class NodeExecutionResult:
     """Result of executing a workflow node."""
     success: bool
     output: Any = None
-    error: Optional[str] = None
+    error: str | None = None
     duration_ms: float = 0.0
     tool_invocations: int = 0
-    metadata: Dict[str, Any] = None
+    metadata: dict[str, Any] = None
     
     def __post_init__(self):
         if self.metadata is None:
@@ -46,7 +46,7 @@ class INodeExecutor(ABC):
     def execute(
         self,
         node: WorkflowNode,
-        context: Dict[str, Any]
+        context: dict[str, Any]
     ) -> NodeExecutionResult:
         """
         Execute a workflow node.
@@ -103,7 +103,7 @@ class INodeExecutorRegistry(ABC):
         pass
     
     @abstractmethod
-    def get_executor(self, node: WorkflowNode) -> Optional[INodeExecutor]:
+    def get_executor(self, node: WorkflowNode) -> INodeExecutor | None:
         """
         Get the appropriate executor for a node.
         
@@ -119,7 +119,7 @@ class INodeExecutorRegistry(ABC):
     def execute(
         self,
         node: WorkflowNode,
-        context: Dict[str, Any]
+        context: dict[str, Any]
     ) -> NodeExecutionResult:
         """
         Execute a node using the appropriate executor.

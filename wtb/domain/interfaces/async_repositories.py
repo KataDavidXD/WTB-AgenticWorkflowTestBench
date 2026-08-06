@@ -1,10 +1,15 @@
 
 from abc import ABC, abstractmethod
-from typing import TypeVar, Generic, Optional, List
 from pathlib import Path
+from typing import Generic, Optional, TypeVar
 
 # Forward references for type checking
-from wtb.domain.models.file_processing import FileCommit, FileMemento, CheckpointFileLink, BlobId, CommitId
+from wtb.domain.models.file_processing import (
+    BlobId,
+    CheckpointFileLink,
+    CommitId,
+    FileCommit,
+)
 from wtb.domain.models.outbox import OutboxEvent
 
 T = TypeVar('T')
@@ -14,12 +19,12 @@ class IAsyncReadRepository(ABC, Generic[T]):
     """Async read-only repository interface."""
   
     @abstractmethod
-    async def aget(self, id: str) -> Optional[T]:
+    async def aget(self, id: str) -> T | None:
         """Get entity by ID asynchronously."""
         pass
   
     @abstractmethod
-    async def alist(self, limit: int = 100, offset: int = 0) -> List[T]:
+    async def alist(self, limit: int = 100, offset: int = 0) -> list[T]:
         """List entities with pagination asynchronously."""
         pass
   
@@ -71,7 +76,7 @@ class IAsyncOutboxRepository(ABC):
         self,
         limit: int = 100,
         order_by: str = "created_at",  # FIFO ordering - DO NOT CHANGE
-    ) -> List["OutboxEvent"]:
+    ) -> list["OutboxEvent"]:
         """
         Get pending events in FIFO order.
       
@@ -134,7 +139,7 @@ class IAsyncBlobRepository(ABC):
         pass
     
     @abstractmethod
-    async def aget(self, blob_id: "BlobId") -> Optional[bytes]:
+    async def aget(self, blob_id: "BlobId") -> bytes | None:
         """
         Retrieve content by blob ID asynchronously.
         
@@ -173,7 +178,7 @@ class IAsyncBlobRepository(ABC):
         pass
     
     @abstractmethod
-    async def alist_all_hashes(self) -> List["BlobId"]:
+    async def alist_all_hashes(self) -> list["BlobId"]:
         """
         List all blob hashes in storage.
         
@@ -219,7 +224,7 @@ class IAsyncFileCommitRepository(ABC):
         pass
     
     @abstractmethod
-    async def aget_by_execution_id(self, execution_id: str) -> List["FileCommit"]:
+    async def aget_by_execution_id(self, execution_id: str) -> list["FileCommit"]:
         """Get all commits for an execution."""
         pass
     
@@ -253,7 +258,7 @@ class IAsyncCheckpointFileLinkRepository(ABC):
         pass
     
     @abstractmethod
-    async def aget_by_commit(self, commit_id: "CommitId") -> List["CheckpointFileLink"]:
+    async def aget_by_commit(self, commit_id: "CommitId") -> list["CheckpointFileLink"]:
         """Get all links for a commit."""
         pass
     

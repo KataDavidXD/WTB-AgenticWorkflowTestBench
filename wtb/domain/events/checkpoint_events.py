@@ -15,10 +15,10 @@ Updated 2026-01-27 (Event Unification - HIGH-001):
 - Frozen for immutability (checkpoint events should not be mutated)
 """
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any, List
-import uuid
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -55,9 +55,9 @@ class CheckpointCreated(CheckpointEvent):
     """
     checkpoint_id: str = ""  # CheckpointId value (string)
     step: int = 0
-    node_writes: Dict[str, Any] = field(default_factory=dict)
-    completed_node: Optional[str] = None
-    next_nodes: List[str] = field(default_factory=list)
+    node_writes: dict[str, Any] = field(default_factory=dict)
+    completed_node: str | None = None
+    next_nodes: list[str] = field(default_factory=list)
     is_terminal: bool = False
 
 
@@ -69,7 +69,7 @@ class RollbackRequested(CheckpointEvent):
     Published when a user or system requests a rollback operation.
     """
     target_checkpoint_id: str = ""  # CheckpointId value (string)
-    target_node_id: Optional[str] = None  # Node to rollback to (if node-level)
+    target_node_id: str | None = None  # Node to rollback to (if node-level)
     reason: str = ""
     requested_by: str = ""  # "user", "system", "error_handler"
 
@@ -83,7 +83,7 @@ class RollbackCompleted(CheckpointEvent):
     """
     from_checkpoint_id: str = ""  # Where we were
     to_checkpoint_id: str = ""    # Where we rolled back to
-    rolled_back_nodes: List[str] = field(default_factory=list)
+    rolled_back_nodes: list[str] = field(default_factory=list)
     state_restored: bool = True
 
 
@@ -110,7 +110,7 @@ class NodeBoundaryRecorded(CheckpointEvent):
     boundary_type: str = ""  # "entry" or "exit"
     checkpoint_id: str = ""  # CheckpointId value (string)
     node_status: str = ""    # "running", "completed", "failed"
-    duration_ms: Optional[int] = None
+    duration_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -122,8 +122,8 @@ class ExecutionHistoryLoaded(CheckpointEvent):
     Useful for audit and debugging.
     """
     checkpoint_count: int = 0
-    completed_nodes: List[str] = field(default_factory=list)
-    latest_checkpoint_id: Optional[str] = None
+    completed_nodes: list[str] = field(default_factory=list)
+    latest_checkpoint_id: str | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -157,8 +157,8 @@ def create_checkpoint_created_event(
     execution_id: str,
     checkpoint_id: str,
     step: int,
-    node_writes: Dict[str, Any],
-    next_nodes: List[str],
+    node_writes: dict[str, Any],
+    next_nodes: list[str],
 ) -> CheckpointCreated:
     """Factory function to create CheckpointCreated event."""
     completed_node = None
@@ -181,7 +181,7 @@ def create_rollback_completed_event(
     execution_id: str,
     from_checkpoint_id: str,
     to_checkpoint_id: str,
-    rolled_back_nodes: List[str],
+    rolled_back_nodes: list[str],
 ) -> RollbackCompleted:
     """Factory function to create RollbackCompleted event."""
     return RollbackCompleted(

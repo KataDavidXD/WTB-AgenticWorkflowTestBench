@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass
@@ -17,10 +17,10 @@ class AuditEntry:
     timestamp: datetime
     event_type: str
     message: str
-    execution_id: Optional[str] = None
-    id: Optional[str] = None
-    payload: Dict[str, Any] = field(default_factory=dict)
-    node_id: Optional[str] = None
+    execution_id: str | None = None
+    id: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    node_id: str | None = None
     severity: str = "info"
-    error: Optional[str] = None
-    duration_ms: Optional[float] = None
+    error: str | None = None
+    duration_ms: float | None = None

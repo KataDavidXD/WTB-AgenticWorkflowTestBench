@@ -19,7 +19,7 @@ DDD Compliance:
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, ClassVar, Dict, Optional, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 if TYPE_CHECKING:
     from .checkpoint import CheckpointId
@@ -51,7 +51,7 @@ class NodeBoundary:
     - Removed: internal_session_id, tool_count, checkpoint_count
     """
     # Identity
-    id: Optional[int] = None  # Auto-assigned by DB
+    id: int | None = None  # Auto-assigned by DB
     
     # WTB Execution Context
     execution_id: str = ""  # WTB execution UUID
@@ -60,22 +60,22 @@ class NodeBoundary:
     node_id: str = ""  # Workflow node name
     
     # Checkpoint Pointers (string-based, LangGraph compatible)
-    entry_checkpoint_id: Optional[str] = None  # Checkpoint ID when entering node
-    exit_checkpoint_id: Optional[str] = None   # Checkpoint ID when exiting (rollback target)
+    entry_checkpoint_id: str | None = None  # Checkpoint ID when entering node
+    exit_checkpoint_id: str | None = None   # Checkpoint ID when exiting (rollback target)
     
     # Node Execution Status
     node_status: NodeStatus = field(default=NodeStatus.PENDING)
     
     # Timing
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    duration_ms: Optional[int] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: int | None = None
     
     # Error Info
-    error_message: Optional[str] = None
-    error_details: Optional[Dict[str, Any]] = None
+    error_message: str | None = None
+    error_details: dict[str, Any] | None = None
     
-    _VALID_TRANSITIONS: ClassVar[Dict[NodeStatus, Set[NodeStatus]]] = {
+    _VALID_TRANSITIONS: ClassVar[dict[NodeStatus, set[NodeStatus]]] = {
         NodeStatus.PENDING: {NodeStatus.RUNNING, NodeStatus.SKIPPED},
         NodeStatus.RUNNING: {NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.SKIPPED},
         NodeStatus.COMPLETED: set(),
@@ -114,7 +114,7 @@ class NodeBoundary:
         if self.started_at:
             self.duration_ms = int((self.completed_at - self.started_at).total_seconds() * 1000)
     
-    def fail(self, error_message: str, error_details: Optional[Dict[str, Any]] = None) -> None:
+    def fail(self, error_message: str, error_details: dict[str, Any] | None = None) -> None:
         """Mark node as failed."""
         self._validate_transition(NodeStatus.FAILED)
         self.node_status = NodeStatus.FAILED
@@ -166,7 +166,7 @@ class NodeBoundary:
             return CheckpointId(self.exit_checkpoint_id)
         return None
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "id": self.id,
@@ -183,7 +183,7 @@ class NodeBoundary:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "NodeBoundary":
+    def from_dict(cls, data: dict[str, Any]) -> "NodeBoundary":
         """Deserialize from dictionary."""
         started_at = None
         completed_at = None

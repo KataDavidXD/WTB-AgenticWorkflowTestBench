@@ -23,9 +23,9 @@ REMOVED (v1.6):
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, Literal, Union
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Literal, Union
 
 from ..models.workflow import ExecutionState
 
@@ -46,8 +46,8 @@ class CheckpointInfo:
     Refactored (v1.6): Uses string IDs throughout.
     """
     id: str                         # Checkpoint ID (UUID string)
-    name: Optional[str]             # Human-readable name
-    node_id: Optional[str]          # Which node this checkpoint belongs to
+    name: str | None             # Human-readable name
+    node_id: str | None          # Which node this checkpoint belongs to
     step: int                       # LangGraph super-step number
     trigger_type: CheckpointTrigger
     created_at: str
@@ -64,10 +64,10 @@ class NodeBoundaryInfo:
     id: str                         # Boundary ID
     node_id: str                    # The workflow node
     entry_checkpoint_id: str        # First checkpoint when entering node
-    exit_checkpoint_id: Optional[str]  # Last checkpoint when exiting (rollback target)
+    exit_checkpoint_id: str | None  # Last checkpoint when exiting (rollback target)
     node_status: str                # "started", "completed", "failed"
     started_at: str
-    completed_at: Optional[str]
+    completed_at: str | None
 
 
 class IStateAdapter(ABC):
@@ -102,7 +102,7 @@ class IStateAdapter(ABC):
         self, 
         execution_id: str,
         initial_state: ExecutionState
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Initialize a new session (thread context) for execution.
         
@@ -119,7 +119,7 @@ class IStateAdapter(ABC):
         pass
     
     @abstractmethod
-    def get_current_session_id(self) -> Optional[str]:
+    def get_current_session_id(self) -> str | None:
         """Get the current active session ID (thread_id)."""
         pass
     
@@ -127,7 +127,7 @@ class IStateAdapter(ABC):
     def set_current_session(
         self, 
         session_id: str,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
     ) -> bool:
         """
         Set the current active session.
@@ -151,8 +151,8 @@ class IStateAdapter(ABC):
         state: ExecutionState,
         node_id: str,
         trigger: CheckpointTrigger,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None
     ) -> str:
         """
         Save a state checkpoint.
@@ -266,7 +266,7 @@ class IStateAdapter(ABC):
         pass
     
     @abstractmethod
-    def get_node_boundaries(self, session_id: str) -> List[NodeBoundaryInfo]:
+    def get_node_boundaries(self, session_id: str) -> list[NodeBoundaryInfo]:
         """
         Get all node boundaries for a session.
         
@@ -279,7 +279,7 @@ class IStateAdapter(ABC):
         pass
     
     @abstractmethod
-    def get_node_boundary(self, session_id: str, node_id: str) -> Optional[NodeBoundaryInfo]:
+    def get_node_boundary(self, session_id: str, node_id: str) -> NodeBoundaryInfo | None:
         """
         Get a specific node boundary.
         
@@ -300,8 +300,8 @@ class IStateAdapter(ABC):
     def get_checkpoints(
         self, 
         session_id: str,
-        node_id: Optional[str] = None
-    ) -> List[CheckpointInfo]:
+        node_id: str | None = None
+    ) -> list[CheckpointInfo]:
         """
         Get checkpoints for a session.
         
@@ -315,7 +315,7 @@ class IStateAdapter(ABC):
         pass
     
     @abstractmethod
-    def get_node_rollback_targets(self, session_id: str) -> List[CheckpointInfo]:
+    def get_node_rollback_targets(self, session_id: str) -> list[CheckpointInfo]:
         """
         Get valid node-level rollback targets.
         
@@ -347,7 +347,7 @@ class IStateAdapter(ABC):
     # Extended Capabilities (Optional)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_checkpoint_history(self) -> List[Dict[str, Any]]:
+    def get_checkpoint_history(self) -> list[dict[str, Any]]:
         """
         Get full checkpoint history with detailed metadata (time-travel support).
         
@@ -359,8 +359,8 @@ class IStateAdapter(ABC):
     
     def update_state(
         self, 
-        values: Dict[str, Any], 
-        as_node: Optional[str] = None
+        values: dict[str, Any],
+        as_node: str | None = None
     ) -> bool:
         """
         Update state mid-execution (human-in-the-loop support).
@@ -374,7 +374,7 @@ class IStateAdapter(ABC):
         """
         return False
     
-    def get_current_state(self) -> Dict[str, Any]:
+    def get_current_state(self) -> dict[str, Any]:
         """
         Get current state as dictionary.
         
@@ -383,7 +383,7 @@ class IStateAdapter(ABC):
         """
         return {}
     
-    def get_next_nodes(self) -> List[str]:
+    def get_next_nodes(self) -> list[str]:
         """
         Get next available nodes from current state.
         

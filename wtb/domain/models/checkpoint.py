@@ -15,9 +15,10 @@ Key Principle:
 are domain concepts - adapters only handle persistence mechanics."
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Iterator
 from datetime import datetime
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -70,14 +71,14 @@ class Checkpoint:
     id: CheckpointId
     execution_id: str
     step: int                              # Monotonic step number
-    node_writes: Dict[str, Any]            # Which node wrote to this checkpoint
-    next_nodes: List[str]                  # Nodes to execute next
-    state_values: Dict[str, Any]           # State at this checkpoint
+    node_writes: dict[str, Any]            # Which node wrote to this checkpoint
+    next_nodes: list[str]                  # Nodes to execute next
+    state_values: dict[str, Any]           # State at this checkpoint
     created_at: datetime
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     @property
-    def completed_node(self) -> Optional[str]:
+    def completed_node(self) -> str | None:
         """
         Get the node that completed at this checkpoint (if any).
         
@@ -108,11 +109,11 @@ class Checkpoint:
         """Check if node completed at this checkpoint."""
         return node_id in self.node_writes
     
-    def get_node_output(self, node_id: str) -> Optional[Any]:
+    def get_node_output(self, node_id: str) -> Any | None:
         """Get the output written by a specific node."""
         return self.node_writes.get(node_id)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "id": str(self.id),
@@ -126,7 +127,7 @@ class Checkpoint:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Checkpoint":
+    def from_dict(cls, data: dict[str, Any]) -> "Checkpoint":
         """Deserialize from dictionary."""
         created_at = data.get("created_at")
         if isinstance(created_at, str):
@@ -166,30 +167,30 @@ class ExecutionHistory:
     - Contains business logic for checkpoint operations
     """
     execution_id: str
-    checkpoints: List[Checkpoint] = field(default_factory=list)
+    checkpoints: list[Checkpoint] = field(default_factory=list)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Query Operations (Domain Logic)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_checkpoint(self, checkpoint_id: CheckpointId) -> Optional[Checkpoint]:
+    def get_checkpoint(self, checkpoint_id: CheckpointId) -> Checkpoint | None:
         """Get checkpoint by ID."""
         for cp in self.checkpoints:
             if cp.id == checkpoint_id:
                 return cp
         return None
     
-    def get_checkpoint_by_id(self, checkpoint_id: str) -> Optional[Checkpoint]:
+    def get_checkpoint_by_id(self, checkpoint_id: str) -> Checkpoint | None:
         """Get checkpoint by string ID (convenience method)."""
         return self.get_checkpoint(CheckpointId(checkpoint_id))
     
-    def get_latest_checkpoint(self) -> Optional[Checkpoint]:
+    def get_latest_checkpoint(self) -> Checkpoint | None:
         """Get most recent checkpoint."""
         if not self.checkpoints:
             return None
         return max(self.checkpoints, key=lambda cp: cp.step)
     
-    def get_checkpoint_for_node(self, node_id: str) -> Optional[Checkpoint]:
+    def get_checkpoint_for_node(self, node_id: str) -> Checkpoint | None:
         """
         Get checkpoint where node completed (exit checkpoint).
         
@@ -204,8 +205,8 @@ class ExecutionHistory:
     def get_checkpoints_by_step_range(
         self, 
         start_step: int, 
-        end_step: Optional[int] = None
-    ) -> List[Checkpoint]:
+        end_step: int | None = None
+    ) -> list[Checkpoint]:
         """Get checkpoints within a step range."""
         result = []
         for cp in self.checkpoints:
@@ -218,7 +219,7 @@ class ExecutionHistory:
     # Node Boundary Operations (Domain Logic)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_node_entry_checkpoint(self, node_id: str) -> Optional[Checkpoint]:
+    def get_node_entry_checkpoint(self, node_id: str) -> Checkpoint | None:
         """
         Get the checkpoint where a node was about to execute.
         
@@ -230,7 +231,7 @@ class ExecutionHistory:
                 return cp
         return None
     
-    def get_node_exit_checkpoint(self, node_id: str) -> Optional[Checkpoint]:
+    def get_node_exit_checkpoint(self, node_id: str) -> Checkpoint | None:
         """
         Get the checkpoint where a node completed.
         
@@ -238,7 +239,7 @@ class ExecutionHistory:
         """
         return self.get_checkpoint_for_node(node_id)
     
-    def get_completed_nodes(self) -> List[str]:
+    def get_completed_nodes(self) -> list[str]:
         """
         Get list of completed node IDs in execution order.
         
@@ -250,7 +251,7 @@ class ExecutionHistory:
                 completed.append(cp.completed_node)
         return completed
     
-    def get_unique_nodes(self) -> List[str]:
+    def get_unique_nodes(self) -> list[str]:
         """
         Get all unique nodes mentioned in checkpoint history.
         
@@ -275,7 +276,7 @@ class ExecutionHistory:
     # Rollback Operations (Domain Logic)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_rollback_target(self, to_node_id: str) -> Optional[Checkpoint]:
+    def get_rollback_target(self, to_node_id: str) -> Checkpoint | None:
         """
         Get checkpoint to rollback to for resuming after a node.
         
@@ -283,7 +284,7 @@ class ExecutionHistory:
         """
         return self.get_checkpoint_for_node(to_node_id)
     
-    def get_rollback_targets(self) -> List[Checkpoint]:
+    def get_rollback_targets(self) -> list[Checkpoint]:
         """
         Get all valid rollback targets (completed node exit checkpoints).
         
@@ -308,7 +309,7 @@ class ExecutionHistory:
         self, 
         from_checkpoint_id: CheckpointId, 
         to_checkpoint_id: CheckpointId
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of nodes that would be reverted in a rollback.
         
@@ -335,7 +336,7 @@ class ExecutionHistory:
     # History Operations (Domain Logic)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def get_execution_path(self) -> List[str]:
+    def get_execution_path(self) -> list[str]:
         """
         Get linearized execution path (node sequence).
         
@@ -347,7 +348,7 @@ class ExecutionHistory:
                 path.append(cp.completed_node)
         return path
     
-    def get_state_at_step(self, step: int) -> Optional[Dict[str, Any]]:
+    def get_state_at_step(self, step: int) -> dict[str, Any] | None:
         """Get state values at a specific step."""
         for cp in self.checkpoints:
             if cp.step == step:
@@ -374,7 +375,7 @@ class ExecutionHistory:
         """History is truthy if it has any checkpoints."""
         return len(self.checkpoints) > 0
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
             "execution_id": self.execution_id,
@@ -384,7 +385,7 @@ class ExecutionHistory:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ExecutionHistory":
+    def from_dict(cls, data: dict[str, Any]) -> "ExecutionHistory":
         """Deserialize from dictionary."""
         checkpoints = [
             Checkpoint.from_dict(cp_data) 

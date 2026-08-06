@@ -18,7 +18,6 @@ Implementations:
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 from ..models.checkpoint import (
     Checkpoint,
@@ -59,7 +58,7 @@ class ICheckpointStore(ABC):
         pass
     
     @abstractmethod
-    def load(self, checkpoint_id: CheckpointId) -> Optional[Checkpoint]:
+    def load(self, checkpoint_id: CheckpointId) -> Checkpoint | None:
         """
         Load a checkpoint by ID.
         
@@ -72,7 +71,7 @@ class ICheckpointStore(ABC):
         pass
     
     @abstractmethod
-    def load_by_execution(self, execution_id: str) -> List[Checkpoint]:
+    def load_by_execution(self, execution_id: str) -> list[Checkpoint]:
         """
         Load all checkpoints for an execution.
         
@@ -101,7 +100,7 @@ class ICheckpointStore(ABC):
         pass
     
     @abstractmethod
-    def load_latest(self, execution_id: str) -> Optional[Checkpoint]:
+    def load_latest(self, execution_id: str) -> Checkpoint | None:
         """
         Load the most recent checkpoint for an execution.
         

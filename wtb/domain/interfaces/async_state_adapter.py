@@ -1,6 +1,7 @@
 
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, List, AsyncIterator, TYPE_CHECKING
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 from wtb.domain.models.workflow import ExecutionState
 
@@ -35,7 +36,7 @@ class IAsyncStateAdapter(ABC):
         self, 
         execution_id: str,
         initial_state: ExecutionState
-    ) -> Optional[str]:
+    ) -> str | None:
         """Initialize session asynchronously."""
         pass
   
@@ -43,7 +44,7 @@ class IAsyncStateAdapter(ABC):
     async def aset_current_session(
         self, 
         session_id: str,
-        execution_id: Optional[str] = None,
+        execution_id: str | None = None,
     ) -> bool:
         """Set current session asynchronously."""
         pass
@@ -58,8 +59,8 @@ class IAsyncStateAdapter(ABC):
         state: ExecutionState,
         node_id: str,
         trigger: "CheckpointTrigger",
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None
     ) -> str:
         """Save checkpoint asynchronously. Returns checkpoint_id."""
         pass
@@ -79,7 +80,7 @@ class IAsyncStateAdapter(ABC):
     # ═══════════════════════════════════════════════════════════════════════════
   
     @abstractmethod
-    async def aexecute(self, initial_state: Dict[str, Any]) -> Dict[str, Any]:
+    async def aexecute(self, initial_state: dict[str, Any]) -> dict[str, Any]:
         """
         Execute workflow asynchronously.
       
@@ -90,9 +91,9 @@ class IAsyncStateAdapter(ABC):
     @abstractmethod
     async def astream(
         self, 
-        initial_state: Dict[str, Any],
+        initial_state: dict[str, Any],
         stream_mode: str = "updates"
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Stream execution events asynchronously.
       
@@ -107,13 +108,13 @@ class IAsyncStateAdapter(ABC):
     @abstractmethod
     async def aupdate_state(
         self, 
-        values: Dict[str, Any], 
-        as_node: Optional[str] = None
+        values: dict[str, Any],
+        as_node: str | None = None
     ) -> bool:
         """Update state asynchronously (human-in-the-loop)."""
         pass
   
     @abstractmethod
-    async def aget_current_state(self) -> Dict[str, Any]:
+    async def aget_current_state(self) -> dict[str, Any]:
         """Get current state asynchronously."""
         pass

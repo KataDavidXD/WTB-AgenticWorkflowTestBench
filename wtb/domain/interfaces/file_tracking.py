@@ -25,8 +25,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-from enum import Enum
 
 
 class FileTrackingError(Exception):
@@ -67,7 +65,7 @@ class TrackedFile:
     size_bytes: int
     tracked_at: datetime
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serialize to dictionary."""
         return {
             "file_path": self.file_path,
@@ -77,7 +75,7 @@ class TrackedFile:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> "TrackedFile":
+    def from_dict(cls, data: dict) -> "TrackedFile":
         """Deserialize from dictionary."""
         return cls(
             file_path=data["file_path"],
@@ -98,8 +96,8 @@ class FileTrackingResult:
     commit_id: str
     files_tracked: int
     total_size_bytes: int
-    file_hashes: Dict[str, str]  # path -> hash
-    message: Optional[str] = None
+    file_hashes: dict[str, str]  # path -> hash
+    message: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     
     @property
@@ -107,7 +105,7 @@ class FileTrackingResult:
         """Check if no files were tracked."""
         return self.files_tracked == 0
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serialize to dictionary."""
         return {
             "commit_id": self.commit_id,
@@ -119,7 +117,7 @@ class FileTrackingResult:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> "FileTrackingResult":
+    def from_dict(cls, data: dict) -> "FileTrackingResult":
         """Deserialize from dictionary."""
         return cls(
             commit_id=data["commit_id"],
@@ -141,11 +139,11 @@ class FileRestoreResult:
     commit_id: str
     files_restored: int
     total_size_bytes: int
-    restored_paths: List[str]
+    restored_paths: list[str]
     success: bool
-    error_message: Optional[str] = None
+    error_message: str | None = None
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serialize to dictionary."""
         return {
             "commit_id": self.commit_id,
@@ -179,7 +177,7 @@ class FileTrackingLink:
     file_count: int
     total_size_bytes: int
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serialize to dictionary."""
         return {
             "checkpoint_id": self.checkpoint_id,
@@ -224,7 +222,7 @@ class FileCleanupResult:
         """Total files processed (deleted + backed up + skipped)."""
         return self.files_deleted + self.files_backed_up + self.files_skipped
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serialize to dictionary."""
         return {
             "checkpoint_id": self.checkpoint_id,
@@ -241,7 +239,7 @@ class FileCleanupResult:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> "FileCleanupResult":
+    def from_dict(cls, data: dict) -> "FileCleanupResult":
         """Deserialize from dictionary."""
         return cls(
             checkpoint_id=data["checkpoint_id"],
@@ -296,8 +294,8 @@ class IFileTrackingService(ABC):
     @abstractmethod
     def track_files(
         self,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track specified files and create a commit.
@@ -322,8 +320,8 @@ class IFileTrackingService(ABC):
     def track_and_link(
         self,
         checkpoint_id: str,
-        file_paths: List[str],
-        message: Optional[str] = None,
+        file_paths: list[str],
+        message: str | None = None,
     ) -> FileTrackingResult:
         """
         Track files AND link to checkpoint in single operation.
@@ -421,7 +419,7 @@ class IFileTrackingService(ABC):
     def get_commit_for_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Get the file commit ID linked to a checkpoint.
         
@@ -437,7 +435,7 @@ class IFileTrackingService(ABC):
     def get_tracked_files(
         self,
         commit_id: str,
-    ) -> List[TrackedFile]:
+    ) -> list[TrackedFile]:
         """
         Get list of tracked files for a commit.
         
@@ -466,7 +464,7 @@ class IFileTrackingService(ABC):
     def get_files_at_checkpoint(
         self,
         checkpoint_id: str,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get file paths that existed at a specific checkpoint.
         
@@ -533,10 +531,10 @@ class IFileCleanupService(ABC):
         target_checkpoint_id: str,
         execution_id: str,
         current_workspace_path: Path,
-        track_patterns: List[str],
-        exclude_patterns: List[str],
+        track_patterns: list[str],
+        exclude_patterns: list[str],
         file_tracking_service: IFileTrackingService,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Identify files created after target checkpoint.
         
@@ -562,8 +560,8 @@ class IFileCleanupService(ABC):
         self,
         checkpoint_id: str,
         execution_id: str,
-        orphaned_paths: List[str],
-        backup_dir: Optional[Path] = None,
+        orphaned_paths: list[str],
+        backup_dir: Path | None = None,
         dry_run: bool = False,
         max_files: int = 100,
     ) -> FileCleanupResult:

@@ -9,20 +9,20 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .file_processing_repository import (
+        IBlobRepository,
+        ICheckpointFileLinkRepository,
+        IFileCommitRepository,
+    )
     from .repositories import (
-        IWorkflowRepository,
-        IExecutionRepository,
-        INodeVariantRepository,
+        IAuditLogRepository,
         IBatchTestRepository,
         IEvaluationResultRepository,
+        IExecutionRepository,
         INodeBoundaryRepository,
+        INodeVariantRepository,
         IOutboxRepository,
-        IAuditLogRepository,
-    )
-    from .file_processing_repository import (
-        ICheckpointFileLinkRepository,
-        IBlobRepository,
-        IFileCommitRepository,
+        IWorkflowRepository,
     )
 
 

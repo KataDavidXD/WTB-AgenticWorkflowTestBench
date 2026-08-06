@@ -6,9 +6,8 @@ Split into IVariantRegistry and INodeSwapper following ISP.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict
 
-from ..models.workflow import NodeVariant, WorkflowNode, TestWorkflow
+from ..models.workflow import NodeVariant, TestWorkflow
 
 
 class IVariantRegistry(ABC):
@@ -38,7 +37,7 @@ class IVariantRegistry(ABC):
         pass
     
     @abstractmethod
-    def get(self, variant_id: str) -> Optional[NodeVariant]:
+    def get(self, variant_id: str) -> NodeVariant | None:
         """
         Get a variant by ID.
         
@@ -51,7 +50,7 @@ class IVariantRegistry(ABC):
         pass
     
     @abstractmethod
-    def get_by_node(self, workflow_id: str, node_id: str) -> List[NodeVariant]:
+    def get_by_node(self, workflow_id: str, node_id: str) -> list[NodeVariant]:
         """
         Get all variants for a specific node.
         
@@ -65,7 +64,7 @@ class IVariantRegistry(ABC):
         pass
     
     @abstractmethod
-    def list_for_workflow(self, workflow_id: str) -> List[NodeVariant]:
+    def list_for_workflow(self, workflow_id: str) -> list[NodeVariant]:
         """
         List all variants for a workflow.
         
@@ -157,7 +156,7 @@ class INodeSwapper(ABC):
     def apply_variant_set(
         self,
         workflow: TestWorkflow,
-        variant_set: Dict[str, str]  # node_id -> variant_id
+        variant_set: dict[str, str]  # node_id -> variant_id
     ) -> TestWorkflow:
         """
         Apply a set of variants to a workflow.

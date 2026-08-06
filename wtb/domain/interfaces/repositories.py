@@ -7,20 +7,21 @@ Follows Interface Segregation Principle with separate read/write interfaces.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import TypeVar, Generic, Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, Optional, TypeVar
 
 if TYPE_CHECKING:
+    from wtb.domain.models.audit import AuditEntry
+    from wtb.domain.models.batch_test import BatchTest, EvaluationResult
+    from wtb.domain.models.node_boundary import NodeBoundary
+
+    # CheckpointFile REMOVED (2026-01-27) - Use CheckpointFileLink from file_processing
+    from wtb.domain.models.outbox import OutboxEvent
     from wtb.domain.models.workflow import (
         Execution,
         ExecutionStatus,
         NodeVariant,
         TestWorkflow,
     )
-    from wtb.domain.models.batch_test import BatchTest, EvaluationResult
-    from wtb.domain.models.node_boundary import NodeBoundary
-    # CheckpointFile REMOVED (2026-01-27) - Use CheckpointFileLink from file_processing
-    from wtb.domain.models.outbox import OutboxEvent
-    from wtb.domain.models.audit import AuditEntry
 
 T = TypeVar('T')
 
@@ -33,7 +34,7 @@ class IReadRepository(ABC, Generic[T]):
     """
     
     @abstractmethod
-    def get(self, id: str) -> Optional[T]:
+    def get(self, id: str) -> T | None:
         """
         Get entity by ID.
         
@@ -46,7 +47,7 @@ class IReadRepository(ABC, Generic[T]):
         pass
     
     @abstractmethod
-    def list(self, limit: int = 100, offset: int = 0) -> List[T]:
+    def list(self, limit: int = 100, offset: int = 0) -> list[T]:
         """
         List entities with pagination.
         
@@ -160,7 +161,7 @@ class IWorkflowRepository(IRepository["TestWorkflow"]):
         pass
     
     @abstractmethod
-    def list_all(self) -> List["TestWorkflow"]:
+    def list_all(self) -> list["TestWorkflow"]:
         """
         List all workflows without pagination.
         
@@ -176,7 +177,7 @@ class IExecutionRepository(IRepository["Execution"]):
     """Repository for Execution aggregates."""
     
     @abstractmethod
-    def find_by_workflow(self, workflow_id: str) -> List["Execution"]:
+    def find_by_workflow(self, workflow_id: str) -> list["Execution"]:
         """
         Find all executions for a workflow.
         
@@ -189,7 +190,7 @@ class IExecutionRepository(IRepository["Execution"]):
         pass
     
     @abstractmethod
-    def find_by_status(self, status: "ExecutionStatus") -> List["Execution"]:
+    def find_by_status(self, status: "ExecutionStatus") -> list["Execution"]:
         """
         Find executions by status.
         
@@ -202,7 +203,7 @@ class IExecutionRepository(IRepository["Execution"]):
         pass
     
     @abstractmethod
-    def find_running(self) -> List["Execution"]:
+    def find_running(self) -> list["Execution"]:
         """
         Find all currently running executions.
         
@@ -216,7 +217,7 @@ class INodeVariantRepository(IRepository["NodeVariant"]):
     """Repository for NodeVariant aggregates."""
     
     @abstractmethod
-    def find_by_workflow(self, workflow_id: str) -> List["NodeVariant"]:
+    def find_by_workflow(self, workflow_id: str) -> list["NodeVariant"]:
         """
         Find all variants for a workflow.
         
@@ -229,7 +230,7 @@ class INodeVariantRepository(IRepository["NodeVariant"]):
         pass
     
     @abstractmethod
-    def find_by_node(self, workflow_id: str, node_id: str) -> List["NodeVariant"]:
+    def find_by_node(self, workflow_id: str, node_id: str) -> list["NodeVariant"]:
         """
         Find variants for a specific node.
         
@@ -243,7 +244,7 @@ class INodeVariantRepository(IRepository["NodeVariant"]):
         pass
     
     @abstractmethod
-    def find_active(self, workflow_id: str) -> List["NodeVariant"]:
+    def find_active(self, workflow_id: str) -> list["NodeVariant"]:
         """
         Find active variants for a workflow.
         
@@ -260,7 +261,7 @@ class IBatchTestRepository(IRepository["BatchTest"]):
     """Repository for BatchTest aggregates."""
     
     @abstractmethod
-    def find_by_workflow(self, workflow_id: str) -> List["BatchTest"]:
+    def find_by_workflow(self, workflow_id: str) -> list["BatchTest"]:
         """
         Find batch tests for a workflow.
         
@@ -273,7 +274,7 @@ class IBatchTestRepository(IRepository["BatchTest"]):
         pass
     
     @abstractmethod
-    def find_pending(self) -> List["BatchTest"]:
+    def find_pending(self) -> list["BatchTest"]:
         """
         Find pending batch tests.
         
@@ -287,7 +288,7 @@ class IEvaluationResultRepository(IRepository["EvaluationResult"]):
     """Repository for EvaluationResult entities."""
     
     @abstractmethod
-    def find_by_execution(self, execution_id: str) -> List["EvaluationResult"]:
+    def find_by_execution(self, execution_id: str) -> list["EvaluationResult"]:
         """
         Find evaluation results for an execution.
         
@@ -300,7 +301,7 @@ class IEvaluationResultRepository(IRepository["EvaluationResult"]):
         pass
     
     @abstractmethod
-    def find_by_evaluator(self, evaluator_name: str) -> List["EvaluationResult"]:
+    def find_by_evaluator(self, evaluator_name: str) -> list["EvaluationResult"]:
         """
         Find results from a specific evaluator.
         
@@ -317,7 +318,7 @@ class IAuditLogRepository(IRepository["AuditEntry"]):
     """Repository for WTB audit logs (persistence)."""
     
     @abstractmethod
-    def append_logs(self, execution_id: str, logs: List["AuditEntry"]) -> None:
+    def append_logs(self, execution_id: str, logs: list["AuditEntry"]) -> None:
         """
         Append a batch of logs for an execution.
         
@@ -328,7 +329,7 @@ class IAuditLogRepository(IRepository["AuditEntry"]):
         pass
     
     @abstractmethod
-    def find_by_execution(self, execution_id: str) -> List["AuditEntry"]:
+    def find_by_execution(self, execution_id: str) -> list["AuditEntry"]:
         """
         Get all logs for an execution.
         
@@ -351,7 +352,7 @@ class INodeBoundaryRepository(IRepository["NodeBoundary"]):
     """
     
     @abstractmethod
-    def find_by_execution(self, execution_id: str) -> List["NodeBoundary"]:
+    def find_by_execution(self, execution_id: str) -> list["NodeBoundary"]:
         """
         Find all boundaries for an execution.
         
@@ -378,7 +379,7 @@ class INodeBoundaryRepository(IRepository["NodeBoundary"]):
         pass
     
     @abstractmethod
-    def find_completed_by_execution(self, execution_id: str) -> List["NodeBoundary"]:
+    def find_completed_by_execution(self, execution_id: str) -> list["NodeBoundary"]:
         """
         Find completed node boundaries for an execution (for rollback targets).
         
@@ -449,7 +450,7 @@ class IOutboxRepository(ABC):
         pass
     
     @abstractmethod
-    def get_pending(self, limit: int = 100) -> List["OutboxEvent"]:
+    def get_pending(self, limit: int = 100) -> list["OutboxEvent"]:
         """
         Get pending events for processing, ordered by created_at.
         
@@ -462,7 +463,7 @@ class IOutboxRepository(ABC):
         pass
     
     @abstractmethod
-    def get_failed_for_retry(self, limit: int = 50) -> List["OutboxEvent"]:
+    def get_failed_for_retry(self, limit: int = 50) -> list["OutboxEvent"]:
         """
         Get failed events that can be retried.
         
@@ -502,7 +503,7 @@ class IOutboxRepository(ABC):
         pass
     
     @abstractmethod
-    def list_all(self, limit: int = 100) -> List["OutboxEvent"]:
+    def list_all(self, limit: int = 100) -> list["OutboxEvent"]:
         """
         List all events (for admin/debugging).
         

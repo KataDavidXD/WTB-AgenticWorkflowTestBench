@@ -23,11 +23,9 @@ Related Documents:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-import uuid
+from typing import Any
 
 from wtb.domain.events.execution_events import WTBEvent
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Workspace Lifecycle Events
@@ -46,11 +44,11 @@ class WorkspaceCreatedEvent(WTBEvent):
     execution_id: str = ""
     variant_name: str = ""
     workspace_path: str = ""
-    source_snapshot_commit_id: Optional[str] = None
+    source_snapshot_commit_id: str | None = None
     file_count: int = 0
     total_size_bytes: int = 0
     strategy: str = "workspace"          # workspace | snapshot | clone | none
-    parent_workspace_id: Optional[str] = None   # For branch forks
+    parent_workspace_id: str | None = None   # For branch forks
     
     @property
     def total_size_mb(self) -> float:
@@ -116,7 +114,7 @@ class FileSnapshotCreatedEvent(WTBEvent):
     commit_id: str = ""
     file_count: int = 0
     total_size_bytes: int = 0
-    source_paths: List[str] = field(default_factory=list)
+    source_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -134,7 +132,7 @@ class FileRestoreEvent(WTBEvent):
     total_size_bytes: int = 0
     restore_target: str = ""       # Workspace path where files restored
     success: bool = True
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 @dataclass
@@ -165,7 +163,7 @@ class ForkRequestedEvent(WTBEvent):
     - manual: User-initiated branch
     """
     parent_execution_id: str = ""
-    fork_checkpoint_id: Optional[int] = None
+    fork_checkpoint_id: int | None = None
     new_execution_id: str = ""
     fork_type: str = "variant"     # variant | rollback_branch | manual
     workspace_id: str = ""
@@ -182,7 +180,7 @@ class ForkCompletedEvent(WTBEvent):
     workspace_id: str = ""
     thread_id: str = ""           # LangGraph thread ID
     parent_execution_id: str = ""
-    fork_checkpoint_id: Optional[int] = None
+    fork_checkpoint_id: int | None = None
     ready_to_execute: bool = True
     files_copied: int = 0
     total_size_bytes: int = 0
@@ -204,7 +202,7 @@ class VenvCreatedEvent(WTBEvent):
     execution_id: str = ""
     venv_path: str = ""
     python_version: str = ""
-    packages: List[str] = field(default_factory=list)
+    packages: list[str] = field(default_factory=list)
     venv_spec_hash: str = ""
     creation_time_ms: float = 0.0
 
@@ -217,7 +215,7 @@ class VenvReusedEvent(WTBEvent):
     workspace_id: str = ""
     venv_path: str = ""
     venv_spec_hash: str = ""
-    original_creation_time: Optional[datetime] = None
+    original_creation_time: datetime | None = None
 
 
 @dataclass
@@ -229,7 +227,7 @@ class VenvInvalidatedEvent(WTBEvent):
     old_spec_hash: str = ""
     new_spec_hash: str = ""
     reason: str = ""               # dependency_change | python_version_change
-    affected_workspaces: List[str] = field(default_factory=list)
+    affected_workspaces: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -242,8 +240,8 @@ class VenvMismatchWarningEvent(WTBEvent):
     checkpoint_id: str = ""
     expected_venv_hash: str = ""
     current_venv_hash: str = ""
-    expected_packages: List[str] = field(default_factory=list)
-    current_packages: List[str] = field(default_factory=list)
+    expected_packages: list[str] = field(default_factory=list)
+    current_packages: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -273,7 +271,7 @@ class ActorCreatedEvent(WTBEvent):
     workspace_id: str = ""
     for_fork: bool = False         # Created for fork operation
     for_resume: bool = False       # Created for cold pause resume
-    resources: Dict[str, Any] = field(default_factory=dict)  # num_cpus, num_gpus, memory
+    resources: dict[str, Any] = field(default_factory=dict)  # num_cpus, num_gpus, memory
 
 
 @dataclass
@@ -283,7 +281,7 @@ class ActorResetEvent(WTBEvent):
     """
     actor_id: str = ""
     reason: str = ""               # variant_switch | rollback
-    resources_cleared: List[str] = field(default_factory=list)
+    resources_cleared: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -293,7 +291,7 @@ class ActorKilledEvent(WTBEvent):
     """
     actor_id: str = ""
     reason: str = ""               # cold_pause | rollback_recreate | shutdown
-    resources_released: List[str] = field(default_factory=list)
+    resources_released: list[str] = field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -309,7 +307,7 @@ class ResourcesReleasedEvent(WTBEvent):
     actor_id: str = ""
     reason: str = ""               # warm_pause | memory_pressure
     gpu_memory_freed_mb: float = 0.0
-    resources_list: List[str] = field(default_factory=list)
+    resources_list: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -346,4 +344,4 @@ class OrphanCleanupCompletedEvent(WTBEvent):
     orphans_found: int = 0
     orphans_cleaned: int = 0
     space_freed_mb: float = 0.0
-    errors: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)

@@ -5,9 +5,10 @@ Defines contracts for evaluating workflow execution results.
 Supports extensible evaluation strategies via plugin pattern.
 """
 
+import builtins
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -15,9 +16,9 @@ class EvaluationMetric:
     """Single evaluation metric."""
     name: str
     value: float
-    unit: Optional[str] = None
-    description: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    unit: str | None = None
+    description: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -25,12 +26,12 @@ class EvaluationScore:
     """Complete evaluation result from an evaluator."""
     evaluator_name: str
     overall_score: float  # 0.0 to 1.0 normalized
-    metrics: List[EvaluationMetric] = field(default_factory=list)
+    metrics: list[EvaluationMetric] = field(default_factory=list)
     passed: bool = True
-    details: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    details: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     
-    def get_metric(self, name: str) -> Optional[EvaluationMetric]:
+    def get_metric(self, name: str) -> EvaluationMetric | None:
         """Get a specific metric by name."""
         for metric in self.metrics:
             if metric.name == name:
@@ -64,9 +65,9 @@ class IEvaluator(ABC):
     @abstractmethod
     def evaluate(
         self,
-        execution_result: Dict[str, Any],
-        expected_result: Optional[Dict[str, Any]] = None,
-        context: Optional[Dict[str, Any]] = None
+        execution_result: dict[str, Any],
+        expected_result: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None
     ) -> EvaluationScore:
         """
         Evaluate an execution result.
@@ -82,7 +83,7 @@ class IEvaluator(ABC):
         pass
     
     @abstractmethod
-    def validate_config(self, config: Dict[str, Any]) -> List[str]:
+    def validate_config(self, config: dict[str, Any]) -> list[str]:
         """
         Validate evaluator configuration.
         
@@ -129,7 +130,7 @@ class IEvaluatorRegistry(ABC):
         pass
     
     @abstractmethod
-    def get(self, name: str) -> Optional[IEvaluator]:
+    def get(self, name: str) -> IEvaluator | None:
         """
         Get evaluator by name.
         
@@ -142,7 +143,7 @@ class IEvaluatorRegistry(ABC):
         pass
     
     @abstractmethod
-    def list(self) -> List[str]:
+    def list(self) -> list[str]:
         """
         List all registered evaluator names.
         
@@ -154,11 +155,11 @@ class IEvaluatorRegistry(ABC):
     @abstractmethod
     def evaluate_all(
         self,
-        execution_result: Dict[str, Any],
-        expected_result: Optional[Dict[str, Any]] = None,
-        context: Optional[Dict[str, Any]] = None,
-        evaluator_names: Optional[List[str]] = None
-    ) -> List[EvaluationScore]:
+        execution_result: dict[str, Any],
+        expected_result: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+        evaluator_names: builtins.list[str] | None = None
+    ) -> builtins.list[EvaluationScore]:
         """
         Run all (or specified) evaluators.
         
@@ -186,8 +187,8 @@ class IEvaluationEngine(ABC):
     def evaluate_execution(
         self,
         execution_id: str,
-        evaluator_names: Optional[List[str]] = None
-    ) -> List[EvaluationScore]:
+        evaluator_names: list[str] | None = None
+    ) -> list[EvaluationScore]:
         """
         Evaluate a single execution.
         
@@ -207,8 +208,8 @@ class IEvaluationEngine(ABC):
     def evaluate_batch(
         self,
         batch_test_id: str,
-        evaluator_names: Optional[List[str]] = None
-    ) -> Dict[str, List[EvaluationScore]]:
+        evaluator_names: list[str] | None = None
+    ) -> dict[str, list[EvaluationScore]]:
         """
         Evaluate all executions in a batch test.
         
@@ -227,9 +228,9 @@ class IEvaluationEngine(ABC):
     @abstractmethod
     def compare_executions(
         self,
-        execution_ids: List[str],
-        evaluator_names: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        execution_ids: list[str],
+        evaluator_names: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Compare multiple executions.
         
@@ -245,8 +246,8 @@ class IEvaluationEngine(ABC):
     @abstractmethod
     def get_aggregate_score(
         self,
-        scores: List[EvaluationScore],
-        weights: Optional[Dict[str, float]] = None
+        scores: list[EvaluationScore],
+        weights: dict[str, float] | None = None
     ) -> float:
         """
         Calculate aggregate score from multiple evaluator scores.

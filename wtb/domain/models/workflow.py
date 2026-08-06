@@ -10,11 +10,11 @@ This module contains the core domain entities and value objects:
 - NodeVariant: Node variant for A/B testing (Aggregate Root)
 """
 
+import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
 from datetime import datetime
 from enum import Enum
-import uuid
+from typing import Any
 
 
 class ExecutionStatus(Enum):
@@ -38,8 +38,8 @@ class WorkflowNode:
     id: str
     name: str
     type: str  # 'action', 'decision', 'start', 'end'
-    tool_name: Optional[str] = None
-    config: Dict[str, Any] = field(default_factory=dict)
+    tool_name: str | None = None
+    config: dict[str, Any] = field(default_factory=dict)
     
     def __hash__(self):
         return hash(self.id)
@@ -65,7 +65,7 @@ class WorkflowEdge:
     """
     source_id: str
     target_id: str
-    condition: Optional[str] = None  # Condition expression or tool name
+    condition: str | None = None  # Condition expression or tool name
     priority: int = 0  # Higher priority edges evaluated first
 
 
@@ -80,13 +80,13 @@ class TestWorkflow:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = ""
     description: str = ""
-    nodes: Dict[str, WorkflowNode] = field(default_factory=dict)
-    edges: List[WorkflowEdge] = field(default_factory=list)
-    entry_point: Optional[str] = None
+    nodes: dict[str, WorkflowNode] = field(default_factory=dict)
+    edges: list[WorkflowEdge] = field(default_factory=list)
+    entry_point: str | None = None
     version: str = "1.0.0"
     created_at: datetime = field(default_factory=datetime.now)
-    updated_at: Optional[datetime] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    updated_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     def add_node(self, node: WorkflowNode) -> "TestWorkflow":
         """Add a node to the workflow."""
@@ -102,11 +102,11 @@ class TestWorkflow:
         self.updated_at = datetime.now()
         return self
     
-    def get_node(self, node_id: str) -> Optional[WorkflowNode]:
+    def get_node(self, node_id: str) -> WorkflowNode | None:
         """Get a node by ID."""
         return self.nodes.get(node_id)
     
-    def get_outgoing_edges(self, node_id: str) -> List[WorkflowEdge]:
+    def get_outgoing_edges(self, node_id: str) -> list[WorkflowEdge]:
         """Get edges leaving a node, sorted by priority (descending)."""
         return sorted(
             [e for e in self.edges if e.source_id == node_id],
@@ -114,11 +114,11 @@ class TestWorkflow:
             reverse=True
         )
     
-    def get_incoming_edges(self, node_id: str) -> List[WorkflowEdge]:
+    def get_incoming_edges(self, node_id: str) -> list[WorkflowEdge]:
         """Get edges entering a node."""
         return [e for e in self.edges if e.target_id == node_id]
     
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate workflow structure.
         
@@ -153,7 +153,7 @@ class TestWorkflow:
         
         return errors
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize workflow to dictionary."""
         return {
             "id": self.id,
@@ -186,7 +186,7 @@ class TestWorkflow:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TestWorkflow":
+    def from_dict(cls, data: dict[str, Any]) -> "TestWorkflow":
         """Deserialize workflow from dictionary."""
         workflow = cls(
             id=data.get("id", str(uuid.uuid4())),
@@ -235,11 +235,11 @@ class ExecutionState:
     Captures the complete state of an execution at a point in time.
     Used for checkpointing and state restoration.
     """
-    current_node_id: Optional[str] = None
-    workflow_variables: Dict[str, Any] = field(default_factory=dict)
-    execution_path: List[str] = field(default_factory=list)
-    node_results: Dict[str, Any] = field(default_factory=dict)
-    node_boundaries: Dict[str, Any] = field(default_factory=dict)
+    current_node_id: str | None = None
+    workflow_variables: dict[str, Any] = field(default_factory=dict)
+    execution_path: list[str] = field(default_factory=list)
+    node_results: dict[str, Any] = field(default_factory=dict)
+    node_boundaries: dict[str, Any] = field(default_factory=dict)
     
     def clone(self) -> "ExecutionState":
         """Create a deep copy of the state."""
@@ -251,7 +251,7 @@ class ExecutionState:
             node_boundaries=dict(self.node_boundaries),
         )
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize state to dictionary."""
         return {
             "current_node_id": self.current_node_id,
@@ -262,7 +262,7 @@ class ExecutionState:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ExecutionState":
+    def from_dict(cls, data: dict[str, Any]) -> "ExecutionState":
         """Deserialize state from dictionary."""
         return cls(
             current_node_id=data.get("current_node_id"),
@@ -309,23 +309,23 @@ class Execution:
     state: ExecutionState = field(default_factory=ExecutionState)
     
     # Session & Checkpoint (v1.6: str IDs, maps to LangGraph thread_id/checkpoint_id)
-    session_id: Optional[str] = None
-    checkpoint_id: Optional[str] = None
+    session_id: str | None = None
+    checkpoint_id: str | None = None
     
     # Timing
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
     created_at: datetime = field(default_factory=datetime.now)
     
     # Error handling
-    error_message: Optional[str] = None
-    error_node_id: Optional[str] = None
+    error_message: str | None = None
+    error_node_id: str | None = None
     
     # Breakpoints
-    breakpoints: List[str] = field(default_factory=list)
+    breakpoints: list[str] = field(default_factory=list)
     
     # Metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # State Machine Methods
@@ -414,7 +414,7 @@ class Execution:
         self.status = ExecutionStatus.COMPLETED
         self.completed_at = datetime.now()
     
-    def fail(self, error_message: str, node_id: Optional[str] = None) -> None:
+    def fail(self, error_message: str, node_id: str | None = None) -> None:
         """
         Transition to FAILED state with error details.
         
@@ -529,7 +529,7 @@ class Execution:
         if isinstance(result, dict):
             self.state.workflow_variables.update(result)
     
-    def advance_to_node(self, next_node_id: Optional[str]) -> None:
+    def advance_to_node(self, next_node_id: str | None) -> None:
         """
         Advance execution to the next node.
         
@@ -546,7 +546,7 @@ class Execution:
         if next_node_id is None and self.status == ExecutionStatus.RUNNING:
             self.complete()
     
-    def apply_state_modification(self, modifications: Dict[str, Any]) -> None:
+    def apply_state_modification(self, modifications: dict[str, Any]) -> None:
         """
         Apply modifications to workflow variables.
         
@@ -627,14 +627,14 @@ class Execution:
             ExecutionStatus.CANCELLED
         ]
     
-    def get_duration_seconds(self) -> Optional[float]:
+    def get_duration_seconds(self) -> float | None:
         """Get execution duration in seconds."""
         if not self.started_at:
             return None
         end_time = self.completed_at or datetime.now()
         return (end_time - self.started_at).total_seconds()
     
-    def get_progress(self) -> Dict[str, Any]:
+    def get_progress(self) -> dict[str, Any]:
         """
         Get execution progress summary.
         
@@ -650,7 +650,7 @@ class Execution:
             "has_error": self.error_message is not None,
         }
     
-    def get_node_result(self, node_id: str) -> Optional[Any]:
+    def get_node_result(self, node_id: str) -> Any | None:
         """Get the result of a specific node execution."""
         return self.state.node_results.get(node_id)
     
@@ -662,7 +662,7 @@ class Execution:
         """Set a workflow variable value."""
         self.state.workflow_variables[key] = value
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize execution to dictionary."""
         return {
             "id": self.id,
@@ -681,7 +681,7 @@ class Execution:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Execution":
+    def from_dict(cls, data: dict[str, Any]) -> "Execution":
         """Deserialize execution from dictionary."""
         # Support both old (agentgit_*) and new (session_id/checkpoint_id) field names
         session_id = data.get("session_id") or data.get("agentgit_session_id")
@@ -734,9 +734,9 @@ class NodeVariant:
     description: str = ""
     is_active: bool = True
     created_at: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize variant to dictionary."""
         return {
             "id": self.id,
