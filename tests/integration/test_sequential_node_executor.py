@@ -6,20 +6,19 @@ and adapter.supports_graph_execution() returns False (InMemoryStateAdapter).
 """
 
 import pytest
+
+from wtb.application.services.execution_controller import (
+    DefaultNodeExecutor,
+    ExecutionController,
+)
 from wtb.domain.models.workflow import (
-    Execution,
-    ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
-from wtb.application.services.execution_controller import (
-    ExecutionController,
-    DefaultNodeExecutor,
-)
+from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 
 
 def _make_linear_workflow() -> TestWorkflow:

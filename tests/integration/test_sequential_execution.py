@@ -6,22 +6,22 @@ Uses real LangGraph fixtures (create_minimal_graph, create_conditional_graph).
 """
 
 import pytest
-from wtb.domain.models.workflow import (
-    Execution,
-    ExecutionState,
-    ExecutionStatus,
-    TestWorkflow,
-    WorkflowNode,
-    WorkflowEdge,
-)
-from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
+
 from wtb.application.services.execution_controller import (
-    ExecutionController,
     DefaultNodeExecutor,
+    ExecutionController,
 )
 from wtb.application.services.outbox_controller_decorator import (
     OutboxExecutionControllerDecorator,
 )
+from wtb.domain.models.workflow import (
+    ExecutionState,
+    ExecutionStatus,
+    TestWorkflow,
+    WorkflowEdge,
+    WorkflowNode,
+)
+from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 
 
 def _make_workflow() -> TestWorkflow:
@@ -36,9 +36,9 @@ def _try_import_langgraph():
     """Import LangGraph or skip test."""
     try:
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
             LANGGRAPH_AVAILABLE,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         if not LANGGRAPH_AVAILABLE:
             pytest.skip("LangGraph not available")
@@ -50,7 +50,7 @@ def _try_import_langgraph():
 def _try_import_fixtures():
     """Import test fixtures or skip."""
     try:
-        from wtb.testing.fixtures import create_minimal_graph, create_conditional_graph
+        from wtb.testing.fixtures import create_conditional_graph, create_minimal_graph
         return create_minimal_graph, create_conditional_graph
     except ImportError:
         pytest.skip("LangGraph fixtures not available")

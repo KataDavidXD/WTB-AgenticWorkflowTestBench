@@ -10,35 +10,34 @@ Tests integration-level fixes across the four key scenarios:
 Uses pytest fixtures, InMemoryUnitOfWork + InMemoryStateAdapter for speed.
 """
 
-import os
 import tempfile
-import time
-import uuid
-import pytest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import pytest
+
+from wtb.application.services.execution_controller import (
+    DefaultNodeExecutor,
+    ExecutionController,
+)
 from wtb.domain.models.workflow import (
-    Execution,
     ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.infrastructure.database import InMemoryUnitOfWork
 from wtb.infrastructure.adapters import InMemoryStateAdapter
-from wtb.application.services.execution_controller import (
-    ExecutionController,
-    DefaultNodeExecutor,
-)
+from wtb.infrastructure.database import InMemoryUnitOfWork
 
 try:
-    from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
     from wtb.domain.interfaces.file_tracking import (
-        FileTrackingResult,
-        FileRestoreResult,
         CheckpointLinkError,
+        FileRestoreResult,
+        FileTrackingResult,
+    )
+    from wtb.infrastructure.file_tracking.sqlite_service import (
+        SqliteFileTrackingService,
     )
     _HAS_SQLITE_FILE_TRACKING = True
 except ImportError:
@@ -54,9 +53,9 @@ except ImportError:
     _HAS_FACTORIES = False
 
 try:
+    from wtb.domain.models.batch_test import BatchTest, BatchTestResult
     from wtb.sdk.test_bench import WTBTestBench
     from wtb.sdk.workflow_project import WorkflowProject
-    from wtb.domain.models.batch_test import BatchTest, BatchTestResult
     _HAS_SDK = True
 except ImportError:
     _HAS_SDK = False

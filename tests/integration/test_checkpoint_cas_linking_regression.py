@@ -5,16 +5,16 @@ from __future__ import annotations
 import operator
 import uuid
 from pathlib import Path
-from typing import Annotated, Optional, TypedDict
+from typing import Annotated, TypedDict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from wtb.domain.interfaces.async_file_tracking import FileTrackingResult
 from wtb.application.services.execution_controller import (
     DefaultNodeExecutor,
     ExecutionController,
 )
+from wtb.domain.interfaces.async_file_tracking import FileTrackingResult
 from wtb.domain.interfaces.file_tracking import CheckpointLinkError
 from wtb.domain.interfaces.state_adapter import CheckpointTrigger
 from wtb.domain.models.workflow import (
@@ -29,9 +29,9 @@ from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdap
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 from wtb.infrastructure.file_tracking.sqlite_service import SqliteFileTrackingService
 
-
 try:
     from langgraph.graph import END, StateGraph
+
     from wtb.infrastructure.adapters.langgraph_state_adapter import (
         LANGGRAPH_AVAILABLE,
         LangGraphConfig,
@@ -49,7 +49,7 @@ class FileState(TypedDict, total=False):
     value: int
     messages: Annotated[list[str], operator.add]
     _output_files: dict[str, str]
-    branch: Optional[str]
+    branch: str | None
     answer: str
     observed_file: str
 
@@ -475,7 +475,9 @@ def _async_uow_for(execution: Execution):
 
 @pytest.mark.asyncio
 async def test_async_checkpoint_fork_execution_starts_paused():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     source = Execution(
         id="source-exec",
@@ -508,7 +510,9 @@ async def test_async_checkpoint_fork_execution_starts_paused():
 
 @pytest.mark.asyncio
 async def test_async_run_links_files_to_real_checkpoint_from_history():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-history-exec",
@@ -561,7 +565,9 @@ async def test_async_rollback_fails_closed_on_incomplete_file_restore(
     tmp_path,
     restored_count,
 ):
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-rollback-incomplete",
@@ -604,7 +610,9 @@ async def test_async_rollback_fails_closed_on_incomplete_file_restore(
 
 @pytest.mark.asyncio
 async def test_async_rollback_restores_files_before_committing_state(tmp_path):
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-rollback-success",
@@ -648,7 +656,9 @@ async def test_async_rollback_restores_files_before_committing_state(tmp_path):
 
 @pytest.mark.asyncio
 async def test_async_run_saves_fallback_checkpoint_when_history_is_empty():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-fallback-exec",
@@ -677,7 +687,9 @@ async def test_async_run_saves_fallback_checkpoint_when_history_is_empty():
 
 @pytest.mark.asyncio
 async def test_async_run_fails_closed_when_fallback_has_no_current_node():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-no-node-exec",
@@ -703,7 +715,9 @@ async def test_async_run_fails_closed_when_fallback_has_no_current_node():
 
 @pytest.mark.asyncio
 async def test_async_run_fails_closed_when_file_link_has_no_commit():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-link-failure-exec",
@@ -742,7 +756,9 @@ async def test_async_run_fails_closed_when_file_link_has_no_commit():
 
 @pytest.mark.asyncio
 async def test_async_run_commit_failure_uses_clean_uow_to_persist_failed_state():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-main-commit-failure",
@@ -796,7 +812,9 @@ async def test_async_run_commit_failure_uses_clean_uow_to_persist_failed_state()
 
 @pytest.mark.asyncio
 async def test_async_run_secondary_failure_does_not_mask_primary_commit_error():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
 
     execution = Execution(
         id="async-secondary-commit-failure",
@@ -831,7 +849,9 @@ async def test_async_run_secondary_failure_does_not_mask_primary_commit_error():
 @pytest.mark.asyncio
 @pytest.mark.skipif(not LANGGRAPH_AVAILABLE, reason="LangGraph not installed")
 async def test_async_run_uses_checkpoint_id_from_real_langgraph_history():
-    from wtb.application.services.async_execution_controller import AsyncExecutionController
+    from wtb.application.services.async_execution_controller import (
+        AsyncExecutionController,
+    )
     from wtb.infrastructure.adapters.async_langgraph_state_adapter import (
         AsyncLangGraphStateAdapter,
     )
