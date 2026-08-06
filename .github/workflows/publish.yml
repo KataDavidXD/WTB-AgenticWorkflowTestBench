@@ -1,0 +1,68 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types:
+      - published
+
+concurrency:
+  group: pypi-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish release to PyPI
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/wtb
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: python
+        run: |
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          if re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
+              raise SystemExit(
+                  f"Release tag {tag!r} must use the exact vX.Y.Z format"
+              )
+
+          with Path("pyproject.toml").open("rb") as stream:
+              package_version = tomllib.load(stream)["project"]["version"]
+
+          tag_version = tag.removeprefix("v")
+          if package_version != tag_version:
+              raise SystemExit(
+                  f"Release tag version {tag_version!r} does not match "
+                  f"pyproject.toml version {package_version!r}"
+              )
+
+      - name: Build distributions
+        run: |
+          python -m pip install --disable-pip-version-check build==1.5.0
+          python -m build
+
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1
