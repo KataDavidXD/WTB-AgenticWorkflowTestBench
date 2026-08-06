@@ -1,6 +1,6 @@
 """Fail-closed SDK graph resolution for persisted executions."""
 
-from contextlib import contextmanager, ExitStack
+from contextlib import ExitStack, contextmanager
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from wtb.domain.models import Execution, ExecutionState, ExecutionStatus
-from wtb.sdk import BatchTestResult, WTBTestBench, WorkflowProject
+from wtb.sdk import BatchTestResult, WorkflowProject, WTBTestBench
 
 
 def _bench_with_single_project(*, execution_workflow_id: str):

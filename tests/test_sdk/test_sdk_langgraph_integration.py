@@ -11,22 +11,17 @@ Tests LangGraph integration:
 Run with: pytest tests/test_sdk/test_sdk_langgraph_integration.py -v
 """
 
-import pytest
 import uuid
-from typing import Dict, Any, List
-from datetime import datetime
 
-from wtb.sdk import WTBTestBench, WorkflowProject
-from wtb.sdk.test_bench import RollbackResult, ForkResult
-from wtb.domain.models import ExecutionStatus
-from wtb.application.factories import WTBTestBenchFactory
+import pytest
 
 from tests.test_sdk.conftest import (
-    create_initial_state,
-    create_branching_state,
     LANGGRAPH_AVAILABLE,
+    create_branching_state,
+    create_initial_state,
 )
-
+from wtb.domain.models import ExecutionStatus
+from wtb.sdk.test_bench import ForkResult, RollbackResult
 
 # Skip all tests if LangGraph not available
 pytestmark = pytest.mark.skipif(
@@ -333,9 +328,9 @@ class TestLangGraphAdapterDirect:
     def test_adapter_creation(self):
         """Test creating LangGraph adapter."""
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
             LANGGRAPH_AVAILABLE,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         if not LANGGRAPH_AVAILABLE:
@@ -350,11 +345,11 @@ class TestLangGraphAdapterDirect:
     
     def test_adapter_session_management(self, simple_graph_factory):
         """Test adapter session management."""
-        from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
-        )
         from wtb.domain.models.workflow import ExecutionState
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig,
+            LangGraphStateAdapter,
+        )
         
         adapter = LangGraphStateAdapter(LangGraphConfig.for_testing())
         
@@ -377,11 +372,11 @@ class TestLangGraphAdapterDirect:
     
     def test_adapter_execution(self, simple_graph_factory):
         """Test adapter execution."""
-        from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
-        )
         from wtb.domain.models.workflow import ExecutionState
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig,
+            LangGraphStateAdapter,
+        )
         
         adapter = LangGraphStateAdapter(LangGraphConfig.for_testing())
         
@@ -404,11 +399,11 @@ class TestLangGraphAdapterDirect:
     
     def test_adapter_checkpoint_history(self, simple_graph_factory):
         """Test adapter checkpoint history."""
-        from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter,
-            LangGraphConfig,
-        )
         from wtb.domain.models.workflow import ExecutionState
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig,
+            LangGraphStateAdapter,
+        )
         
         adapter = LangGraphStateAdapter(LangGraphConfig.for_testing())
         graph = simple_graph_factory()

@@ -15,32 +15,27 @@ For full Ray integration tests, set RAY_INTEGRATION_TESTS=1:
 """
 
 import base64
-import pytest
 import json
 import os
 import time
 import uuid
-from typing import Dict, Any, List
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 
-from wtb.sdk import WTBTestBench, WorkflowProject
+import pytest
+
+from tests.test_sdk.conftest import (
+    LANGGRAPH_AVAILABLE,
+    RAY_AVAILABLE,
+)
+from wtb.application.factories import BatchTestRunnerFactory
+from wtb.config import RayConfig, WTBConfig
 from wtb.domain.models import ExecutionStatus
 from wtb.domain.models.batch_test import (
     BatchTest,
+    BatchTestResult,
     BatchTestStatus,
     VariantCombination,
-    BatchTestResult,
 )
-from wtb.application.factories import WTBTestBenchFactory, BatchTestRunnerFactory
-from wtb.config import WTBConfig, RayConfig
-
-from tests.test_sdk.conftest import (
-    create_initial_state,
-    RAY_AVAILABLE,
-    LANGGRAPH_AVAILABLE,
-)
-
+from wtb.sdk import WorkflowProject
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # RayConfig Tests
@@ -161,6 +156,7 @@ class TestBatchTestRunnerFactory:
     def test_bench_close_retries_after_batch_runner_shutdown_failure(self, wtb_inmemory):
         """A failed actor shutdown must remain retryable through the SDK."""
         from unittest.mock import MagicMock
+
         from wtb.domain.interfaces.batch_runner import BatchRunnerError
 
         runner = MagicMock()
@@ -300,6 +296,7 @@ class TestSDKBatchTesting:
     ):
         """A project requesting Ray must not silently run on threadpool."""
         from unittest.mock import patch
+
         from wtb.domain.interfaces.batch_runner import BatchRunnerError
         from wtb.sdk import ExecutionConfig
 
@@ -329,6 +326,7 @@ class TestSDKBatchTesting:
     ):
         """A sequential project must use the inline SDK execution path."""
         from unittest.mock import patch, sentinel
+
         from wtb.sdk import ExecutionConfig
 
         project = WorkflowProject(
@@ -529,6 +527,7 @@ class TestSDKBatchTesting:
         """Each matrix cell must produce a result even if one run raises."""
         from types import SimpleNamespace
         from unittest.mock import patch
+
         from wtb.sdk import ExecutionConfig
 
         project = WorkflowProject(
@@ -599,6 +598,7 @@ class TestSDKBatchTesting:
         """A run cannot mutate another variant's nested initial state."""
         from types import SimpleNamespace
         from unittest.mock import patch
+
         from wtb.sdk import ExecutionConfig
 
         project = WorkflowProject(
@@ -657,6 +657,7 @@ class TestSDKBatchTesting:
     ):
         """An uncopyable later case cannot allow an earlier case to run."""
         from unittest.mock import MagicMock
+
         from wtb.sdk import ExecutionConfig
 
         class Uncopyable:
@@ -984,6 +985,7 @@ class TestSDKBatchTesting:
         """Every case batch must retain an unimportable graph factory."""
         import sys
         from unittest.mock import MagicMock, patch
+
         from wtb.sdk import ExecutionConfig
 
         def interactive_graph_factory():
@@ -1135,7 +1137,7 @@ class TestRayIntegration:
     ):
         """Test basic batch test execution with Ray."""
         from wtb.application.services.ray_batch_runner import RayBatchTestRunner
-        from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
+        from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
         
         # Create workflow
         workflow = TestWorkflow(
@@ -1225,9 +1227,10 @@ class TestRayIntegration:
     
     def test_ray_cancellation(self, ray_initialized, tmp_path):
         """Test batch test cancellation."""
+        import threading
+
         from wtb.application.services.ray_batch_runner import RayBatchTestRunner
         from wtb.domain.models.workflow import TestWorkflow, WorkflowNode
-        import threading
         
         workflow = TestWorkflow(
             id="wf-cancel",

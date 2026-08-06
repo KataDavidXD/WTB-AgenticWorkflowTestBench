@@ -22,57 +22,40 @@ For full integration tests with Ray:
     RAY_INTEGRATION_TESTS=1 pytest tests/test_sdk/test_sdk_full_integration.py -v
 """
 
-import pytest
 import os
-import uuid
 import time
-import hashlib
-import tempfile
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Callable
-from datetime import datetime, timezone
-from dataclasses import dataclass, field
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from unittest.mock import MagicMock, patch
+from typing import Any
 
-from wtb.sdk import WTBTestBench, WorkflowProject
-from wtb.sdk.workflow_project import (
-    FileTrackingConfig as SDKFileTrackingConfig,
-    EnvironmentConfig,
-    ExecutionConfig,
-    EnvSpec,
-    NodeVariant,
-    WorkspaceIsolationConfig,
+import pytest
+
+from tests.test_sdk.conftest import (
+    LANGGRAPH_AVAILABLE,
+    RAY_AVAILABLE,
+    create_initial_state,
 )
-from wtb.sdk.test_bench import (
-    WTBTestBenchBuilder,
-    RollbackResult,
-    ForkResult,
-)
+from wtb.application.factories import WTBTestBenchFactory
+from wtb.config import RayConfig
 from wtb.domain.models import ExecutionStatus
 from wtb.domain.models.batch_test import (
     BatchTest,
     BatchTestStatus,
     VariantCombination,
-    BatchTestResult,
 )
-from wtb.application.factories import WTBTestBenchFactory, BatchTestRunnerFactory
-from wtb.application.services import ProjectService, VariantService
-from wtb.config import WTBConfig, RayConfig, FileTrackingConfig
-from wtb.infrastructure.database import InMemoryUnitOfWork
-from wtb.infrastructure.adapters import InMemoryStateAdapter
-
-from tests.test_sdk.conftest import (
-    create_initial_state,
-    create_branching_state,
-    create_file_state,
-    MockVenvProvider,
-    MockVenvSpec,
-    MockVenvStatus,
-    LANGGRAPH_AVAILABLE,
-    RAY_AVAILABLE,
+from wtb.sdk import WorkflowProject
+from wtb.sdk.test_bench import (
+    ForkResult,
+    RollbackResult,
 )
-
+from wtb.sdk.workflow_project import (
+    EnvironmentConfig,
+    EnvSpec,
+    WorkspaceIsolationConfig,
+)
+from wtb.sdk.workflow_project import (
+    FileTrackingConfig as SDKFileTrackingConfig,
+)
 
 # Skip all tests if LangGraph not available
 pytestmark = pytest.mark.skipif(
@@ -269,7 +252,7 @@ class TestFullIntegrationNodeReplacement:
         )
         
         # Register variant with specific environment
-        def gpu_variant(state: Dict[str, Any]) -> Dict[str, Any]:
+        def gpu_variant(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state.get("messages", []) + ["GPU_PROCESSED"], "count": 999}
         
         project.register_variant(
@@ -305,7 +288,7 @@ class TestFullIntegrationNodeReplacement:
             ),
         )
         
-        def file_writing_variant(state: Dict[str, Any]) -> Dict[str, Any]:
+        def file_writing_variant(state: dict[str, Any]) -> dict[str, Any]:
             # Variant that writes a file
             return {"messages": state.get("messages", []) + ["FILE_WRITTEN"]}
         
@@ -753,7 +736,7 @@ class TestFullIntegrationWithRay:
     ):
         """Test Ray batch testing with environment isolation."""
         from wtb.application.services.ray_batch_runner import RayBatchTestRunner
-        from wtb.domain.models.workflow import TestWorkflow, WorkflowNode, WorkflowEdge
+        from wtb.domain.models.workflow import TestWorkflow, WorkflowEdge, WorkflowNode
         
         workflow = TestWorkflow(
             id="wf-ray-env",
@@ -1097,13 +1080,13 @@ class TestBatchMultipleQueries:
         )
         
         # Register multiple variants for node_b
-        def variant_fast(state: Dict[str, Any]) -> Dict[str, Any]:
+        def variant_fast(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state.get("messages", []) + ["FAST"], "count": 10}
         
-        def variant_accurate(state: Dict[str, Any]) -> Dict[str, Any]:
+        def variant_accurate(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state.get("messages", []) + ["ACCURATE"], "count": 20}
         
-        def variant_balanced(state: Dict[str, Any]) -> Dict[str, Any]:
+        def variant_balanced(state: dict[str, Any]) -> dict[str, Any]:
             return {"messages": state.get("messages", []) + ["BALANCED"], "count": 15}
         
         project.register_variant("node_b", "fast", variant_fast)

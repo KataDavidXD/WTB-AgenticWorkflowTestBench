@@ -10,26 +10,20 @@ Tests ACID compliance for:
 Design Reference: docs/Project_Init/WORKFLOW_TEST_BENCH_ARCHITECTURE.md
 """
 
-import pytest
-import threading
 import time
-import uuid
-from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import pytest
+
+from wtb.application.factories import WTBTestBenchFactory
+from wtb.domain.models import ExecutionStatus
 from wtb.sdk import (
-    WTBTestBench,
-    WorkflowProject,
-    Execution,  # Domain model, not ExecutionResult
+    WorkflowProject,  # Domain model, not ExecutionResult
 )
 from wtb.sdk.test_bench import (
     RollbackResult,
-    ForkResult,
 )
-from wtb.domain.models import ExecutionStatus
-from wtb.application.factories import WTBTestBenchFactory
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -565,7 +559,7 @@ class TestBatchOperationConsistency:
     
     def test_batch_test_isolation(self, wtb_inmemory, mock_graph, project_factory):
         """Test that batch test variants are isolated."""
-        from wtb.domain.models.batch_test import BatchTest, BatchTestStatus
+        from wtb.domain.models.batch_test import BatchTest
         
         project = project_factory("batch_isolation", mock_graph)
         wtb_inmemory.register_project(project)
@@ -593,7 +587,7 @@ class TestBatchOperationConsistency:
     
     def test_batch_test_partial_failure(self, wtb_inmemory, mock_graph, project_factory):
         """Test batch test handles partial failures."""
-        from wtb.domain.models.batch_test import BatchTest, BatchTestStatus
+        from wtb.domain.models.batch_test import BatchTestStatus
         
         project = project_factory("batch_partial_fail", mock_graph)
         wtb_inmemory.register_project(project)
