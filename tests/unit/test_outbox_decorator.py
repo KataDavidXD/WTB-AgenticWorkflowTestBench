@@ -4,22 +4,23 @@ Unit tests for OutboxExecutionControllerDecorator.
 Verifies outbox events are emitted for all lifecycle operations.
 """
 
-import pytest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
+import pytest
+
+from wtb.application.services.execution_controller import ExecutionController
+from wtb.application.services.outbox_controller_decorator import (
+    OutboxExecutionControllerDecorator,
+)
+from wtb.domain.models.outbox import OutboxEventType
 from wtb.domain.models.workflow import (
     Execution,
     ExecutionState,
     ExecutionStatus,
     TestWorkflow,
-    WorkflowNode,
     WorkflowEdge,
+    WorkflowNode,
 )
-from wtb.domain.models.outbox import OutboxEventType
-from wtb.application.services.outbox_controller_decorator import (
-    OutboxExecutionControllerDecorator,
-)
-from wtb.application.services.execution_controller import ExecutionController
 from wtb.infrastructure.adapters.inmemory_state_adapter import InMemoryStateAdapter
 from wtb.infrastructure.database.inmemory_unit_of_work import InMemoryUnitOfWork
 
