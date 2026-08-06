@@ -22,12 +22,12 @@ import shutil
 import socket
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 from openai import OpenAI
 
-from wtb.sdk import ExecutionConfig, RayConfig, WTBTestBench, WorkflowProject
+from wtb.sdk import ExecutionConfig, RayConfig, WorkflowProject, WTBTestBench
 
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
@@ -42,7 +42,7 @@ class DemoState(TypedDict, total=False):
     _variant_config: dict[str, str]
 
 
-INITIAL_STATE: Dict[str, Any] = {
+INITIAL_STATE: dict[str, Any] = {
     "messages": [],
     "count": 0,
     "result": "",
@@ -69,7 +69,7 @@ def _load_local_env() -> None:
             os.environ[key] = value
 
 
-def _llm_settings() -> Dict[str, str]:
+def _llm_settings() -> dict[str, str]:
     _load_local_env()
     api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     model = os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL")
@@ -94,7 +94,7 @@ def _llm_settings() -> Dict[str, str]:
 def call_real_llm() -> str:
     """Call a real OpenAI-compatible LLM provider; no fake fallback."""
     settings = _llm_settings()
-    kwargs: Dict[str, str] = {"api_key": settings["api_key"]}
+    kwargs: dict[str, str] = {"api_key": settings["api_key"]}
     if settings["base_url"]:
         kwargs["base_url"] = settings["base_url"]
     client = OpenAI(**kwargs)
@@ -122,7 +122,7 @@ def call_real_llm() -> str:
 def create_demo_graph():
     """Create a small importable graph for local, threadpool, and Ray actors."""
 
-    def node_a(state: DemoState) -> Dict[str, Any]:
+    def node_a(state: DemoState) -> dict[str, Any]:
         llm_response = state.get("llm_response") or call_real_llm()
         draft = f"draft:{llm_response}"
         return {
@@ -132,7 +132,7 @@ def create_demo_graph():
             "_output_files": {"demo_result.txt": draft},
         }
 
-    def node_b(state: DemoState) -> Dict[str, Any]:
+    def node_b(state: DemoState) -> dict[str, Any]:
         variant = (state.get("_variant_config") or {}).get("node_b")
         marker = f"B:{variant}" if variant and variant != "default" else "B"
         return {
@@ -140,7 +140,7 @@ def create_demo_graph():
             "count": state.get("count", 0) + 1,
         }
 
-    def node_c(state: DemoState) -> Dict[str, Any]:
+    def node_c(state: DemoState) -> dict[str, Any]:
         messages = state.get("messages", []) + ["C"]
         result = ",".join(messages)
         llm_response = state.get("llm_response", "")
@@ -162,7 +162,7 @@ def create_demo_graph():
     return graph
 
 
-def node_b_marked(state: DemoState) -> Dict[str, Any]:
+def node_b_marked(state: DemoState) -> dict[str, Any]:
     """A real single-run node variant used by WorkflowProject.register_variant."""
     return {
         "messages": state.get("messages", []) + ["B:marked"],
@@ -214,7 +214,7 @@ def _checkpoint_with_output(
     bench: WTBTestBench,
     execution_id: str,
     prefix: str,
-    batch_result: Optional[Any] = None,
+    batch_result: Any | None = None,
 ) -> Any:
     checkpoints = (
         bench.get_batch_result_checkpoints(batch_result)
@@ -264,7 +264,7 @@ def _resume_and_fork(
     return fork.fork_execution_id
 
 
-def run_single(data_dir: str) -> Dict[str, str]:
+def run_single(data_dir: str) -> dict[str, str]:
     """Run one workflow execution with variant, rollback, resume, and fork."""
     bench = WTBTestBench.create(
         mode="development",
@@ -299,7 +299,7 @@ def run_single(data_dir: str) -> Dict[str, str]:
         gc.collect()
 
 
-def run_batch(data_dir: str) -> Dict[str, str]:
+def run_batch(data_dir: str) -> dict[str, str]:
     """Run local threadpool batch mode with variant, rollback, resume, and fork."""
     bench = WTBTestBench.create(
         mode="development",
@@ -346,7 +346,7 @@ def _find_free_port() -> int:
         return sock.getsockname()[1]
 
 
-def run_ray(data_dir: str, grpc_url: Optional[str] = None) -> Dict[str, str]:
+def run_ray(data_dir: str, grpc_url: str | None = None) -> dict[str, str]:
     """Run Ray batch mode; set grpc_url to also provision Docker UV venvs."""
     import ray
 
@@ -410,7 +410,7 @@ def run_ray(data_dir: str, grpc_url: Optional[str] = None) -> Dict[str, str]:
         os.environ.pop("WTB_RAY_STORAGE_ROOT", None)
 
 
-def run_mode(mode: str, grpc_url: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+def run_mode(mode: str, grpc_url: str | None = None) -> dict[str, dict[str, str]]:
     """Run a selected mode in an isolated temporary data directory."""
     data_dir = tempfile.mkdtemp(prefix=f"wtb_{mode}_demo_")
     try:
