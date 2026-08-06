@@ -15,18 +15,14 @@ Run with: pytest tests/test_langgraph/unit/test_basic_operations.py -v
 """
 
 import pytest
-from typing import Dict, Any
-
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 
 from tests.test_langgraph.helpers import (
-    create_initial_simple_state,
-    create_initial_advanced_state,
-    create_initial_branch_state,
     SimpleState,
+    create_initial_branch_state,
+    create_initial_simple_state,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Graph Creation Tests
@@ -349,8 +345,8 @@ class TestSOLIDCompliance:
     def test_open_closed_graph_extension(self, simple_graph_def, memory_checkpointer):
         """Graph should be extendable without modifying existing nodes."""
         # Clone the workflow pattern for extension test
-        from typing import TypedDict, Annotated
         import operator
+        from typing import Annotated, TypedDict
         
         class ExtendedState(TypedDict):
             messages: Annotated[list, operator.add]

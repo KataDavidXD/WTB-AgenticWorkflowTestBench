@@ -22,24 +22,14 @@ ACID Compliance:
 Run with: pytest tests/test_langgraph/integration/test_execution_control.py -v
 """
 
-import pytest
-from typing import Dict, Any, List
-from datetime import datetime
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-
-from wtb.infrastructure.stores.langgraph_checkpoint_store import LangGraphCheckpointStore
-from wtb.domain.models.checkpoint import CheckpointId, ExecutionHistory
+from langgraph.graph import END, StateGraph
 
 from tests.test_langgraph.helpers import (
-    create_initial_simple_state,
     create_initial_branch_state,
-    create_initial_advanced_state,
-    BranchState,
-    AdvancedState,
+    create_initial_simple_state,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Rollback Tests
@@ -279,8 +269,8 @@ class TestPauseResume:
     
     def test_interrupt_before_node(self):
         """Test interrupting execution before a node."""
-        from typing import TypedDict, Annotated
         import operator
+        from typing import Annotated, TypedDict
         
         class InterruptState(TypedDict):
             messages: Annotated[list, operator.add]
@@ -327,8 +317,8 @@ class TestPauseResume:
     
     def test_interrupt_after_node(self):
         """Test interrupting execution after a node."""
-        from typing import TypedDict, Annotated
         import operator
+        from typing import Annotated, TypedDict
         
         class InterruptState(TypedDict):
             messages: Annotated[list, operator.add]
@@ -367,8 +357,8 @@ class TestPauseResume:
     
     def test_pause_modify_resume(self):
         """Test pausing, modifying state, and resuming."""
-        from typing import TypedDict, Annotated
         import operator
+        from typing import Annotated, TypedDict
         
         class ModifyState(TypedDict):
             messages: Annotated[list, operator.add]
@@ -414,8 +404,8 @@ class TestSingleNodeExecution:
     
     def test_execute_specific_node_via_interrupt(self):
         """Test executing only a specific node using interrupts."""
-        from typing import TypedDict, Annotated
         import operator
+        from typing import Annotated, TypedDict
         
         class NodeState(TypedDict):
             messages: Annotated[list, operator.add]
@@ -722,8 +712,8 @@ class TestComplexScenarios:
     
     def test_interleaved_pause_resume(self):
         """Test interleaved pause and resume on multiple threads."""
-        from typing import TypedDict, Annotated
         import operator
+        from typing import Annotated, TypedDict
         
         class InterleaveState(TypedDict):
             messages: Annotated[list, operator.add]

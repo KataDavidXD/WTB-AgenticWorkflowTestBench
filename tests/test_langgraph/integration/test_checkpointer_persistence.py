@@ -13,19 +13,18 @@ Test Scenarios:
 - Time-travel (rollback) works with persisted checkpoints
 """
 
-import pytest
-from typing import TypedDict, Annotated, Optional
 import operator
-from unittest.mock import Mock
+from typing import Annotated, TypedDict
 
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Check LangGraph availability
 # ═══════════════════════════════════════════════════════════════════════════════
 
 try:
-    from langgraph.graph import StateGraph
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import StateGraph
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
@@ -97,7 +96,8 @@ class TestCheckpointerPersistence:
         This verifies the core architectural fix.
         """
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         # Create adapter with MemorySaver
@@ -125,7 +125,8 @@ class TestCheckpointerPersistence:
         This is the key integration test - verifying end-to-end persistence.
         """
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         # Create adapter
@@ -170,7 +171,8 @@ class TestCheckpointerPersistence:
         Verifies that checkpoint history is available and contains state values.
         """
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         # Create adapter
@@ -222,12 +224,8 @@ class TestWTBTestBenchIntegration:
         
         Full integration test of the architectural fix.
         """
-        from wtb.sdk.test_bench import WTBTestBench
-        from wtb.sdk.workflow_project import WorkflowProject
         from wtb.application.factories import WTBTestBenchFactory
-        from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
-        )
+        from wtb.sdk.workflow_project import WorkflowProject
         
         # Create WTB with LangGraph
         wtb = WTBTestBenchFactory.create_with_langgraph(
@@ -267,7 +265,7 @@ class TestWTBTestBenchIntegration:
         """
         from wtb.application.factories import WTBTestBenchFactory
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LANGGRAPH_AVAILABLE,
+            LANGGRAPH_AVAILABLE,
         )
         
         if not LANGGRAPH_AVAILABLE:

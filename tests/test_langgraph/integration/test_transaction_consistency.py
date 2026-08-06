@@ -15,20 +15,20 @@ Test Scenarios:
 5. Branch then modify - verify isolated modifications
 """
 
-import pytest
-import tempfile
-import os
-from pathlib import Path
-from typing import TypedDict, Annotated, Dict, Any
 import operator
+import tempfile
+from pathlib import Path
+from typing import Annotated, Any, TypedDict
+
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Check LangGraph availability
 # ═══════════════════════════════════════════════════════════════════════════════
 
 try:
-    from langgraph.graph import StateGraph
     from langgraph.checkpoint.memory import MemorySaver
+    from langgraph.graph import StateGraph
     LANGGRAPH_AVAILABLE = True
 except ImportError:
     LANGGRAPH_AVAILABLE = False
@@ -43,7 +43,7 @@ class TransactionState(TypedDict):
     """State for transaction consistency tests."""
     counter: int
     history: Annotated[list, operator.add]
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -413,10 +413,11 @@ class TestStateAdapterDirect:
     
     def test_checkpoint_id_sync_after_execution(self, sqlite_data_dir):
         """Test that checkpoint IDs are synced after execution."""
-        from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
-        )
         from wtb.domain.models import ExecutionState
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig,
+            LangGraphStateAdapter,
+        )
         
         # Create adapter with SQLite
         config = LangGraphConfig.for_development(
@@ -447,10 +448,11 @@ class TestStateAdapterDirect:
     
     def test_create_fork_with_synced_checkpoints(self, sqlite_data_dir):
         """Test creating fork with synced checkpoint IDs."""
-        from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
-        )
         from wtb.domain.models import ExecutionState
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig,
+            LangGraphStateAdapter,
+        )
         
         # Create adapter
         config = LangGraphConfig.for_development(

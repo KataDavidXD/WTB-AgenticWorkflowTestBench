@@ -6,8 +6,7 @@ Pytest fixtures remain in conftest.py for auto-discovery.
 """
 
 import operator
-from typing import TypedDict, Annotated, Dict, Any, List
-
+from typing import Annotated, Any, TypedDict
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # State Definitions
@@ -25,7 +24,7 @@ class AdvancedState(TypedDict):
     messages: Annotated[list, operator.add]
     count: int
     path: Annotated[list, operator.add]
-    variables: Dict[str, Any]
+    variables: dict[str, Any]
     execution_id: str
     checkpoint_ids: Annotated[list, operator.add]
 
@@ -111,22 +110,22 @@ def create_initial_parallel_state() -> ParallelState:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def simple_node_a(state: SimpleState) -> Dict[str, Any]:
+def simple_node_a(state: SimpleState) -> dict[str, Any]:
     """Simple node A."""
     return {"messages": ["A"], "count": state["count"] + 1}
 
 
-def simple_node_b(state: SimpleState) -> Dict[str, Any]:
+def simple_node_b(state: SimpleState) -> dict[str, Any]:
     """Simple node B."""
     return {"messages": ["B"], "count": state["count"] + 1}
 
 
-def simple_node_c(state: SimpleState) -> Dict[str, Any]:
+def simple_node_c(state: SimpleState) -> dict[str, Any]:
     """Simple node C."""
     return {"messages": ["C"], "count": state["count"] + 1}
 
 
-def advanced_node_a(state: AdvancedState) -> Dict[str, Any]:
+def advanced_node_a(state: AdvancedState) -> dict[str, Any]:
     """Advanced node A with path tracking."""
     return {
         "messages": ["A"],
@@ -135,7 +134,7 @@ def advanced_node_a(state: AdvancedState) -> Dict[str, Any]:
     }
 
 
-def advanced_node_b(state: AdvancedState) -> Dict[str, Any]:
+def advanced_node_b(state: AdvancedState) -> dict[str, Any]:
     """Advanced node B with path tracking."""
     return {
         "messages": ["B"],
@@ -144,7 +143,7 @@ def advanced_node_b(state: AdvancedState) -> Dict[str, Any]:
     }
 
 
-def advanced_node_c(state: AdvancedState) -> Dict[str, Any]:
+def advanced_node_c(state: AdvancedState) -> dict[str, Any]:
     """Advanced node C with path tracking."""
     return {
         "messages": ["C"],
@@ -153,7 +152,7 @@ def advanced_node_c(state: AdvancedState) -> Dict[str, Any]:
     }
 
 
-def advanced_node_d(state: AdvancedState) -> Dict[str, Any]:
+def advanced_node_d(state: AdvancedState) -> dict[str, Any]:
     """Advanced node D (alternate branch)."""
     return {
         "messages": ["D"],
@@ -162,12 +161,12 @@ def advanced_node_d(state: AdvancedState) -> Dict[str, Any]:
     }
 
 
-def failing_node(state: SimpleState) -> Dict[str, Any]:
+def failing_node(state: SimpleState) -> dict[str, Any]:
     """Node that always fails."""
     raise ValueError("Intentional failure for testing")
 
 
-def file_processing_node(state: FileTrackingState) -> Dict[str, Any]:
+def file_processing_node(state: FileTrackingState) -> dict[str, Any]:
     """Node that simulates file processing."""
     import uuid
     file_id = str(uuid.uuid4())[:8]
@@ -178,7 +177,7 @@ def file_processing_node(state: FileTrackingState) -> Dict[str, Any]:
     }
 
 
-def conditional_fail_node(state: AdvancedState) -> Dict[str, Any]:
+def conditional_fail_node(state: AdvancedState) -> dict[str, Any]:
     """Node that fails based on state."""
     if state.get("variables", {}).get("should_fail", False):
         raise ValueError("Conditional failure triggered")
@@ -189,7 +188,7 @@ def conditional_fail_node(state: AdvancedState) -> Dict[str, Any]:
     }
 
 
-def parallel_node_1(state: ParallelState) -> Dict[str, Any]:
+def parallel_node_1(state: ParallelState) -> dict[str, Any]:
     """Parallel node 1."""
     return {
         "results": [{"node": "parallel_1", "value": 10}],
@@ -197,7 +196,7 @@ def parallel_node_1(state: ParallelState) -> Dict[str, Any]:
     }
 
 
-def parallel_node_2(state: ParallelState) -> Dict[str, Any]:
+def parallel_node_2(state: ParallelState) -> dict[str, Any]:
     """Parallel node 2."""
     return {
         "results": [{"node": "parallel_2", "value": 20}],
@@ -205,7 +204,7 @@ def parallel_node_2(state: ParallelState) -> Dict[str, Any]:
     }
 
 
-def aggregator_node(state: ParallelState) -> Dict[str, Any]:
+def aggregator_node(state: ParallelState) -> dict[str, Any]:
     """Aggregator node after parallel execution."""
     total = sum(r.get("value", 0) for r in state["results"])
     return {
@@ -222,7 +221,6 @@ def aggregator_node(state: ParallelState) -> Dict[str, Any]:
 
 def route_by_switch(state: BranchState) -> str:
     """Route based on switch flag."""
-    from langgraph.graph import END
     if state.get("switch", False):
         return "node_d"
     return "node_c"

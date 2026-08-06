@@ -13,59 +13,51 @@ SOLID Compliance:
 - Interface Segregation (separate fixtures for each concern)
 """
 
-import pytest
-import tempfile
-from typing import List, Dict, Any, Optional
-from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from langgraph.graph import StateGraph, END
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
-
-from wtb.infrastructure.stores.langgraph_checkpoint_store import (
-    LangGraphCheckpointStore,
-    LangGraphCheckpointConfig,
-)
-from wtb.domain.models.checkpoint import Checkpoint, CheckpointId, ExecutionHistory
-from wtb.infrastructure.events import (
-    WTBEventBus,
-    WTBAuditTrail,
-    AuditEventListener,
-    LangGraphEventBridge,
-    StreamModeConfig,
-    InMemoryMetricsCollector,
-    create_event_bridge_for_testing,
-)
-from wtb.domain.events import (
-    ExecutionStartedEvent,
-    ExecutionCompletedEvent,
-    ExecutionFailedEvent,
-    NodeStartedEvent,
-    NodeCompletedEvent,
-    NodeFailedEvent,
-)
-from wtb.domain.events.checkpoint_events import CheckpointCreated
+from langgraph.graph import END, StateGraph
 
 # Import state types and helpers from helpers module
 from tests.test_langgraph.helpers import (
-    SimpleState,
     AdvancedState,
-    ParallelState,
     BranchState,
     FileTrackingState,
-    simple_node_a,
-    simple_node_b,
-    simple_node_c,
+    SimpleState,
     advanced_node_a,
     advanced_node_b,
     advanced_node_c,
     advanced_node_d,
     failing_node,
-    route_by_switch,
-    route_by_count,
     file_processing_node,
+    route_by_count,
+    route_by_switch,
+    simple_node_a,
+    simple_node_b,
+    simple_node_c,
 )
-
+from wtb.domain.events import (
+    ExecutionCompletedEvent,
+    ExecutionFailedEvent,
+    ExecutionStartedEvent,
+    NodeCompletedEvent,
+    NodeFailedEvent,
+    NodeStartedEvent,
+)
+from wtb.domain.events.checkpoint_events import CheckpointCreated
+from wtb.infrastructure.events import (
+    AuditEventListener,
+    InMemoryMetricsCollector,
+    LangGraphEventBridge,
+    StreamModeConfig,
+    WTBAuditTrail,
+    WTBEventBus,
+)
+from wtb.infrastructure.stores.langgraph_checkpoint_store import (
+    LangGraphCheckpointStore,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Graph Definition Fixtures
@@ -269,7 +261,7 @@ def audit_event_listener(event_bus, audit_trail) -> AuditEventListener:
 
 
 @pytest.fixture
-def collected_events(event_bus) -> List:
+def collected_events(event_bus) -> list:
     """Fixture to collect published events."""
     events = []
     
@@ -293,7 +285,7 @@ def collected_events(event_bus) -> List:
 
 
 @pytest.fixture
-def full_integration_setup(event_bus, audit_trail) -> Dict[str, Any]:
+def full_integration_setup(event_bus, audit_trail) -> dict[str, Any]:
     """Set up full integration with all components."""
     metrics_collector = InMemoryMetricsCollector(event_bus)
     event_bridge = LangGraphEventBridge(
@@ -314,7 +306,7 @@ def full_integration_setup(event_bus, audit_trail) -> Dict[str, Any]:
 
 
 @pytest.fixture
-def execution_context() -> Dict[str, Any]:
+def execution_context() -> dict[str, Any]:
     """Create standard execution context."""
     import uuid
     execution_id = f"exec-{uuid.uuid4().hex[:8]}"
@@ -333,7 +325,7 @@ def execution_context() -> Dict[str, Any]:
 
 
 @pytest.fixture
-def temp_files(tmp_path) -> Dict[str, Dict[str, Any]]:
+def temp_files(tmp_path) -> dict[str, dict[str, Any]]:
     """Create temporary test files."""
     files = {}
     test_data = [

@@ -14,21 +14,18 @@ SOLID Compliance:
 Run with: pytest tests/test_langgraph/unit/test_state_management.py -v
 """
 
-import pytest
 import operator
-from typing import TypedDict, Annotated, Dict, Any, List
 from datetime import datetime
+from typing import Annotated, Any, TypedDict
 
-from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 
 from tests.test_langgraph.helpers import (
-    create_initial_simple_state,
-    create_initial_advanced_state,
     SimpleState,
-    AdvancedState,
+    create_initial_advanced_state,
+    create_initial_simple_state,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # State Type Definition Tests
@@ -469,7 +466,7 @@ class TestStateSerialization:
     def test_dict_in_state(self, simple_graph_def):
         """Test state containing nested dictionaries."""
         class DictState(TypedDict):
-            data: Dict[str, Any]
+            data: dict[str, Any]
             messages: Annotated[list, operator.add]
         
         workflow = StateGraph(DictState)
@@ -494,7 +491,7 @@ class TestStateSerialization:
     def test_list_of_dicts_in_state(self):
         """Test state containing list of dictionaries."""
         class ListDictState(TypedDict):
-            items: Annotated[List[Dict[str, Any]], operator.add]
+            items: Annotated[list[dict[str, Any]], operator.add]
         
         workflow = StateGraph(ListDictState)
         workflow.add_node("list_node", lambda s: {
@@ -518,7 +515,7 @@ class TestStateSerialization:
     def test_datetime_in_state(self):
         """Test state containing datetime objects."""
         class DateState(TypedDict):
-            timestamps: Annotated[List[datetime], operator.add]
+            timestamps: Annotated[list[datetime], operator.add]
         
         workflow = StateGraph(DateState)
         now = datetime.now()

@@ -14,30 +14,23 @@ SOLID Compliance:
 Run with: pytest tests/test_langgraph/unit/test_checkpoint_operations.py -v
 """
 
-import pytest
 from datetime import datetime
-from typing import Dict, Any, List
 
-from langgraph.graph import StateGraph, END
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
+from tests.test_langgraph.helpers import (
+    create_initial_simple_state,
+)
 from wtb.domain.models.checkpoint import (
     Checkpoint,
     CheckpointId,
     ExecutionHistory,
-    CheckpointNotFoundError,
-    InvalidRollbackTargetError,
 )
 from wtb.infrastructure.stores.langgraph_checkpoint_store import (
-    LangGraphCheckpointStore,
     LangGraphCheckpointConfig,
+    LangGraphCheckpointStore,
 )
-
-from tests.test_langgraph.helpers import (
-    create_initial_simple_state,
-    create_initial_branch_state,
-)
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CheckpointId Value Object Tests
@@ -283,7 +276,7 @@ class TestCheckpointEntity:
 class TestExecutionHistory:
     """Tests for ExecutionHistory aggregate root."""
     
-    def _create_sample_checkpoints(self, execution_id: str = "exec-1") -> List[Checkpoint]:
+    def _create_sample_checkpoints(self, execution_id: str = "exec-1") -> list[Checkpoint]:
         """Helper to create sample checkpoints."""
         return [
             Checkpoint(

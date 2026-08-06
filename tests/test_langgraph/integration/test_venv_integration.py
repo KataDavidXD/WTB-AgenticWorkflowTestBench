@@ -10,22 +10,15 @@ Tests venv integration:
 Run with: pytest tests/test_langgraph/integration/test_venv_integration.py -v
 """
 
-import pytest
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from unittest.mock import Mock, MagicMock, patch, AsyncMock
 from dataclasses import dataclass
+from datetime import datetime
 
-from langgraph.graph import StateGraph, END
+import pytest
 from langgraph.checkpoint.memory import MemorySaver
-
-from wtb.infrastructure.events import WTBEventBus, WTBAuditTrail
 
 from tests.test_langgraph.helpers import (
     create_initial_simple_state,
-    SimpleState,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Mock Environment Provider
@@ -37,7 +30,7 @@ class MockEnvironmentSpec:
     """Mock environment specification."""
     env_id: str
     python_version: str = "3.11"
-    packages: List[str] = None
+    packages: list[str] = None
     
     def __post_init__(self):
         if self.packages is None:
@@ -49,16 +42,16 @@ class MockEnvironmentStatus:
     """Mock environment status."""
     env_id: str
     status: str = "ready"  # pending, creating, ready, failed, destroyed
-    python_path: Optional[str] = None
-    error: Optional[str] = None
+    python_path: str | None = None
+    error: str | None = None
 
 
 class MockEnvironmentProvider:
     """Mock environment provider for testing."""
     
     def __init__(self):
-        self._environments: Dict[str, MockEnvironmentStatus] = {}
-        self._specs: Dict[str, MockEnvironmentSpec] = {}
+        self._environments: dict[str, MockEnvironmentStatus] = {}
+        self._specs: dict[str, MockEnvironmentSpec] = {}
     
     def create_environment(self, spec: MockEnvironmentSpec) -> str:
         """Create a new environment."""
@@ -71,7 +64,7 @@ class MockEnvironmentProvider:
         )
         return env_id
     
-    def get_status(self, env_id: str) -> Optional[MockEnvironmentStatus]:
+    def get_status(self, env_id: str) -> MockEnvironmentStatus | None:
         """Get environment status."""
         return self._environments.get(env_id)
     
@@ -82,7 +75,7 @@ class MockEnvironmentProvider:
             return True
         return False
     
-    def list_environments(self) -> List[str]:
+    def list_environments(self) -> list[str]:
         """List all environments."""
         return list(self._environments.keys())
 

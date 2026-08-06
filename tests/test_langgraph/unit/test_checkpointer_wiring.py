@@ -14,10 +14,10 @@ Test Coverage:
 4. Checkpoints are actually persisted after execution
 """
 
-import pytest
-from unittest.mock import Mock, MagicMock, patch
-from typing import TypedDict, Any, Optional
+from typing import TypedDict
+from unittest.mock import Mock, patch
 
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test Fixtures
@@ -80,7 +80,8 @@ class TestSetWorkflowGraph:
         """
         # Arrange
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         # Create adapter with mock checkpointer
@@ -120,7 +121,8 @@ class TestSetWorkflowGraph:
     def test_rejects_compiled_graph_without_builder_or_checkpointer(self, mock_langgraph):
         """A durable adapter must not accept a graph that cannot persist state."""
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphConfig, LangGraphStateAdapter,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
 
         adapter = LangGraphStateAdapter.__new__(LangGraphStateAdapter)
@@ -145,7 +147,8 @@ class TestSetWorkflowGraph:
     ):
         """Durable reuse must never accept a false or foreign saver."""
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphConfig, LangGraphStateAdapter,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
 
         adapter_checkpointer = object()
@@ -167,7 +170,8 @@ class TestSetWorkflowGraph:
     def test_accepts_compiled_graph_owned_by_adapter(self, mock_langgraph):
         """A compiled graph may be reused only with this adapter's saver."""
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphConfig, LangGraphStateAdapter,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
 
         adapter_checkpointer = object()
@@ -192,7 +196,8 @@ class TestSetWorkflowGraph:
         """
         # Arrange
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         with patch.object(LangGraphStateAdapter, '_create_checkpointer') as mock_create:
@@ -241,6 +246,7 @@ class TestSDKCheckpointerHandling:
         This ensures the SDK cannot accidentally wire checkpointers.
         """
         import inspect
+
         from wtb.sdk.workflow_project import WorkflowProject
         
         sig = inspect.signature(WorkflowProject.build_graph)
@@ -256,9 +262,9 @@ class TestSDKCheckpointerHandling:
         """
         Test that WTBTestBench.run() does not extract checkpointer from state_adapter.
         """
-        from wtb.sdk.test_bench import WTBTestBench
-        from wtb.sdk.workflow_project import WorkflowProject
         import inspect
+
+        from wtb.sdk.test_bench import WTBTestBench
         
         # Get the source code of run method
         source = inspect.getsource(WTBTestBench.run)
@@ -378,7 +384,9 @@ class TestCheckpointerAvailability:
         Test that get_checkpointer() returns the adapter's checkpointer.
         """
         from wtb.infrastructure.adapters.langgraph_state_adapter import (
-            LangGraphStateAdapter, LangGraphConfig, LANGGRAPH_AVAILABLE,
+            LANGGRAPH_AVAILABLE,
+            LangGraphConfig,
+            LangGraphStateAdapter,
         )
         
         if not LANGGRAPH_AVAILABLE:
