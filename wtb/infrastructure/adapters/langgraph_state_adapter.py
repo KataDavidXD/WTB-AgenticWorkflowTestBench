@@ -918,14 +918,38 @@ class LangGraphStateAdapter(IStateAdapter):
                 for checkpoint_tuple in self._checkpointer.list(config):
                     checkpoint_config = checkpoint_tuple.config
                     metadata = checkpoint_tuple.metadata or {}
+                    checkpoint = getattr(checkpoint_tuple, "checkpoint", None) or {}
+                    channel_values = checkpoint.get("channel_values", {})
+                    if not isinstance(channel_values, dict):
+                        raise TypeError(
+                            "Persisted checkpoint channel_values must be a mapping"
+                        )
+
+                    # LangGraph persists routing decisions as branch channels. A
+                    # direct saver read therefore has enough information to
+                    # reconstruct the StateSnapshot fields even when no compiled
+                    # graph is available after process reconnection.
+                    next_nodes: list[str] = []
+                    state_values: dict[str, Any] = {}
+                    for channel, value in channel_values.items():
+                        if not isinstance(channel, str):
+                            raise TypeError(
+                                "Persisted checkpoint channel names must be strings"
+                            )
+                        if channel.startswith("branch:to:"):
+                            node_id = channel.removeprefix("branch:to:")
+                            if node_id:
+                                next_nodes.append(node_id)
+                        elif channel != "__start__":
+                            state_values[channel] = value
 
                     history.append({
                         "checkpoint_id": checkpoint_config.get("configurable", {}).get("checkpoint_id", ""),
                         "step": metadata.get("step", 0),
                         "source": metadata.get("source", ""),
                         "writes": metadata.get("writes", {}),
-                        "next": [],  # Not available without graph
-                        "values": {},  # Not available without graph - would need get()
+                        "next": next_nodes,
+                        "values": state_values,
                         "created_at": metadata.get("created_at"),
                     })
             except Exception as error:

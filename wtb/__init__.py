@@ -28,7 +28,7 @@ SDK Usage:
     result = wtb.run(project="my_workflow", initial_state={})
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Domain Models
 # Domain Interfaces

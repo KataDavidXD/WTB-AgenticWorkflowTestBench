@@ -184,6 +184,14 @@ def test_sync_history_uses_saver_when_graph_history_fails():
     entry = SimpleNamespace(
         config={"configurable": {"checkpoint_id": "cp-fallback"}},
         metadata={"step": 3, "source": "fallback"},
+        checkpoint={
+            "channel_values": {
+                "count": 2,
+                "steps": ["incremented", "doubled"],
+                "branch:to:publish": None,
+                "__start__": {"count": 0, "steps": []},
+            }
+        },
     )
     adapter = _history_adapter(
         graph=_FailingHistoryGraph(),
@@ -198,8 +206,11 @@ def test_sync_history_uses_saver_when_graph_history_fails():
             "step": 3,
             "source": "fallback",
             "writes": {},
-            "next": [],
-            "values": {},
+            "next": ["publish"],
+            "values": {
+                "count": 2,
+                "steps": ["incremented", "doubled"],
+            },
             "created_at": None,
         }
     ]

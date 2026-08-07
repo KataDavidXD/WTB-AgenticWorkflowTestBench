@@ -213,6 +213,55 @@ class TestCheckpointerPersistence:
             "Checkpoint history should show state progression"
         )
 
+    def test_sqlite_history_preserves_state_and_next_nodes_after_reopen(
+        self,
+        tmp_path,
+    ):
+        """Direct-saver fallback must retain cache-attestation evidence."""
+        from wtb.domain.models import ExecutionState
+        from wtb.infrastructure.adapters.langgraph_state_adapter import (
+            LangGraphConfig,
+            LangGraphStateAdapter,
+        )
+
+        database_path = tmp_path / "checkpoint-history.db"
+        execution_id = "reopened-history"
+        first = LangGraphStateAdapter(
+            LangGraphConfig.for_development(str(database_path))
+        )
+        try:
+            first.set_workflow_graph(create_counter_graph(), force_recompile=True)
+            first.initialize_session(
+                execution_id,
+                ExecutionState(
+                    current_node_id="__start__",
+                    workflow_variables={"count": 0, "steps": []},
+                ),
+            )
+            first.execute({"count": 0, "steps": []})
+        finally:
+            first.close()
+
+        reopened = LangGraphStateAdapter(
+            LangGraphConfig.for_development(str(database_path))
+        )
+        try:
+            reopened.set_current_session(
+                f"wtb-{execution_id}",
+                execution_id=execution_id,
+            )
+            history = reopened.get_checkpoint_history()
+        finally:
+            reopened.close()
+
+        increment_checkpoint = next(
+            checkpoint
+            for checkpoint in history
+            if checkpoint["next"] == ["double"]
+        )
+        assert increment_checkpoint["values"]["count"] == 1
+        assert increment_checkpoint["values"]["steps"] == ["incremented"]
+
 
 @pytest.mark.skipif(not LANGGRAPH_AVAILABLE, reason="LangGraph not installed")
 class TestWTBTestBenchIntegration:
