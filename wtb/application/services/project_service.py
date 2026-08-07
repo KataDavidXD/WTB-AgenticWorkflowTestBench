@@ -283,6 +283,7 @@ class WorkflowConversionService:
             id=getattr(project, 'id', str(id(project))),
             name=getattr(project, 'name', 'unknown'),
             description=getattr(project, 'description', ''),
+            version=str(getattr(project, 'version', '1.0.0')),
         )
         
         try:
