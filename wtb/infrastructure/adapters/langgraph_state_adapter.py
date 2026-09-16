@@ -817,9 +817,45 @@ class LangGraphStateAdapter(IStateAdapter):
             self._resume_checkpoint_id = None
 
         config = self.get_config(checkpoint_id=resume_checkpoint_id)
+        runtime = getattr(self, "_runtime_hooks", None)
+        if runtime is not None:
+            self.runtime_outcome = "completed"
+            first = True
+            for _ in range(1000):
+                before = runtime["breakpoints"]()
+                if first and initial_state is None:
+                    # Resume crosses the boundary at which it was paused once.
+                    before = [n for n in before if n not in self._compiled_graph.get_state(config).next]
+                for event in self._compiled_graph.stream(
+                    initial_state, config, stream_mode="debug",
+                    interrupt_after="*", interrupt_before=before,
+                ):
+                    runtime["event"](event)
+                # Invocation may start from a historical checkpoint, but its
+                # new boundary is the latest checkpoint of the active thread.
+                snapshot = self._compiled_graph.get_state(self.get_config())
+                runtime["boundary"](snapshot)
+                request = runtime["control"]()
+                if request == "stop":
+                    self.runtime_outcome = "cancelled"
+                    return snapshot.values
+                if not snapshot.next:
+                    return snapshot.values
+                interrupts = any(getattr(t, "interrupts", ()) for t in snapshot.tasks)
+                if request == "pause" or interrupts or set(snapshot.next).intersection(runtime["breakpoints"]()):
+                    self.runtime_outcome = "paused"
+                    return snapshot.values
+                initial_state = None
+                config = self.get_config()
+                first = False
+            raise RuntimeError("Execution exceeded 1000 recoverable boundaries")
         result = self._compiled_graph.invoke(initial_state, config)
         
         return result
+
+    def configure_runtime(self, *, event, boundary, control, breakpoints) -> None:
+        """Opt-in cooperative execution for hosted workflows; callbacks run on the worker."""
+        self._runtime_hooks = dict(event=event, boundary=boundary, control=control, breakpoints=breakpoints)
     
     async def aexecute(self, initial_state: dict[str, Any]) -> dict[str, Any]:
         """Async execution."""

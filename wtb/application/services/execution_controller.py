@@ -656,10 +656,16 @@ class ExecutionController(IExecutionController):
                 except Exception:
                     pass
 
-            if self._file_tracking and self._file_tracking.is_available():
+            if self._file_tracking and self._file_tracking.is_available() and not getattr(self._state_adapter, "_runtime_hooks", None):
                 self._track_checkpoint_history_output_files(execution, final_state)
             
-            execution.complete()
+            outcome = getattr(self._state_adapter, "runtime_outcome", "completed")
+            if outcome == "paused":
+                execution.pause()
+            elif outcome == "cancelled":
+                execution.cancel()
+            else:
+                execution.complete()
             
         except Exception as e:
             logger.error(f"LangGraph execution failed: {e}")
@@ -1540,6 +1546,9 @@ class ExecutionController(IExecutionController):
             metadata=copy.deepcopy(source_execution.metadata or {}),
         )
         forked_execution.metadata.pop("requested_execution_id", None)
+        # A checkpoint id belongs to its thread; a child's continuation was
+        # freshly seeded below and must never reuse the parent's rollback id.
+        forked_execution.metadata.pop("resume_checkpoint_id", None)
         # Graph selection is persisted in execution metadata and takes
         # precedence over state during SDK resume. Only the two explicit
         # control fields may cross this state-to-metadata boundary.

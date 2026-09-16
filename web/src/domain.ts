@@ -1,181 +1,28 @@
-export type Status = 'queued' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed' | 'cancelled';
-export type Mode = 'local' | 'ray';
-export type Scenario = 'normal' | 'node_failure' | 'restore_failure' | 'environment_mismatch' | 'actor_reassigned';
-export type EnvironmentKind = 'current' | 'venv' | 'reused';
+export type Status = 'queued' | 'pending' | 'running' | 'pausing' | 'stopping' | 'paused' | 'completed' | 'failed' | 'cancelled';
 export type Variables = Record<string, unknown>;
-
-export interface ComponentDef {
-  id: string;
-  name: string;
-  description: string;
-  version: string;
-  tags: string[];
-}
+export interface ComponentDef { id: string; name: string; description: string; version: string | null; tags: string[] }
 export interface GraphNode { id: string; componentId: string; implementation: string; x: number; y: number }
-export interface GraphEdge { id: string; source: string; target: string; label?: string; conditional?: boolean }
-export interface Variant {
-  id: string;
-  projectId: string;
-  name: string;
-  description: string;
-  tags: string[];
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  route: string[];
-  config: { model: string; temperature: number; retrieval: string };
-}
-export interface FileVersion { path: string; content: string }
-export interface Checkpoint {
-  id: string;
-  label: string;
-  cursor: number;
-  state: Variables;
-  files: FileVersion[];
-  fileCommitId: string;
-  createdAt: string;
-  epoch: number;
-}
-export interface NodeRun {
-  id: string;
-  nodeId: string;
-  visit: number;
-  status: 'running' | 'completed' | 'failed';
-  elapsedMs: number;
-  epoch: number;
-}
-export interface RuntimeBinding {
-  mode: Mode;
-  host: string;
-  pid: number;
-  actorId?: string;
-  rayActorId?: string;
-  assignmentHistory: { actorId: string; rayActorId: string; reason: string }[];
-  cpus: number;
-  gpus: number;
-  workspace: string;
-  output: string;
-  checkpoints: string;
-  cas: string;
-  environment: {
-    kind: EnvironmentKind;
-    provider: string;
-    requestedPath: string;
-    actualPython: string;
-    version: string;
-    match: boolean;
-    dependencies: string[];
-  };
-}
-export interface Execution {
-  id: string;
-  variantId: string;
-  graph: Variant;
-  status: Status;
-  cursor: number;
-  progressTicks: number;
-  nodeTicks: number;
-  elapsedMs: number;
-  createdAt: string;
-  scenario: Scenario;
-  scenarioApplied: boolean;
-  state: Variables;
-  files: FileVersion[];
-  checkpoints: Checkpoint[];
-  nodeRuns: NodeRun[];
-  runtime: RuntimeBinding;
-  breakpoints: string[];
-  skipBreakpoint?: string;
-  error?: string;
-  operationError?: string;
-  parentId?: string;
-  fromCheckpointId?: string;
-  recoveryCheckpointId?: string;
-  batchId?: string;
-  score?: number;
-  epoch: number;
-}
-export interface Batch {
-  id: string;
-  name: string;
-  executionIds: string[];
-  variantIds: string[];
-  inputs: string[];
-  createdAt: string;
-}
-export interface AuditEvent {
-  id: string;
-  executionId?: string;
-  kind: 'execution' | 'node' | 'checkpoint' | 'control' | 'runtime' | 'system';
-  message: string;
-  time: string;
-  level: 'info' | 'error';
-}
-export interface DemoSnapshot {
-  revision: number;
-  projects: { id: string; name: string; description: string }[];
-  components: ComponentDef[];
-  variants: Variant[];
-  executions: Execution[];
-  batches: Batch[];
-  events: AuditEvent[];
-  system: {
-    cacheHits: number;
-    cacheMisses: number;
-    outboxPending: number;
-    outboxProcessed: number;
-    integrity: 'unchecked' | 'healthy' | 'issues';
-    checkedAt?: string;
-    findings: string[];
-  };
-}
-export interface StartOptions {
-  variantId: string;
-  mode: Mode;
-  scenario: Scenario;
-  environment: EnvironmentKind;
-  input: string;
-  model: string;
-  temperature: number;
-  nodeImplementation: string;
-  nodeTicks: number;
-}
-export type Command =
-  | { type: 'pause' | 'resume' | 'stop' | 'checkpoint' }
-  | { type: 'rollback'; checkpointId: string }
-  | { type: 'fork'; checkpointId: string; state?: Variables }
-  | { type: 'edit'; state: Variables }
-  | { type: 'breakpoint'; nodeId: string };
-export interface OperationResult { ok: boolean; message: string; executionId?: string }
-
-/** A future HTTP adapter can maintain this same subscribed snapshot and command API. */
+export interface GraphEdge { id: string; source: string; target: string; label?: string; conditional: boolean }
+export interface Variant { id: string; projectId: string; name: string; description: string; nodes: GraphNode[]; edges: GraphEdge[]; workflowVariant: string | null; nodeVariants: Record<string, string> }
+export interface Project { id: string; name: string; description: string; initialState: Variables; nodeVariants: Record<string, string[]> }
+export interface Catalog { projects: Project[]; variants: Variant[]; components: ComponentDef[]; capabilities: Record<string, boolean>; unavailable: Record<string, string> }
+export interface NodeRun { id: string; taskId: string; nodeId: string; status: 'running' | 'completed' | 'failed'; startedAt: string; elapsedMs: number; step: number; error?: string }
+export interface Checkpoint { id: string; checkpointId: string; executionId: string; state: Variables; nextNodes: string[]; nodeRuns: NodeRun[]; fileCommitId: string; createdAt: string; step: number; parentCheckpointId?: string }
+export interface RuntimeBinding { mode: 'local'; host: string; pid: number; workspace: string; output: string; interpreter: string; pythonVersion: string; environment: string; pathLocation: string }
+export interface Execution { id: string; variantId: string; projectId: string; graph: Variant; status: Status; createdAt: string; state: Variables; nodeRuns: NodeRun[]; activeRunIds?: string[]; activeNodes: string[]; nextNodes: string[]; checkpointId?: string; breakpoints: string[]; elapsedMs: number; runtime: RuntimeBinding; pendingOperation?: string; error?: string; operationError?: string; parentId?: string; fromCheckpointId?: string; batchId?: string }
+export interface FileVersion { path: string; hash: string; size: number }
+export interface AuditEvent { id: string; seq: number; executionId?: string; kind: string; message: string; time: string }
+export interface Batch { id: string; createdAt: string; executionIds: string[] }
+export interface Page<T> { items: T[]; total: number }
+export interface OperationResult { executionId: string; operationId: string }
+export interface Operation { id: string; status: string; error?: string; resultExecutionId?: string }
+export interface Snapshot { catalog?: Catalog; executions: Execution[]; total: number; offset: number; connection: 'connecting' | 'live' | 'polling' | 'offline'; loading: boolean; error?: string; revision: number }
 export interface ConsoleService {
-  getSnapshot: () => DemoSnapshot;
+  getSnapshot: () => Snapshot;
   subscribe: (listener: () => void) => () => void;
-  start(options: StartOptions): OperationResult;
-  startBatch(variantIds: string[], inputs: string[], options: StartOptions): OperationResult;
-  command(executionId: string, command: Command): OperationResult;
-  reset(): void;
-  tick(): void;
-  startClock(): () => void;
-  systemAction(action: 'check' | 'outbox' | 'cache'): void;
+  connect(): () => void;
+  refresh(): Promise<void>;
+  start(project: string, variantId: string, state: Variables, breakpoints: string[], nodeVariants: Record<string, string>): Promise<OperationResult>;
+  command(id: string, action: string, payload?: Variables): Promise<OperationResult>;
 }
-
-export const statusNames: Record<Status, string> = {
-  queued: '排队中', running: '运行中', pausing: '暂停请求中', paused: '已暂停',
-  completed: '已完成', failed: '失败', cancelled: '已停止',
-};
-export const scenarioNames: Record<Scenario, string> = {
-  normal: '正常执行', node_failure: '节点失败', restore_failure: '文件恢复失败',
-  environment_mismatch: '环境不匹配', actor_reassigned: 'Actor 重新分配',
-};
-export const busy = (e: Execution) => e.status === 'running' || e.status === 'pausing';
-export const terminal = (e: Execution) => ['completed', 'failed', 'cancelled'].includes(e.status);
-
-export function commandReason(e: Execution, type: Command['type']): string | undefined {
-  if (type === 'pause' && e.status !== 'running') return '仅运行中的执行可请求暂停';
-  if (type === 'resume' && e.status !== 'paused') return '请先暂停或回退到检查点';
-  if (type === 'stop' && terminal(e)) return '执行已结束';
-  if (['rollback', 'fork'].includes(type) && (busy(e) || e.status === 'queued')) return '请先暂停执行，再选择历史检查点';
-  if (['edit', 'checkpoint'].includes(type) && e.status !== 'paused') return '请先暂停，在安全边界操作';
-  return undefined;
-}
+export const statusNames: Record<Status, string> = { queued: '排队中', pending: '待执行', running: '运行中', pausing: '暂停请求中', stopping: '停止请求中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已停止' };

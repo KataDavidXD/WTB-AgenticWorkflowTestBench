@@ -13,7 +13,7 @@ wheels/
 data/
 
 .cursor/
-
+.workbuddy/
 .env
 
 

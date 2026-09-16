@@ -4,7 +4,7 @@ import { statusNames } from '../domain';
 import type { Status } from '../domain';
 
 export function StatusBadge({ status }: { status: Status }) {
-  const icons: Record<Status, string> = { running: '▶', pausing: '◷', paused: 'Ⅱ', completed: '✓', failed: '!', cancelled: '■', queued: '⋯' };
+  const icons: Record<Status, string> = { running: '▶', pausing: '◷', stopping: '◷', pending: '⋯', paused: 'Ⅱ', completed: '✓', failed: '!', cancelled: '■', queued: '⋯' };
   return <span className={`status ${status}`}><span aria-hidden="true">{icons[status]}</span> {statusNames[status]}</span>;
 }
 export const time = (value: string) => new Date(value).toLocaleTimeString('zh-CN', { hour12: false });
