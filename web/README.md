@@ -31,7 +31,7 @@ npm run dev
 - `parallel` 是两个并行节点汇合的工作流变体。
 - 初始状态可使用 `text`、`repeat`、`delay`、`fail`。`fail: true` 用于验证失败隔离。
 
-从启动弹窗设置 `transform` 断点，执行会在该节点前进入暂停。选择检查点后可回退或 Fork；Fork 会分配新的 Workspace。文件版本页读取检查点关联的 CAS commit，系统页可以校验所有 Blob 的 SHA-256 哈希。
+启动后可在底部“断点”输入框设置 `transform`，执行会在该节点前进入暂停。选择检查点后可回退或 Fork；Fork 会分配新的 Workspace。四个 Studio 视图分别展示真实工作流路径、检查点/文件/分支、运行环境和 SDK 配置，以及变体矩阵；不保留浏览器演示状态。
 
 ## 注册自己的工作流
 
@@ -65,6 +65,7 @@ npm run dev
 ```powershell
 .venv\Scripts\python.exe -m pytest tests/test_api/test_console_real.py -q
 cd web
+npm test
 npm run typecheck
 npm run build
 ```

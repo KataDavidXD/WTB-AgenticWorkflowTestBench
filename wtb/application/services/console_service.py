@@ -136,7 +136,31 @@ class ConsoleService:
     def catalog(self):
         projects, variants, components = [], [], []
         for name, (p, initial) in self.projects.items():
-            projects.append(dict(id=name, name=name, description=p.description, initialState=initial, nodeVariants=p.list_variants()))
+            node_variant_details = {
+                node: [variant.to_dict() for variant in choices.values()]
+                for node, choices in p._node_variants.items()
+            }
+            workflow_variant_details = {
+                variant_name: variant.to_dict()
+                for variant_name, variant in p._workflow_variants.items()
+            }
+            projects.append(dict(
+                id=name,
+                name=name,
+                description=p.description,
+                version=p.version,
+                initialState=initial,
+                nodeVariants=p.list_variants(),
+                nodeVariantDetails=node_variant_details,
+                workflowVariantDetails=workflow_variant_details,
+                sdk=dict(
+                    fileTracking=p.file_tracking.to_dict(),
+                    environment=p.environment.to_dict(),
+                    execution=p.execution.to_dict(),
+                    workspaceIsolation=p.workspace_isolation.to_dict(),
+                    pauseStrategy=p.pause_strategy.to_dict(),
+                ),
+            ))
             choices = [("default", None, {})]
             choices += [(n, n, {}) for n in p.list_workflow_variants()]
             choices += [(f"{node}:{v}", None, {node: v}) for node, vs in p.list_variants().items() for v in vs]
@@ -148,7 +172,16 @@ class ConsoleService:
                 for i, n in enumerate(g.nodes.values()):
                     component_id = f"{name}/{label}/{n.id}"
                     nodes.append(dict(id=n.id, componentId=component_id, implementation=node_variants.get(n.id, n.name), x=(i % 4)*240, y=(i//4)*170))
-                    components.append(dict(id=component_id, name=n.name, description="已注册图节点", version=None, tags=[]))
+                    detail = next((item for item in node_variant_details.get(n.id, []) if item["name"] == node_variants.get(n.id)), None)
+                    components.append(dict(
+                        id=component_id,
+                        name=n.name,
+                        description=detail["description"] if detail else "已注册图节点",
+                        version=None,
+                        tags=[],
+                        environment=detail["environment"] if detail else None,
+                        resources=detail["resources"] if detail else p.execution.get_node_resources(n.id).to_dict(),
+                    ))
                 variants.append(dict(id=f"{name}/{label}", projectId=name, name=label, description=p.description, nodes=nodes,
                                      edges=[dict(id=str(i), source=e.source, target=e.target, conditional=e.conditional, label=str(e.data or "")) for i, e in enumerate(g.edges)],
                                      workflowVariant=workflow_variant, nodeVariants=node_variants))
