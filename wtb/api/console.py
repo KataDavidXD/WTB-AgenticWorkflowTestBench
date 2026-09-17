@@ -67,12 +67,8 @@ def create_app(data_dir=None, config_path=None):
         return {"status": "ready", "mode": "local", "mock": False}
 
     @app.get("/api/v1/executions")
-    def executions(projectId: str | None = None, variantId: str | None = None, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    def executions(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
         items = service().store.list("execution")
-        if projectId:
-            items = [item for item in items if item.get("projectId") == projectId]
-        if variantId:
-            items = [item for item in items if item.get("variantId") == variantId]
         return {"items": [{k: v for k, v in e.items() if k not in {"nodeRuns", "state", "storeDir", "graphPath"}} for e in items[offset:offset+limit]], "total": len(items)}
 
     @app.post("/api/v1/workflows/{project}/execute", status_code=202)
