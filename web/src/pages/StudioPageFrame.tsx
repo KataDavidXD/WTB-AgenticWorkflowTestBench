@@ -23,5 +23,5 @@ export function StudioPageFrame({ children }: { children: ReactNode }) {
     };
     document.addEventListener('keydown', keydown); return () => document.removeEventListener('keydown', keydown);
   }, [state, dispatch, drawer, modal, setDrawer, setModal, notify]);
-  return <><div className="shell"><StudioMasthead /><StudioProjectionNav /><StudioHero />{children}<StudioExecutionDock /><footer className="bottom-line"><span>WTB / STRUCTURAL STUDIO <span id="persistence-label">{saved ? '· BROWSER STATE SAVED' : '· IN-MEMORY DEMO'}</span></span><span>1–4 切换视图 &nbsp;·&nbsp; Space 暂停 / 继续 &nbsp;·&nbsp; F Fork &nbsp;·&nbsp; R 回退 &nbsp;·&nbsp; ? 结构说明</span></footer></div><StudioOverlays /></>;
+  return <><div className="shell"><StudioMasthead /><StudioProjectionNav /><StudioHero />{children}<StudioExecutionDock /><footer className="bottom-line"><span>WTB / STRUCTURAL STUDIO <span id="persistence-label">{saved ? '· LIVE WTB STATE' : '· CONNECTING'}</span></span><span>1–4 切换视图 &nbsp;·&nbsp; Space 暂停 / 继续 &nbsp;·&nbsp; F Fork &nbsp;·&nbsp; R 回退 &nbsp;·&nbsp; ? 结构说明</span></footer></div><StudioOverlays /></>;
 }

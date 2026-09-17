@@ -1,50 +1,36 @@
-export type NodeId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+/**
+ * The SVG stages retain their original visual grammar.  This module is now a
+ * mutable projection of the real console catalog, not sample workflow data.
+ */
+export type NodeId = string;
 export type Configuration = string | null;
-export type RunStatus = 'idle' | 'running' | 'pausing' | 'paused' | 'completed' | 'failed';
-export interface StudioVariant {
-  id: string;
-  name: string;
-  label: string;
-  cfg: Configuration[];
-  extra: [NodeId, NodeId][];
-  tags: string[];
-}
-export const COMPONENTS: { id: NodeId; name: string; en: string }[] = [
-  { id: 'A', name: '输入', en: 'INPUT' }, { id: 'B', name: '切块', en: 'CHUNK' },
-  { id: 'C', name: '检索', en: 'RETRIEVE' }, { id: 'D', name: '重排', en: 'RERANK' },
-  { id: 'E', name: '生成', en: 'GENERATE' }, { id: 'F', name: '输出', en: 'OUTPUT' },
-];
-export const CONFIGS: Record<NodeId, Configuration[]> = {
-  A: ['default'], B: ['c200', 'c500', 'c1000', null], C: ['dense', 'hybrid', 'bm25', null],
-  D: ['cross', null], E: ['small', 'large', null], F: ['json', 'csv'],
-};
-export const LABELS: Record<string, string> = { default: 'default', c200: 'chunk · 200', c500: 'chunk · 500', c1000: 'chunk · 1k', dense: 'dense', hybrid: 'hybrid', bm25: 'BM25', cross: 'cross-encoder', small: 'small', large: 'large', json: 'JSON', csv: 'CSV', null: '— 未使用' };
-export const SHORT: Record<string, string> = { default: 'default', c200: '200', c500: '500', c1000: '1k', dense: 'dense', hybrid: 'hybrid', bm25: 'BM25', cross: 'cross-enc.', small: 'small', large: 'large', json: 'JSON', csv: 'CSV', null: '∅' };
-export const STATUS: Record<RunStatus, string> = { idle: '未运行', running: '运行中', pausing: '暂停请求中', paused: '已暂停', completed: '已完成', failed: '失败' };
+export type RunStatus = 'idle' | 'queued' | 'running' | 'pausing' | 'paused' | 'stopping' | 'completed' | 'failed' | 'cancelled';
+export interface StudioVariant { id: string; name: string; label: string; cfg: Configuration[]; extra: [NodeId, NodeId][]; tags: string[]; }
+type ApiVariant = { id: string; name: string; description: string; workflowVariant: string | null; nodes: { id: string; implementation: string }[]; edges: { source: string; target: string; conditional: boolean }[] };
+
+export let COMPONENTS: { id: NodeId; name: string; en: string }[] = [];
+export let CONFIGS: Record<NodeId, Configuration[]> = {};
+export let LABELS: Record<string, string> = { null: '— 未使用' };
+export let SHORT: Record<string, string> = { null: '∅' };
+export let variants: StudioVariant[] = [];
+export const STATUS: Record<RunStatus, string> = { idle: '未运行', queued: '排队中', running: '运行中', pausing: '暂停请求中', paused: '已暂停', stopping: '停止请求中', completed: '已完成', failed: '失败', cancelled: '已停止' };
 export const NODESTATUS = { done: '已执行', running: '运行中', paused: '边界暂停', queued: '待调度', failed: '失败', restored: '检查点继承', skipped: '未使用' };
-const names = ['标准 RAG', '混合检索 + 重排', '稀疏检索', '直接生成', '索引导出', '长上下文', '质量优先', '轻量配置', '多路召回', '上下文旁路'];
-const vectors: Configuration[][] = [
-  ['default', 'c500', 'dense', null, 'small', 'json'],
-  ['default', 'c500', 'hybrid', 'cross', 'small', 'json'],
-  ['default', 'c500', 'bm25', null, 'small', 'json'],
-  ['default', null, null, null, 'small', 'json'],
-  ['default', 'c200', 'dense', null, null, 'csv'],
-  ['default', 'c1000', 'dense', null, 'large', 'json'],
-  ['default', 'c500', 'hybrid', 'cross', 'large', 'json'],
-  ['default', 'c200', 'bm25', null, 'small', 'json'],
-  ['default', 'c200', 'hybrid', 'cross', 'large', 'json'],
-  ['default', 'c500', 'dense', null, 'small', 'json'],
-];
-export const variants: StudioVariant[] = vectors.map((cfg, i) => ({ id: `w${String(i + 1).padStart(2, '0')}`, name: `workflow${String(i + 1).padStart(2, '0')}`, label: names[i], cfg, extra: i === 9 ? [['B', 'E']] : [], tags: i === 9 ? ['旁路', 'RAG'] : i === 3 ? ['直出'] : ['RAG'] }));
-export const byVariant = (id: string) => variants.find(v => v.id === id)!;
-export const nodes = (v: StudioVariant) => COMPONENTS.filter((_, i) => v.cfg[i] !== null).map(c => c.id);
-export function edges(v: StudioVariant): [NodeId, NodeId][] {
-  const sequence = nodes(v);
-  return sequence.slice(1).map((node, i): [NodeId, NodeId] => [sequence[i], node]).concat(v.extra);
+
+export function configureStudioCatalog(source: ApiVariant[]) {
+  const nodeIds = [...new Set(source.flatMap(variant => variant.nodes.map(node => node.id).filter(id => !id.startsWith('__'))))];
+  COMPONENTS = nodeIds.map(id => ({ id, name: id, en: id.toUpperCase().slice(0, 12) }));
+  CONFIGS = Object.fromEntries(COMPONENTS.map(component => [component.id, [...new Set(source.flatMap(variant => variant.nodes.filter(node => node.id === component.id).map(node => node.implementation))), null]]));
+  LABELS = { null: '— 未使用' }; SHORT = { null: '∅' };
+  Object.values(CONFIGS).flat().filter((value): value is string => value !== null).forEach(value => { LABELS[value] = value; SHORT[value] = value.length > 11 ? value.slice(0, 10) + '…' : value; });
+  variants = source.map(variant => {
+    const present = new Set(variant.nodes.map(node => node.id));
+    const sequential = COMPONENTS.filter(component => present.has(component.id)).slice(1).map((component, i) => [COMPONENTS.filter(c => present.has(c.id))[i].id, component.id].join('>'));
+    return { id: variant.id, name: variant.name, label: variant.description || variant.workflowVariant || '默认工作流', cfg: COMPONENTS.map(component => variant.nodes.find(node => node.id === component.id)?.implementation || null), extra: variant.edges.filter(edge => !edge.source.startsWith('__') && !edge.target.startsWith('__') && !sequential.includes(edge.source + '>' + edge.target)).map(edge => [edge.source, edge.target]), tags: variant.workflowVariant ? [variant.workflowVariant] : ['default'] };
+  });
 }
-export const configurationDifference = (a: StudioVariant, b: StudioVariant) => a.cfg.reduce<number>((count, cfg, i) => count + Number(cfg !== b.cfg[i]), 0);
-export function edgeDifference(a: StudioVariant, b: StudioVariant) {
-  const x = new Set(edges(a).map(e => e.join('>'))), y = new Set(edges(b).map(e => e.join('>')));
-  return [...x].filter(e => !y.has(e)).length + [...y].filter(e => !x.has(e)).length;
-}
-export const statusColor = (status: RunStatus) => status === 'failed' ? 'var(--bad)' : ['running', 'paused', 'pausing'].includes(status) ? 'var(--accent)' : status === 'completed' ? 'var(--ok)' : 'var(--idle)';
+export const byVariant = (id: string) => variants.find(variant => variant.id === id)!;
+export const nodes = (variant: StudioVariant) => COMPONENTS.filter((_, index) => variant.cfg[index] !== null).map(component => component.id);
+export function edges(variant: StudioVariant): [NodeId, NodeId][] { const sequence = nodes(variant); return sequence.slice(1).map((node, index): [NodeId, NodeId] => [sequence[index], node]).concat(variant.extra); }
+export const configurationDifference = (a: StudioVariant, b: StudioVariant) => a.cfg.reduce((count, cfg, i) => count + Number(cfg !== b.cfg[i]), 0);
+export function edgeDifference(a: StudioVariant, b: StudioVariant) { const left = new Set(edges(a).map(edge => edge.join('>'))), right = new Set(edges(b).map(edge => edge.join('>'))); return [...left].filter(edge => !right.has(edge)).length + [...right].filter(edge => !left.has(edge)).length; }
+export const statusColor = (status: RunStatus) => status === 'failed' ? 'var(--bad)' : ['running', 'paused', 'pausing', 'stopping'].includes(status) ? 'var(--accent)' : status === 'completed' ? 'var(--ok)' : 'var(--idle)';

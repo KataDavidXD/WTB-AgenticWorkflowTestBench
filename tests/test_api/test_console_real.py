@@ -148,3 +148,18 @@ def test_websocket_and_catalog_empty_config(tmp_path):
     config.write_text('{"projects": []}')
     with TestClient(create_app(tmp_path / 'empty', config)) as c:
         assert c.get('/api/v1/catalog').json()['projects'] == []
+
+
+def test_catalog_serializes_workflow_project_metadata_and_execution_filters(tmp_path):
+    with TestClient(create_app(tmp_path)) as c:
+        catalog = c.get('/api/v1/catalog').json()
+        project = catalog['projects'][0]
+        assert project['version'] == 1
+        assert project['sdk']['execution']['batch_executor'] == 'threadpool'
+        assert project['sdk']['pauseStrategy']['mode'] == 'before_node'
+        assert project['nodeVariantDetails']['transform'][0]['name'] == 'uppercase'
+        assert project['workflowVariantDetails']['parallel']['name'] == 'parallel'
+        execution = wait(c, start(c))
+        page = c.get('/api/v1/executions', params={'projectId': 'file-workflow', 'variantId': execution['variantId']}).json()
+        assert page['total'] == 1
+        assert page['items'][0]['id'] == execution['id']
