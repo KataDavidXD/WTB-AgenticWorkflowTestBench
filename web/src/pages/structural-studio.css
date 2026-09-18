@@ -669,10 +669,16 @@ svg text {
 }
 .drawer-node-tabs button {
   border:1px solid var(--line);
-  width:34px;
+  width:auto;
+  min-width:34px;
+  max-width:92px;
   height:32px;
+  padding:0 8px;
   border-radius:4px;
-  font:12px var(--mono)
+  font:12px var(--mono);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap
 }
 .drawer-node-tabs .active {
   background:var(--ink);
