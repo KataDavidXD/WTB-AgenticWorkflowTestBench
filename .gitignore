@@ -13,7 +13,7 @@ wheels/
 data/
 
 .cursor/
-
+.workbuddy/
 .env
 
 
@@ -30,3 +30,8 @@ TODO
 examples/*
 !examples/modes_quick_demo.py
 uv_venv_manager/
+.venv-*/
+output/
+.playwright-cli/
+console-*.log
+.pytest_cache/

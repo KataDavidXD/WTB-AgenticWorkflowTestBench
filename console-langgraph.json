@@ -1,0 +1,8 @@
+{
+  "projects": [
+    {
+      "factory": "wtb.testing.console_project:create_langgraph_project",
+      "initial_state": {"text": "WTB", "repeat": 2, "delay": 0.2}
+    }
+  ]
+}
