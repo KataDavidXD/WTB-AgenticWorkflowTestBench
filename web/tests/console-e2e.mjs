@@ -577,6 +577,8 @@ try {
             header.y + header.height <= tabs.y + 1,
             "header must not overlap navigation",
           );
+          const tools = await page.locator('.header-tools').boundingBox();
+          assert(tools.y + tools.height <= tabs.y + 1, 'header tools must not overflow onto navigation');
           assert(
             (await page.locator(".execution-dock").boundingBox()).height < 400,
             "mobile controls must remain compact",

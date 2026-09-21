@@ -216,17 +216,17 @@ button:disabled {
   white-space: normal;
 }
 @media (max-width: 600px) {
-  .masthead {
+  .shell .masthead {
     flex-wrap: wrap;
     gap: 12px;
     padding: 16px 0;
   }
-  .header-tools {
+  .shell .header-tools {
     width: 100%;
     flex-wrap: wrap;
     justify-content: space-between;
   }
-  .header-tools button {
+  .shell .header-tools button {
     white-space: nowrap;
   }
   .execution-dock > div {
@@ -238,11 +238,11 @@ button:disabled {
   }
 }
 @media (max-width: 600px) {
-  .masthead {
+  .shell .masthead {
     height: auto;
     min-height: 64px;
   }
-  .execution-dock {
+  .shell .execution-dock {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
   }
