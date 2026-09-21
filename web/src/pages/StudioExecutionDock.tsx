@@ -1,10 +1,119 @@
-import { nodes, STATUS } from './StudioDemoData';
-import { StudioIcon } from './StudioIcon';
-import { useStudio } from './StudioProvider';
-import { selectedCheckpoint, selectedRun, selectedVariant } from './StudioState';
+import { STATUS } from "./StudioDemoData";
+import { useStudio } from "./StudioProvider";
+import {
+  selectedCheckpoint,
+  selectedRun,
+  selectedVariant,
+} from "./StudioState";
 export function StudioExecutionDock() {
-  const { state, dispatch, setModal, notify } = useStudio(), r = selectedRun(state), v = selectedVariant(state), ns = nodes(v), cp = selectedCheckpoint(state), available = r.path.map(x => state.checkpoints[x]);
-  const canRestore = cp?.restorable && !['running', 'pausing', 'idle'].includes(r.status), canFork = !!cp?.restorable, play = ['paused', 'idle', 'failed'].includes(r.status);
-  const action = r.status === 'running' ? '暂停' : r.status === 'pausing' ? '等待边界' : r.status === 'paused' ? '继续' : r.status === 'idle' ? '开始运行' : r.status === 'failed' ? '重试节点' : '运行完成';
-  return <section className="execution-dock" id="execution-dock" aria-label="运行与检查点控制"><div className="selected-run"><div className="title"><strong>{v.name}</strong><select className="run-select" id="run-select" aria-label="选择此变体的运行实例" value={r.id} onChange={e => dispatch({ type: 'run', id: e.target.value })}>{state.runs.filter(a => a.variantId === v.id).map(a => <option key={a.id} value={a.id}>{a.id}</option>)}</select></div><div className="sub"><span className={`status-text ${r.status}`}><i className="dot" style={{ background: 'currentColor' }} />{STATUS[r.status]}</span><span className="muted mono">{r.mode === 'ray' ? 'Ray' : 'Local'} · {r.step} 次节点记录 / {ns.length} 个图节点</span></div></div><div className="checkpoint-control"><div className="checkpoint-label"><div className="label">{cp?.step === 0 ? '预览初始状态' : `预览 ${cp?.node || '—'} 完成后`}</div><div className="value" title={cp?.id}>{cp?.id || '—'}</div></div><div className="checkpoint-pips" aria-label="持久化检查点">{Array.from({ length: ns.length + 1 }, (_, i) => { const saved = available.filter(c => c.step === i).at(-1), chosen = !!saved && saved.id === state.selectedCp, fullLabel = i === 0 ? '∅' : ns[i - 1], shortLabel = i === 0 ? '∅' : fullLabel.length > 3 ? fullLabel.slice(0, 2).toUpperCase() : fullLabel; return <button key={i} className={`cp-pip ${saved ? 'saved' : ''} ${chosen ? 'chosen' : ''}`} disabled={!saved} title={saved ? `${saved.id} · ${i === 0 ? '初始状态' : fullLabel + ' 完成后'}` : '尚未生成检查点'} aria-label={saved ? '选择检查点 ' + saved.id : '未生成的检查点 ' + i} aria-pressed={chosen} onClick={() => saved && dispatch({ type: 'checkpoint', id: saved.id })}>{shortLabel}</button>; })}</div></div><div className="dock-actions"><button className="primary-btn" disabled={['pausing', 'stopping', 'completed', 'cancelled'].includes(r.status)} onClick={() => { dispatch({ type: 'pause' }); notify(r.status === 'running' ? '暂停请求已提交；将在 WTB 安全边界确认。' : '继续请求已提交给 WTB。'); }}><StudioIcon name={play ? 'play' : 'pause'} size={13} /> {action}</button><button className="outline-btn" disabled={!['running', 'paused'].includes(r.status)} title="继续真实 WTB 执行" onClick={() => { dispatch({ type: 'step' }); notify('继续请求已提交给 WTB。'); }}><StudioIcon name="step" size={13} /> 继续执行</button><button className="outline-btn" disabled={!canRestore} title={canRestore ? '从所选真实检查点恢复，旧历史保留' : '先暂停到节点边界，再选择已有检查点'} onClick={() => setModal('rollback')}><StudioIcon name="back" size={13} /> 回退</button><button className="outline-btn" disabled={!canFork} title="从所选真实检查点创建独立 Workspace" onClick={() => setModal('fork')}><StudioIcon name="fork" size={13} /> Fork</button></div></section>;
+  const { state, dispatch, setModal, busy, connection, executions } =
+      useStudio(),
+    r = selectedRun(state),
+    v = selectedVariant(state),
+    cp = selectedCheckpoint(state),
+    raw = executions.find((e) => e.id === r.id);
+  const blocked = busy || connection !== "connected" || !!raw?.pendingOperation,
+    settled =
+      !!r.id &&
+      !["queued", "running", "pausing", "stopping", "idle"].includes(r.status);
+  const restore =
+      settled &&
+      cp.restorable &&
+      !blocked &&
+      (raw?.capabilities?.rollback ?? true),
+    fork =
+      settled && cp.restorable && !blocked && (raw?.capabilities?.fork ?? true);
+  return (
+    <section
+      className="execution-dock"
+      id="execution-dock"
+      aria-label="运行与检查点控制"
+    >
+      <div className="selected-run">
+        <strong>{v.name}</strong>
+        <select
+          className="run-select"
+          id="run-select"
+          aria-label="选择此变体的运行实例"
+          value={r.id}
+          onChange={(e) => dispatch({ type: "run", id: e.target.value })}
+        >
+          {!r.id && <option value="">尚无执行</option>}
+          {state.runs
+            .filter((e) => e.variantId === v.id)
+            .map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.id}
+              </option>
+            ))}
+        </select>
+        <div className="sub">
+          <span className={`status-text ${r.status}`}>{STATUS[r.status]}</span>
+          <span>当前尝试 · {r.step} 次已完成节点记录</span>
+        </div>
+      </div>
+      <div>
+        <label htmlFor="checkpoint-select">
+          {state.selectedCp ? "预览历史检查点" : "当前执行检查点"}
+        </label>
+        <select
+          id="checkpoint-select"
+          className="checkpoint-list"
+          aria-label="选择检查点"
+          value={state.selectedCp}
+          onChange={(e) => dispatch({ type: "checkpoint", id: e.target.value })}
+        >
+          <option value="">
+            实时 · {r.checkpointId?.slice(0, 8) || "尚无检查点"}
+          </option>
+          {r.path
+            .map((id) => state.checkpoints[id])
+            .map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.clock + 1} · {c.node === "∅" ? "初始状态" : c.node + " 后"} ·{" "}
+                {c.id.slice(0, 8)} · {c.tracked} 文件
+              </option>
+            ))}
+        </select>
+      </div>
+      <div className="dock-actions">
+        <button
+          className="primary-btn"
+          disabled={blocked || !["running", "paused"].includes(r.status)}
+          onClick={() => dispatch({ type: "pause" })}
+        >
+          {r.status === "running"
+            ? "暂停"
+            : r.status === "paused"
+              ? "继续"
+              : r.status === "failed"
+                ? "请先回退"
+                : r.status === "completed"
+                  ? "运行完成"
+                  : "等待执行"}
+        </button>
+        <button
+          className="outline-btn"
+          disabled={blocked || r.status !== "paused"}
+          onClick={() => dispatch({ type: "step" })}
+        >
+          继续执行
+        </button>
+        <button
+          className="outline-btn"
+          disabled={!restore}
+          onClick={() => setModal("rollback")}
+        >
+          回退
+        </button>
+        <button
+          className="outline-btn"
+          disabled={!fork}
+          onClick={() => setModal("fork")}
+        >
+          Fork
+        </button>
+      </div>
+    </section>
+  );
 }

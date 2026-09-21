@@ -1,4 +1,5 @@
 """Real local API profile. Run: python -m wtb.api.console --data-dir data/console."""
+
 import argparse
 import asyncio
 import os
@@ -28,7 +29,10 @@ def create_app(data_dir=None, config_path=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        service = ConsoleService(data_dir or os.getenv("WTB_CONSOLE_DATA", "data/console"), config_path or os.getenv("WTB_CONSOLE_CONFIG"))
+        service = ConsoleService(
+            data_dir or os.getenv("WTB_CONSOLE_DATA", "data/console"),
+            config_path or os.getenv("WTB_CONSOLE_CONFIG"),
+        )
         app.state.console = service
         loop = asyncio.get_running_loop()
 
@@ -53,7 +57,10 @@ def create_app(data_dir=None, config_path=None):
 
     @app.exception_handler(ValueError)
     async def invalid(_, error):
-        return JSONResponse(status_code=409 if isinstance(error, Conflict) else 400, content={"detail": str(error)})
+        return JSONResponse(
+            status_code=409 if isinstance(error, Conflict) else 400,
+            content={"detail": str(error)},
+        )
 
     def service():
         return app.state.console
@@ -66,20 +73,56 @@ def create_app(data_dir=None, config_path=None):
     def health():
         return {"status": "ready", "mode": "local", "mock": False}
 
+    @app.get("/api/v1/console-state")
+    def console_state():
+        # One projection replaces O(runs) requests per node event.
+        with service().lock:
+            executions = [
+                {k: v for k, v in e.items() if k not in {"storeDir", "graphPath"}}
+                for e in service().store.list("execution")
+            ]
+            checkpoints = [
+                {k: v for k, v in c.items() if k not in {"state", "nodeRuns"}}
+                for c in service().store.list("checkpoint")
+            ]
+            return {
+                "catalog": service().catalog(),
+                "executions": executions,
+                "checkpoints": checkpoints,
+                "events": service().store.events(limit=200)["items"],
+            }
+
     @app.get("/api/v1/executions")
-    def executions(projectId: str | None = None, variantId: str | None = None, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    def executions(
+        projectId: str | None = None,
+        variantId: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
         items = service().store.list("execution")
         if projectId:
             items = [item for item in items if item.get("projectId") == projectId]
         if variantId:
             items = [item for item in items if item.get("variantId") == variantId]
-        return {"items": [{k: v for k, v in e.items() if k not in {"nodeRuns", "state", "storeDir", "graphPath"}} for e in items[offset:offset+limit]], "total": len(items)}
+        return {
+            "items": [
+                {
+                    k: v
+                    for k, v in e.items()
+                    if k not in {"nodeRuns", "state", "storeDir", "graphPath"}
+                }
+                for e in items[offset : offset + limit]
+            ],
+            "total": len(items),
+        }
 
     @app.post("/api/v1/workflows/{project}/execute", status_code=202)
     def start(project: str, body: StartRequest):
         if not body.variantId.startswith(project + "/"):
             raise ValueError("项目与变体不匹配")
-        return service().start(body.variantId, body.state, body.breakpoints, body.nodeVariants)
+        return service().start(
+            body.variantId, body.state, body.breakpoints, body.nodeVariants
+        )
 
     @app.get("/api/v1/executions/{id}")
     def execution(id: str):
@@ -91,7 +134,9 @@ def create_app(data_dir=None, config_path=None):
         return service().store.get("operation", id)
 
     @app.get("/api/v1/executions/{id}/checkpoints")
-    def checkpoints(id: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    def checkpoints(
+        id: str, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)
+    ):
         return service().checkpoints(id, limit, offset)
 
     @app.get("/api/v1/executions/{id}/checkpoints/{cp}")
@@ -128,10 +173,24 @@ def create_app(data_dir=None, config_path=None):
     def batch_results(id: str):
         batch = service().store.get("batch", id)
         items = [service().store.get("execution", eid) for eid in batch["executionIds"]]
-        return {"items": [{k: v for k, v in e.items() if k not in {"storeDir", "graphPath", "state", "nodeRuns"}} for e in items], "total": len(items)}
+        return {
+            "items": [
+                {
+                    k: v
+                    for k, v in e.items()
+                    if k not in {"storeDir", "graphPath", "state", "nodeRuns"}
+                }
+                for e in items
+            ],
+            "total": len(items),
+        }
 
     @app.get("/api/v1/audit/events")
-    def events(executionId: str | None = None, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    def events(
+        executionId: str | None = None,
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ):
         return service().store.events(executionId, limit, offset)
 
     @app.get("/api/v1/system")
@@ -145,7 +204,10 @@ def create_app(data_dir=None, config_path=None):
     @app.websocket("/ws")
     async def socket(ws: WebSocket):
         origin = ws.headers.get("origin", "")
-        if origin and not any(origin.startswith(prefix) for prefix in ("http://127.0.0.1:", "http://localhost:")):
+        if origin and not any(
+            origin.startswith(prefix)
+            for prefix in ("http://127.0.0.1:", "http://localhost:")
+        ):
             await ws.close(code=1008)
             return
         await ws.accept()
@@ -168,9 +230,12 @@ def create_app(data_dir=None, config_path=None):
 
 if __name__ == "__main__":
     import uvicorn
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="data/console")
     parser.add_argument("--config")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    uvicorn.run(create_app(args.data_dir, args.config), host="127.0.0.1", port=args.port)
+    uvicorn.run(
+        create_app(args.data_dir, args.config), host="127.0.0.1", port=args.port
+    )

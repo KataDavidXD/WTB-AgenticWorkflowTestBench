@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "node tests/run-console-e2e.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.6",
@@ -19,6 +20,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^4.7.0",
+    "playwright": "^1.63.0",
     "typescript": "~5.9.2",
     "vite": "^6.4.1",
     "vitest": "^3.2.4"

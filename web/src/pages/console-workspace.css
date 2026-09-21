@@ -1,0 +1,270 @@
+.console-navigation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.console-navigation nav {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+.console-navigation button,
+.console-workspace button,
+.modal button {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 9px 13px;
+}
+.console-navigation .active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.console-workspace h1 {
+  font-size: 30px;
+  margin: 24px 0;
+}
+.console-workspace .panel {
+  margin-top: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.panel-body {
+  padding: 20px;
+}
+.console-workspace table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.console-workspace td,
+.console-workspace th {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.console-workspace select,
+.modal select,
+.console-workspace textarea,
+.modal textarea {
+  display: block;
+  max-width: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px;
+  margin: 8px 0;
+}
+.console-workspace .toolbar,
+.modal .toolbar,
+.console-workspace .tabs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.console-workspace .tabs {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.console-workspace .active {
+  color: var(--accent);
+}
+.console-workspace .compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.console-workspace pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 480px;
+  overflow: auto;
+  background: var(--surface);
+  padding: 15px;
+}
+.console-workspace .react-flow {
+  height: 300px;
+  background: #ecf3f4;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #000a;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  max-width: 640px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 24px;
+}
+.modal .panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.modal fieldset {
+  border: 1px solid var(--line);
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  margin: 15px 0;
+  padding: 12px;
+}
+.modal [role="alert"],
+.console-workspace [role="alert"] {
+  color: var(--bad);
+}
+.console-workspace .link {
+  color: var(--accent);
+}
+.view-toolbar {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.view-toolbar .left,
+.view-toolbar .right {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.axis-label {
+  min-width: 0;
+}
+.axis-label select {
+  max-width: 100%;
+}
+.drawer:not(.open) {
+  visibility: hidden;
+}
+.checkpoint-list {
+  max-width: 400px;
+  min-width: 120px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 8px;
+}
+.execution-dock {
+  gap: 14px;
+}
+.dock-actions {
+  flex-wrap: wrap;
+}
+.console-workspace .history {
+  overflow-x: auto;
+}
+@media (max-width: 600px) {
+  .console-navigation {
+    padding: 10px;
+  }
+  .console-workspace .compare-grid {
+    grid-template-columns: 1fr;
+  }
+  .console-workspace .panel-body {
+    padding: 10px;
+  }
+  .checkpoint-list {
+    max-width: 100%;
+  }
+  .view-toolbar label {
+    width: 100%;
+  }
+  .view-toolbar select {
+    width: 100%;
+  }
+  .modal {
+    padding: 16px;
+  }
+  .console-workspace table {
+    min-width: 480px;
+  }
+  .console-workspace .panel {
+    overflow: auto;
+  }
+}
+.view-footnote {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.view-footnote > span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.view-footnote .tag {
+  white-space: normal;
+}
+@media (max-width: 600px) {
+  .masthead {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px 0;
+  }
+  .header-tools {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .header-tools button {
+    white-space: nowrap;
+  }
+  .execution-dock > div {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .console-workspace > p {
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 600px) {
+  .masthead {
+    height: auto;
+    min-height: 64px;
+  }
+  .execution-dock {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .execution-dock .selected-run {
+    width: 100%;
+    min-width: 0;
+  }
+  .selected-run .sub {
+    flex-wrap: wrap;
+  }
+  .execution-dock .checkpoint-list {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+  }
+  .console-navigation nav {
+    flex-basis: 100%;
+  }
+  .console-navigation > span {
+    margin-left: auto;
+  }
+  .view-footnote > span {
+    flex-basis: 100%;
+  }
+}
