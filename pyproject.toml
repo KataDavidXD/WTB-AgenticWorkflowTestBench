@@ -1,6 +1,6 @@
 [project]
 name = "wtb"
-version = "0.3.1"
+version = "0.4.0.dev0"
 description = "Workflow Test Bench (WTB) - SDK for workflow testing, debugging, and orchestration"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -25,6 +25,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+postgres-evidence = ["psycopg[binary]>=3.1,<4", "psycopg-pool>=3.2,<4"]
+deepseek-harness-source = ["pydantic>=2.12,<3"]
 ray = [
     "ray>=2.9.0",
     "dill>=0.3.7",

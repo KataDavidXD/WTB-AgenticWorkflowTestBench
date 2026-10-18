@@ -1,0 +1,41 @@
+"""Run the SAME SQLite contracts against PostgreSQL, without weakening assertions."""
+
+from tests.unit.evidence.test_event_store import (
+    test_exact_lookup_and_retry_cas as test_exact_lookup_and_retry_cas,
+    test_order_independent_projection as test_order_independent_projection,
+    test_duplicate_and_terminal_conflict_requires_explicit_reconciliation as test_duplicate_and_terminal_conflict_requires_explicit_reconciliation,
+    test_event_id_collision_is_persisted_as_conflict as test_event_id_collision_is_persisted_as_conflict,
+    test_failure_never_becomes_success_and_data_is_detached as test_failure_never_becomes_success_and_data_is_detached,
+    test_two_connections_cannot_both_replace_current_attempt as test_two_connections_cannot_both_replace_current_attempt,
+    test_invalid_event_and_missing_identity_fail_closed as test_invalid_event_and_missing_identity_fail_closed,
+)
+from tests.unit.evidence.test_collector import (
+    test_receipt_ownership_is_not_inferred as test_receipt_ownership_is_not_inferred,
+    test_projection_is_compatible_and_exact as test_projection_is_compatible_and_exact,
+    test_unknown_lookup_does_not_dispatch_and_failures_stay_failed as test_unknown_lookup_does_not_dispatch_and_failures_stay_failed,
+    test_missing_native_identity_is_not_manufactured as test_missing_native_identity_is_not_manufactured,
+    test_foreign_identity_rejected_before_runtime_reconciliation as test_foreign_identity_rejected_before_runtime_reconciliation,
+    test_nested_mapping_receipts_are_normalized as test_nested_mapping_receipts_are_normalized,
+)
+from tests.unit.evidence.test_publication_sink import (
+    test_atomic_effect_and_reopen_replay as test_atomic_effect_and_reopen_replay,
+    test_relevant_changes_deny_stale_approval as test_relevant_changes_deny_stale_approval,
+    test_unrelated_update_does_not_invalidate_approval as test_unrelated_update_does_not_invalidate_approval,
+    test_concurrent_policy_cas_and_replay as test_concurrent_policy_cas_and_replay,
+    test_record_material_requires_exact_version_and_payload as test_record_material_requires_exact_version_and_payload,
+    test_failure_can_be_reconciled_but_not_automatically_permitted as test_failure_can_be_reconciled_but_not_automatically_permitted,
+    test_snapshot_reuse_checks_current_versions_before_cache as test_snapshot_reuse_checks_current_versions_before_cache,
+)
+
+from tests.unit.evidence.test_publication_sink import (
+    test_redelivery_id_does_not_change_receipt_or_approval as test_redelivery_id_does_not_change_receipt_or_approval,
+    test_invalid_material_chain_rejected_without_changing_state as test_invalid_material_chain_rejected_without_changing_state,
+)
+
+from tests.unit.evidence.test_publication_sink import (
+    test_existing_receipt_binding_survives_store_upgrade as test_existing_receipt_binding_survives_store_upgrade,
+)
+
+from tests.unit.evidence.test_publication_sink import (
+    test_discontinuous_chain_does_not_replace_material as test_discontinuous_chain_does_not_replace_material,
+)

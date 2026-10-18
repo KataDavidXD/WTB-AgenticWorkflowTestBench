@@ -1,5 +1,7 @@
 <h1 align="center">WTB: Workflow Test Bench for Agentic Workflows</h1>
 
+Development source: [`0.4.0.dev0` authority and runtime evidence modules](AUTHORITY_RUNTIME.md).
+
 <p align="center">Built as the production release of <a href="https://github.com/HKU-MAS-Infra-Layer/Agent-Git">Agent Git</a>.</p>
 
 <div align="center">
