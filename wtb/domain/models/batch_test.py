@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from numbers import Real
-from typing import Any
+from typing import Any, Literal
 
 
 def normalize_finite_metrics(metrics: dict[str, Any]) -> dict[str, float]:
@@ -80,6 +80,7 @@ class VariantCombination:
     # v1.8: Graph factory reference for distributed execution with checkpoints
     graph_factory_module: str | None = None  # e.g., "examples.ray_batch_demo.run_demo"
     graph_factory_name: str | None = None    # e.g., "create_demo_graph"
+    runtime_backend: Literal["native", "langgraph"] | None = None
 
     # Thread-local fallback for graph objects that cloudpickle cannot safely
     # round-trip. Deliberately excluded from to_dict() and value equality.
@@ -96,6 +97,8 @@ class VariantCombination:
             result["graph_factory_module"] = self.graph_factory_module
         if self.graph_factory_name:
             result["graph_factory_name"] = self.graph_factory_name
+        if self.runtime_backend:
+            result["runtime_backend"] = self.runtime_backend
         return result
     
     @classmethod
@@ -106,6 +109,7 @@ class VariantCombination:
             metadata=data.get("metadata", {}),
             graph_factory_module=data.get("graph_factory_module"),
             graph_factory_name=data.get("graph_factory_name"),
+            runtime_backend=data.get("runtime_backend"),
         )
     
     def has_graph_factory(self) -> bool:
@@ -138,6 +142,7 @@ class BatchTestResult:
     checkpoint_count: int = 0                  # Number of checkpoints
     last_checkpoint_id: str | None = None   # Most recent checkpoint ID
     test_case_index: int | None = None       # Multi-case result identity
+    cleanup_warning: str | None = None       # Durable success, cleanup alert
     
     def __post_init__(self) -> None:
         self.metrics = normalize_finite_metrics(self.metrics)
@@ -157,6 +162,7 @@ class BatchTestResult:
             "checkpoint_count": self.checkpoint_count,
             "last_checkpoint_id": self.last_checkpoint_id,
             "test_case_index": self.test_case_index,
+            "cleanup_warning": self.cleanup_warning,
         }
     
     @classmethod
@@ -174,6 +180,7 @@ class BatchTestResult:
             checkpoint_count=data.get("checkpoint_count", 0),
             last_checkpoint_id=data.get("last_checkpoint_id"),
             test_case_index=data.get("test_case_index"),
+            cleanup_warning=data.get("cleanup_warning"),
         )
 
 

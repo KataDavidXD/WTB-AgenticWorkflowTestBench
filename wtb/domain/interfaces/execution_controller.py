@@ -55,7 +55,13 @@ class IExecutionController(ABC):
         pass
     
     @abstractmethod
-    def run(self, execution_id: str, graph: Any = None) -> Execution:
+    def run(
+        self,
+        execution_id: str,
+        graph: Any = None,
+        *,
+        workflow: Any = None,
+    ) -> Execution:
         """
         Start or continue execution.
         
@@ -65,12 +71,13 @@ class IExecutionController(ABC):
         - An error occurs
         
         Execution Strategy:
-        - If graph is provided AND adapter supports LangGraph -> native LangGraph execution
-        - Otherwise -> use DefaultNodeExecutor with WTB workflow nodes
+        - If a workflow is provided and a runtime is configured, bind/invoke it
+        - Otherwise use DefaultNodeExecutor with WTB workflow nodes
         
         Args:
             execution_id: ID of the execution to run
-            graph: Optional compiled LangGraph for native execution
+            graph: Backward-compatible name for a runtime-specific workflow
+            workflow: Preferred framework-neutral workflow definition
             
         Returns:
             Updated Execution with current state
@@ -101,9 +108,12 @@ class IExecutionController(ABC):
     
     @abstractmethod
     def resume(
-        self, 
-        execution_id: str, 
-        modified_state: dict[str, Any] | None = None
+        self,
+        execution_id: str,
+        modified_state: dict[str, Any] | None = None,
+        *,
+        graph: Any = None,
+        workflow: Any = None,
     ) -> Execution:
         """
         Resume paused execution, optionally with modified state.
@@ -111,6 +121,8 @@ class IExecutionController(ABC):
         Args:
             execution_id: ID of the execution to resume
             modified_state: Optional state updates to apply before resuming
+            graph: Backward-compatible runtime-specific workflow definition
+            workflow: Preferred framework-neutral workflow definition
             
         Returns:
             Updated Execution (will be RUNNING or terminal state)
@@ -133,6 +145,20 @@ class IExecutionController(ABC):
             
         Raises:
             ValueError: If execution not found
+        """
+        pass
+
+    @abstractmethod
+    def reconcile_runtime_outcome(
+        self,
+        execution_id: str,
+        *,
+        attempt_id: str | None = None,
+    ) -> Execution:
+        """Resolve a fenced external dispatch from runtime-owned evidence.
+
+        Implementations must reject caller assertions that are not verified by
+        the workflow runtime and must preserve the reconciliation audit trail.
         """
         pass
     

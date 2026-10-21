@@ -1,39 +1,53 @@
 [project]
 name = "wtb"
-version = "0.3.1"
+version = "0.4.0.dev0"
 description = "Workflow Test Bench (WTB) - SDK for workflow testing, debugging, and orchestration"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 keywords = ["workflow", "testing", "langgraph", "checkpoint", "debugging", "ray", "agentgit"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    "sqlalchemy>=2.0.0",
-    "langgraph>=0.2.60",
-    "langgraph-checkpoint>=2.0.10",
+    "sqlalchemy[asyncio]>=2.0.0",
     "cloudpickle>=3.0.0",
     "aiofiles>=24.1.0",
     "aiosqlite>=0.20.0",
 ]
 
 [project.optional-dependencies]
+postgres-evidence = ["psycopg[binary]>=3.1,<4", "psycopg-pool>=3.2,<4"]
+deepseek-harness-source = [
+    # Source-checkout prerequisite only. Add the SDK distribution back only
+    # after a published version exposes WTB's durable-attempt-v2 contract.
+    "pydantic>=2.12,<3",
+]
+langgraph = [
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint>=2.0.10",
+]
 ray = [
     "ray>=2.9.0",
     "dill>=0.3.7",
 ]
 langgraph-sqlite = [
-    "langgraph-checkpoint-sqlite>=3.1.0",
+    "langgraph>=1.0,<1.1",
+    "langgraph-checkpoint>=4.1,<5",
+    "langgraph-checkpoint-sqlite>=3.1,<4",
 ]
 langgraph-postgres = [
-    "langgraph-checkpoint-postgres>=2.0.15",
+    "langgraph>=1.0,<1.1",
+    "langgraph-checkpoint>=4.1,<5",
+    "langgraph-checkpoint-postgres>=3.1,<4",
     "psycopg[binary]>=3.1.0",
 ]
 llm = [
@@ -67,6 +81,9 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "httpx>=0.26.0",
     "ruff==0.16.1",
+    "langgraph>=1.0,<1.1",
+    "langgraph-checkpoint>=4.1,<5",
+    "langgraph-checkpoint-sqlite>=3.1,<4",
 ]
 test = [
     "pytest>=7.0.0",
@@ -77,18 +94,20 @@ test = [
     "dill>=0.3.7",
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
-    "langgraph-checkpoint-sqlite>=3.1.0",
+    "langgraph>=1.0,<1.1",
+    "langgraph-checkpoint>=4.1,<5",
+    "langgraph-checkpoint-sqlite>=3.1,<4",
     "openai>=1.0.0",
     "langchain-openai>=0.0.5",
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
 ]
 all = [
-    "wtb[ray,langgraph-sqlite,langgraph-postgres,llm,api,grpc,venv,observability]",
+    "wtb[ray,langgraph-sqlite,langgraph-postgres,postgres-evidence,llm,api,grpc,venv,observability]",
 ]
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -125,6 +144,11 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E9", "F63", "F7", "F82"]
+
+[tool.wtb.release]
+phase = "development"
+deepseek-harness-contract = "durable-attempt-v2"
+deepseek-harness-distribution = "source-only"
 
 # [tool.uv.workspace]
 # members = []

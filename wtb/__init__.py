@@ -28,7 +28,7 @@ SDK Usage:
     result = wtb.run(project="my_workflow", initial_state={})
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.0.dev0"
 
 # Domain Models
 # Domain Interfaces
@@ -60,25 +60,18 @@ from wtb.domain.models import (
     WorkflowNode,
 )
 
-# Application Services
-try:
-    from wtb.application import (
-        ExecutionController,
-        NodeReplacer,
-    )
-except ImportError:
-    ExecutionController = None
-    NodeReplacer = None
-
-# Infrastructure
-try:
-    from wtb.infrastructure import (
-        InMemoryStateAdapter,
-        SQLAlchemyUnitOfWork,
-    )
-except ImportError:
-    SQLAlchemyUnitOfWork = None
-    InMemoryStateAdapter = None
+# Core application and infrastructure exports. These are base-package
+# contracts, not optional integrations: a broken import must fail visibly
+# instead of publishing ``None`` under a documented public name.
+from wtb.application import (
+    ExecutionController,
+    NodeReplacer,
+)
+from wtb.infrastructure import (
+    InMemoryStateAdapter,
+    SqliteStateAdapter,
+    SQLAlchemyUnitOfWork,
+)
 
 # SDK (lazy import to avoid circular dependencies)
 def _get_sdk():
@@ -141,4 +134,5 @@ __all__ = [
     # Infrastructure
     "SQLAlchemyUnitOfWork",
     "InMemoryStateAdapter",
+    "SqliteStateAdapter",
 ]

@@ -4,6 +4,7 @@ Unit tests for OutboxExecutionControllerDecorator.
 Verifies outbox events are emitted for all lifecycle operations.
 """
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -64,6 +65,7 @@ class TestOutboxDecoratorEvents:
             ("pause", ("exec-1",)),
             ("resume", ("exec-1",)),
             ("stop", ("exec-1",)),
+            ("reconcile_runtime_outcome", ("exec-1",)),
             ("rollback", ("exec-1", "cp-1")),
             ("fork", ("exec-1", "cp-1")),
         ],
@@ -219,6 +221,27 @@ class TestOutboxDecoratorEvents:
         assert events[0].event_type == OutboxEventType.EXECUTION_STARTED
         assert events[1].event_type == OutboxEventType.EXECUTION_COMPLETED
 
+    def test_repeated_terminal_run_does_not_duplicate_lifecycle_outbox(self):
+        inner = MagicMock()
+        execution = _make_execution(status=ExecutionStatus.COMPLETED)
+        execution.metadata = {
+            "last_runtime_attempt": {"attempt_id": "attempt-terminal"}
+        }
+        inner.run.return_value = execution
+        outbox = InMemoryUnitOfWork().outbox
+        decorator = _make_atomic_decorator(inner, outbox)
+
+        decorator.run("exec-1")
+        decorator.run("exec-1")
+
+        events = outbox.list_all()
+        assert len(events) == 2
+        assert {event.event_type for event in events} == {
+            OutboxEventType.EXECUTION_STARTED,
+            OutboxEventType.EXECUTION_COMPLETED,
+        }
+        assert all(event.idempotency_key for event in events)
+
     def test_run_failed_emits_started_and_failed(self):
         inner = MagicMock()
         execution = _make_execution(status=ExecutionStatus.FAILED)
@@ -228,13 +251,175 @@ class TestOutboxDecoratorEvents:
         outbox_repo = MagicMock()
         decorator = _make_atomic_decorator(inner, outbox_repo)
 
-        result = decorator.run("exec-1")
+        decorator.run("exec-1")
 
         assert outbox_repo.add.call_count == 2
         events = [call[0][0] for call in outbox_repo.add.call_args_list]
         assert events[0].event_type == OutboxEventType.EXECUTION_STARTED
         assert events[1].event_type == OutboxEventType.EXECUTION_FAILED
         assert "something broke" in events[1].payload.get("error", "")
+
+    def test_run_outcome_unknown_emits_started_and_recovery_without_terminal(self):
+        inner = MagicMock()
+        execution = _make_execution(status=ExecutionStatus.RUNNING)
+        execution.metadata = {
+            "recovery_required": True,
+            "recovery_reason": "runtime_outcome_unknown",
+            "runtime_session_id": "dsh-session-1",
+        }
+        inner.run.return_value = execution
+        outbox_repo = MagicMock()
+        decorator = _make_atomic_decorator(inner, outbox_repo)
+
+        result = decorator.run("exec-1")
+
+        assert result.status is ExecutionStatus.RUNNING
+        events = [call[0][0] for call in outbox_repo.add.call_args_list]
+        assert [event.event_type for event in events] == [
+            OutboxEventType.EXECUTION_STARTED,
+            OutboxEventType.EXECUTION_RECOVERY_REQUIRED,
+        ]
+        assert events[1].payload["runtime_session_id"] == "dsh-session-1"
+
+    def test_run_known_cancelled_terminal_emits_started_and_stopped(self):
+        inner = MagicMock()
+        execution = _make_execution(status=ExecutionStatus.CANCELLED)
+        inner.run.return_value = execution
+        outbox_repo = MagicMock()
+        decorator = _make_atomic_decorator(inner, outbox_repo)
+
+        result = decorator.run("exec-1")
+
+        assert result is execution
+        events = [call.args[0] for call in outbox_repo.add.call_args_list]
+        assert [event.event_type for event in events] == [
+            OutboxEventType.EXECUTION_STARTED,
+            OutboxEventType.EXECUTION_STOPPED,
+        ]
+
+    def test_reconciliation_emits_audit_and_verified_terminal_event(self):
+        inner = MagicMock()
+        execution = _make_execution(status=ExecutionStatus.COMPLETED)
+        runtime_binding = {
+            "exact_session_id": "dsh-session-1",
+            "persistence_instance_id": "store-01HX",
+            "runtime_config_sha256": "b" * 64,
+            "protocol_version": 1,
+            "schema_version": 1,
+            "input_sha256": "a" * 64,
+            "attempt_id": "attempt-1",
+        }
+        execution.metadata = {
+            "last_runtime_reconciliation": {
+                "attempt_id": "attempt-1",
+                "input_sha256": "a" * 64,
+                "outcome": "completed",
+                "session_id": "dsh-session-1",
+                "receipt": {
+                    "message_id": "message-1",
+                    "attempt_status": "terminal",
+                    "finish_reason": "completed",
+                    "event_count": 2,
+                    "last_event_seq": 7,
+                    "session_root_configured": True,
+                    "session_root": "C:/secret/sessions",
+                    "events": [
+                        {
+                            "type": "tool/end",
+                            "command": "rm secret-file",
+                            "result": "private tool output",
+                        }
+                    ],
+                    "answer": "private model answer",
+                },
+                "runtime_binding": runtime_binding,
+            }
+        }
+        inner.reconcile_runtime_outcome.return_value = execution
+        outbox_repo = MagicMock()
+        commit_fn = MagicMock()
+        decorator = OutboxExecutionControllerDecorator(
+            inner,
+            outbox_repo,
+            commit_fn=commit_fn,
+            rollback_fn=MagicMock(),
+        )
+
+        result = decorator.reconcile_runtime_outcome(
+            "exec-1",
+            attempt_id="attempt-1",
+        )
+
+        assert result is execution
+        events = [call.args[0] for call in outbox_repo.add.call_args_list]
+        assert [event.event_type for event in events] == [
+            OutboxEventType.EXECUTION_RECONCILED,
+            OutboxEventType.EXECUTION_COMPLETED,
+        ]
+        assert events[0].payload["attempt_id"] == "attempt-1"
+        assert events[0].payload["input_sha256"] == "a" * 64
+        assert events[0].payload["outcome"] == "completed"
+        assert events[0].payload["runtime_binding"] == runtime_binding
+        summary = events[0].payload["receipt_summary"]
+        assert summary["message_id"] == "message-1"
+        assert summary["attempt_status"] == "terminal"
+        assert summary["finish_reason"] == "completed"
+        assert summary["event_count"] == 2
+        assert summary["last_event_seq"] == 7
+        assert summary["session_root_configured"] is True
+        assert len(summary["summary_sha256"]) == 64
+        assert "receipt" not in events[0].payload
+        serialized_payload = json.dumps(events[0].payload)
+        assert "C:/secret/sessions" not in serialized_payload
+        assert "rm secret-file" not in serialized_payload
+        assert "private tool output" not in serialized_payload
+        assert "private model answer" not in serialized_payload
+        assert "events" not in summary
+        assert "session_root" not in summary
+        assert "answer" not in summary
+        assert decorator._runtime_receipt_summary(
+            {
+                "message_id": "message-1",
+                "attempt_status": "terminal",
+                "finish_reason": "completed",
+                "event_count": 2,
+                "last_event_seq": 7,
+                "session_root_configured": True,
+                "session_root": "D:/another/private/root",
+                "events": [{"command": "upload a different secret"}],
+                "answer": "another private answer",
+            }
+        ) == summary
+        commit_fn.assert_called_once_with()
+
+    @pytest.mark.parametrize(
+        ("method_name", "status"),
+        [
+            ("stop", ExecutionStatus.COMPLETED),
+            ("reconcile_runtime_outcome", ExecutionStatus.CANCELLED),
+        ],
+    )
+    def test_runtime_cas_loser_emits_no_false_terminal_event(
+        self,
+        method_name,
+        status,
+    ):
+        inner = MagicMock()
+        inner.last_runtime_mutation_won.return_value = False
+        getattr(inner, method_name).return_value = _make_execution(status=status)
+        outbox_repo = MagicMock()
+        commit_fn = MagicMock()
+        decorator = OutboxExecutionControllerDecorator(
+            inner,
+            outbox_repo,
+            commit_fn=commit_fn,
+            rollback_fn=MagicMock(),
+        )
+
+        getattr(decorator, method_name)("exec-1")
+
+        outbox_repo.add.assert_not_called()
+        commit_fn.assert_not_called()
 
     def test_pause_emits_execution_paused(self):
         inner = MagicMock()

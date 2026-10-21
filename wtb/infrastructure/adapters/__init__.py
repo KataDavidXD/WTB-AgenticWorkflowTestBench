@@ -1,59 +1,54 @@
 """
 State adapters - Anti-corruption layer implementations.
 
-Refactored (v1.6):
-- LangGraphStateAdapter: PRIMARY for all workflows (string IDs native)
-- InMemoryStateAdapter: For testing (string IDs)
-- AgentGitStateAdapter: REMOVED (use LangGraph instead)
+Default adapters:
+- SqliteStateAdapter: WTB-native durable node state
+- InMemoryStateAdapter: Lightweight testing state
 
-Added (v2.0 - Async Architecture):
-- AsyncLangGraphStateAdapter: Async-first implementation of IAsyncStateAdapter
-- AsyncLangGraphStateAdapterFactory: Factory for async adapters
+LangGraph adapters remain explicit optional attributes for compatibility.
 
-All adapters now use string IDs throughout (UUIDs).
+Optional LangGraph adapters are loaded only when their public symbol is
+requested, so framework-neutral runtimes do not import LangGraph transitively.
 """
 
+from importlib import import_module
+
 from .inmemory_state_adapter import InMemoryStateAdapter
+from .sqlite_state_adapter import SqliteStateAdapter
 
-# Conditionally import LangGraphStateAdapter (requires langgraph package)
-try:
-    from .langgraph_state_adapter import (
-        LANGGRAPH_AVAILABLE,
-        CheckpointerType,
-        LangGraphConfig,
-        LangGraphStateAdapter,
-        LangGraphStateAdapterFactory,
-    )
-    _HAS_LANGGRAPH = LANGGRAPH_AVAILABLE
-except ImportError:
-    LangGraphStateAdapter = None  # type: ignore
-    LangGraphConfig = None  # type: ignore
-    LangGraphStateAdapterFactory = None  # type: ignore
-    CheckpointerType = None  # type: ignore
-    _HAS_LANGGRAPH = False
 
-# Async LangGraph adapter (v2.0)
-try:
-    from .async_langgraph_state_adapter import (
-        AsyncLangGraphStateAdapter,
-        AsyncLangGraphStateAdapterFactory,
-    )
-    ASYNC_LANGGRAPH_AVAILABLE = _HAS_LANGGRAPH
-except ImportError:
-    AsyncLangGraphStateAdapter = None  # type: ignore
-    AsyncLangGraphStateAdapterFactory = None  # type: ignore
-    ASYNC_LANGGRAPH_AVAILABLE = False
-
-__all__ = [
-    # Sync adapters
-    "InMemoryStateAdapter",
-    "LangGraphStateAdapter",
-    "LangGraphConfig",
-    "LangGraphStateAdapterFactory",
-    "CheckpointerType",
+_SYNC_LANGGRAPH_EXPORTS = {
     "LANGGRAPH_AVAILABLE",
-    # Async adapters (v2.0)
+    "CheckpointerType",
+    "LangGraphConfig",
+    "LangGraphStateAdapter",
+    "LangGraphStateAdapterFactory",
+}
+_ASYNC_LANGGRAPH_EXPORTS = {
+    "ASYNC_LANGGRAPH_AVAILABLE",
     "AsyncLangGraphStateAdapter",
     "AsyncLangGraphStateAdapterFactory",
-    "ASYNC_LANGGRAPH_AVAILABLE",
+}
+
+
+def __getattr__(name: str):
+    """Load optional adapter modules only for explicit public access."""
+    if name in _SYNC_LANGGRAPH_EXPORTS:
+        module = import_module(".langgraph_state_adapter", __name__)
+        value = getattr(module, name)
+    elif name in _ASYNC_LANGGRAPH_EXPORTS:
+        module = import_module(".async_langgraph_state_adapter", __name__)
+        value = (
+            module.LANGGRAPH_AVAILABLE
+            if name == "ASYNC_LANGGRAPH_AVAILABLE"
+            else getattr(module, name)
+        )
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    globals()[name] = value
+    return value
+
+__all__ = [
+    "InMemoryStateAdapter",
+    "SqliteStateAdapter",
 ]

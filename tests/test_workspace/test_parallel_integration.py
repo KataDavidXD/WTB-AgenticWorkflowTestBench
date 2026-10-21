@@ -156,9 +156,17 @@ class TestConcurrentFileWrites:
     def test_parallel_writes_isolated(
         self,
         workspace_manager,
-        sample_project_files,
+        monkeypatch,
     ):
         """Test that parallel writes to same filename are isolated."""
+        def reject_process_cwd_activation(*_args, **_kwargs):
+            raise AssertionError(
+                "parallel workspace writes must use absolute paths, not process CWD"
+            )
+
+        monkeypatch.setattr(Workspace, "activate", reject_process_cwd_activation)
+        monkeypatch.setattr(Workspace, "deactivate", reject_process_cwd_activation)
+
         # Create workspaces for each "worker"
         workspaces = []
         for i in range(5):
@@ -172,12 +180,10 @@ class TestConcurrentFileWrites:
         results = {}
         errors = []
         lock = threading.Lock()
+        original_cwd = Path.cwd()
         
         def write_result(ws: Workspace, worker_id: int):
-            original_cwd = os.getcwd()
             try:
-                ws.activate()
-                
                 # All write to same filename "result.json"
                 output_file = ws.output_dir / "result.json"
                 output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -196,9 +202,6 @@ class TestConcurrentFileWrites:
             except Exception as e:
                 with lock:
                     errors.append((worker_id, e))
-            finally:
-                ws.deactivate()
-                os.chdir(original_cwd)
         
         # Execute in parallel
         threads = []
@@ -212,6 +215,7 @@ class TestConcurrentFileWrites:
         
         assert len(errors) == 0, f"Errors during writes: {errors}"
         assert len(results) == 5
+        assert Path.cwd() == original_cwd
         
         # Verify each file has correct content
         for worker_id, file_path in results.items():
@@ -357,7 +361,7 @@ class TestConcurrentCleanup:
 
 class TestRaceConditionPrevention:
     """Tests for race condition prevention."""
-    
+
     def test_no_workspace_id_collision(
         self,
         workspace_config,
@@ -446,8 +450,17 @@ class TestBatchTestParallelism:
         workspace_config,
         event_bus,
         sample_project_files,
+        monkeypatch,
     ):
         """Test the variant execution parallelism pattern."""
+        def reject_process_cwd_activation(*_args, **_kwargs):
+            raise AssertionError(
+                "thread-pool variants must use absolute paths, not process CWD"
+            )
+
+        monkeypatch.setattr(Workspace, "activate", reject_process_cwd_activation)
+        monkeypatch.setattr(Workspace, "deactivate", reject_process_cwd_activation)
+
         manager = WorkspaceManager(
             config=workspace_config,
             event_bus=event_bus,
@@ -459,6 +472,7 @@ class TestBatchTestParallelism:
         
         results = {}
         lock = threading.Lock()
+        original_cwd = Path.cwd()
         
         def execute_variant(variant_name: str, input_data: dict):
             # Create workspace
@@ -469,29 +483,21 @@ class TestBatchTestParallelism:
                 source_paths=[sample_project_files["csv"]],
             )
             
-            original_cwd = os.getcwd()
-            try:
-                ws.activate()
-                
-                # Simulate execution
-                result = {
-                    "variant": variant_name,
-                    "workspace_id": ws.workspace_id,
-                    "input_query": input_data["query"],
-                    "score": 0.80 + (hash(variant_name) % 20) / 100,
-                }
-                
-                # Write result
-                output_file = ws.output_dir / "result.json"
-                output_file.parent.mkdir(parents=True, exist_ok=True)
-                output_file.write_text(json.dumps(result))
-                
-                with lock:
-                    results[variant_name] = result
-                
-            finally:
-                ws.deactivate()
-                os.chdir(original_cwd)
+            # Simulate execution using workspace-absolute paths. Process CWD
+            # is shared by every thread and cannot provide isolation here.
+            result = {
+                "variant": variant_name,
+                "workspace_id": ws.workspace_id,
+                "input_query": input_data["query"],
+                "score": 0.80 + (hash(variant_name) % 20) / 100,
+            }
+
+            output_file = ws.output_dir / "result.json"
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text(json.dumps(result))
+
+            with lock:
+                results[variant_name] = result
         
         # Execute all variants in parallel
         test_input = {"query": "test query", "k": 10}
@@ -507,6 +513,7 @@ class TestBatchTestParallelism:
         
         # All variants should have results
         assert len(results) == len(variants)
+        assert Path.cwd() == original_cwd
         
         for variant in variants:
             assert variant in results

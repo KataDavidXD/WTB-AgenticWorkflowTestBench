@@ -34,6 +34,8 @@ Usage with LangGraph:
         history = controller.get_checkpoint_history(execution_id)
 """
 
+from importlib import import_module
+
 from .batch_test_runner import ThreadPoolBatchTestRunner
 from .execution_controller import DefaultNodeExecutor, ExecutionController
 from .node_replacer import NodeReplacer
@@ -74,27 +76,30 @@ except ImportError:
     DefaultExecutionControllerFactory = None
     BATCH_COORDINATOR_AVAILABLE = False
 
-# LangGraph node replacer (optional utility for native LangGraph development)
-try:
-    from .langgraph_node_replacer import (
-        GraphEdgeInfo,
-        GraphNodeInfo,
-        GraphStructure,
-        LangGraphNodeReplacer,
-        LangGraphNodeVariant,
-        VariantSet,
-        capture_graph_structure,
-    )
-    LANGGRAPH_NODE_REPLACER_AVAILABLE = True
-except ImportError:
-    LangGraphNodeReplacer = None
-    LangGraphNodeVariant = None
-    GraphStructure = None
-    GraphNodeInfo = None
-    GraphEdgeInfo = None
-    VariantSet = None
-    capture_graph_structure = None
-    LANGGRAPH_NODE_REPLACER_AVAILABLE = False
+_LANGGRAPH_NODE_REPLACER_EXPORTS = {
+    "GraphEdgeInfo",
+    "GraphNodeInfo",
+    "GraphStructure",
+    "LangGraphNodeReplacer",
+    "LangGraphNodeVariant",
+    "VariantSet",
+    "capture_graph_structure",
+    "LANGGRAPH_NODE_REPLACER_AVAILABLE",
+}
+
+
+def __getattr__(name: str):
+    """Load the optional LangGraph node tools only on explicit access."""
+    if name not in _LANGGRAPH_NODE_REPLACER_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(".langgraph_node_replacer", __name__)
+    for export in _LANGGRAPH_NODE_REPLACER_EXPORTS:
+        globals()[export] = (
+            True
+            if export == "LANGGRAPH_NODE_REPLACER_AVAILABLE"
+            else getattr(module, export)
+        )
+    return globals()[name]
 
 # Async execution controller (v2.0)
 try:

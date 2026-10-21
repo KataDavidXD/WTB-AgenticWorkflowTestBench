@@ -1,0 +1,175 @@
+name: Test and package
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff / configured release rules
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Ruff
+        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+      - name: Run configured lint rules
+        run: python -m ruff check .
+
+  full-tests:
+    name: Full tests / Ubuntu / Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify universal lockfile
+        if: matrix.python == '3.12'
+        run: |
+          python -m pip install --disable-pip-version-check uv==0.11.14
+          uv lock --check
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check ".[test]"
+      - name: Run full test suite
+        run: python -m pytest -q -p no:cacheprovider
+
+  deepseek-source-contract:
+    name: DeepSeek source-only release contract / Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install source-checkout prerequisites
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.0.2 "packaging>=24"
+          python -m pip install --disable-pip-version-check ".[deepseek-harness-source]"
+      - name: Verify no unavailable SDK or LangGraph is claimed
+        shell: python
+        run: |
+          import importlib.util
+
+          assert importlib.util.find_spec("pydantic") is not None
+          assert importlib.util.find_spec("deepseek_harness") is None
+          assert importlib.util.find_spec("langgraph") is None
+      - name: Prove a legacy SDK shape fails before dispatch
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/unit/test_optional_runtime_dependencies.py::test_unpublished_deepseek_contract_is_source_only_and_release_gated
+          tests/unit/test_optional_runtime_dependencies.py::test_rc6_shape_fails_before_dispatch_without_durable_identity
+          tests/release/test_release_sequencing.py
+
+  package-smoke:
+    name: Package / ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.12"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --disable-pip-version-check build==1.5.0
+          python -m build
+      - name: Verify clean core installs
+        shell: python
+        run: |
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          artifacts = Path("dist")
+          wheel = next(artifacts.glob("*.whl"))
+          sdist = next(artifacts.glob("*.tar.gz"))
+          probe = Path("tests/release/_installed_package_probe.py").resolve()
+
+          for label, artifact in (("wheel", wheel), ("sdist", sdist)):
+              with tempfile.TemporaryDirectory(prefix=f"wtb-{label}-") as root:
+                  environment = Path(root) / "venv"
+                  subprocess.check_call([sys.executable, "-m", "venv", environment])
+                  python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+                  subprocess.check_call(
+                      [
+                          str(python),
+                          "-m",
+                          "pip",
+                          "install",
+                          "--disable-pip-version-check",
+                          str(artifact.resolve()),
+                      ]
+                  )
+                  subprocess.check_call([str(python), "-m", "pip", "check"])
+                  subprocess.check_call([str(python), "-I", str(probe)])
+      - name: Verify DeepSeek source extra resolution
+        if: matrix.python == '3.12'
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          wheel = next(Path("dist").glob("*.whl")).resolve()
+          with tempfile.TemporaryDirectory(prefix="wtb-deepseek-") as root:
+              environment = Path(root) / "venv"
+              subprocess.check_call([sys.executable, "-m", "venv", environment])
+              python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+              subprocess.check_call(
+                  [
+                      str(python),
+                      "-m",
+                      "pip",
+                      "install",
+                      "--disable-pip-version-check",
+                      f"{wheel}[deepseek-harness-source]",
+                  ]
+              )
+              subprocess.check_call([str(python), "-m", "pip", "check"])
+              probe = Path("tests/release/_installed_package_probe.py").resolve()
+              probe_environment = os.environ.copy()
+              probe_environment["WTB_EXPECT_DSH_SOURCE_EXTRA"] = "1"
+              subprocess.check_call(
+                  [
+                      str(python),
+                      "-I",
+                      str(probe),
+                  ],
+                  env=probe_environment,
+              )

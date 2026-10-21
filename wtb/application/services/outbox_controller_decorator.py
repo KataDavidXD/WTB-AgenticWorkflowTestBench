@@ -23,8 +23,9 @@ Architecture:
     ExecutionController (real orchestration, commit deferred)
 """
 
+import hashlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Optional
 
 from wtb.domain.interfaces.execution_controller import IExecutionController
@@ -35,6 +36,7 @@ from wtb.domain.models.workflow import (
     ExecutionStatus,
     TestWorkflow,
 )
+from wtb.domain.runtime_identity import canonical_json_sha256
 
 if TYPE_CHECKING:
     from wtb.domain.interfaces.repositories import IOutboxRepository
@@ -92,6 +94,8 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         event_type: OutboxEventType,
         aggregate_id: str,
         payload: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
     ) -> None:
         if self._outbox is None:
             return
@@ -101,6 +105,7 @@ class OutboxExecutionControllerDecorator(IExecutionController):
                 aggregate_type="Execution",
                 aggregate_id=aggregate_id,
                 payload=payload,
+                idempotency_key=idempotency_key,
             )
             self._outbox.add(event)
         except Exception as error:
@@ -110,6 +115,31 @@ class OutboxExecutionControllerDecorator(IExecutionController):
             )
             self._rollback_after_failure()
             raise
+
+    @staticmethod
+    def _lifecycle_idempotency_key(
+        result: Execution,
+        event_type: OutboxEventType,
+    ) -> str:
+        """Return a bounded stable key for one execution lifecycle fact."""
+        metadata = result.metadata or {}
+        attempt = metadata.get("last_runtime_attempt")
+        if not isinstance(attempt, dict):
+            attempt = metadata.get("runtime_attempt")
+        attempt_id = (
+            attempt.get("attempt_id") if isinstance(attempt, dict) else None
+        )
+        identity = (
+            attempt_id
+            if isinstance(attempt_id, str) and attempt_id
+            else result.started_at.isoformat()
+            if result.started_at is not None
+            else result.id
+        )
+        digest = hashlib.sha256(
+            f"{result.id}:{event_type.value}:{identity}".encode("utf-8")
+        ).hexdigest()[:32]
+        return f"execution-lifecycle:{event_type.value}:{digest}"
 
     def _rollback_after_failure(self) -> None:
         """Best-effort rollback that never masks the active primary error."""
@@ -146,6 +176,51 @@ class OutboxExecutionControllerDecorator(IExecutionController):
             self._rollback_after_failure()
             raise
 
+    def _runtime_mutation_won(self) -> bool:
+        """Treat an explicit false CAS outcome as observation, not mutation."""
+        outcome = getattr(self._inner, "last_runtime_mutation_won", None)
+        return not callable(outcome) or outcome() is not False
+
+    @staticmethod
+    def _runtime_receipt_summary(receipt: Any) -> dict[str, Any]:
+        """Return a fixed audit summary without runtime content or paths."""
+        if not isinstance(receipt, Mapping):
+            return {}
+        summary: dict[str, Any] = {}
+        for name in ("message_id", "attempt_status", "finish_reason"):
+            value = receipt.get(name)
+            if (
+                isinstance(value, str)
+                and 0 < len(value) <= 128
+                and all(
+                    character.isascii()
+                    and (character.isalnum() or character in "._:-")
+                    for character in value
+                )
+            ):
+                summary[name] = value
+
+        for name in (
+            "event_count",
+            "last_event_seq",
+            "terminal_event_seq",
+            "turn",
+        ):
+            value = receipt.get(name)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                summary[name] = value
+
+        for name in ("deduplicated", "session_root_configured"):
+            value = receipt.get(name)
+            if isinstance(value, bool):
+                summary[name] = value
+        if summary:
+            # Hash only the already-redacted summary. Hashing the raw receipt
+            # would make low-entropy paths/content guessable and correlate it
+            # across systems even though the plaintext was omitted.
+            summary["summary_sha256"] = canonical_json_sha256(summary)
+        return summary
+
     # -- Delegated IExecutionController methods with outbox events --
 
     def create_execution(
@@ -179,29 +254,158 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         self._commit_outbox()
         return result
 
-    def run(self, execution_id: str, graph: Any = None) -> Execution:
-        result = self._invoke_inner_mutation(self._inner.run, execution_id, graph)
+    def run(
+        self,
+        execution_id: str,
+        graph: Any = None,
+        *,
+        workflow: Any = None,
+    ) -> Execution:
+        kwargs = {"workflow": workflow} if workflow is not None else {}
+        result = self._invoke_inner_mutation(
+            self._inner.run,
+            execution_id,
+            graph,
+            **kwargs,
+        )
+        if not self._runtime_mutation_won():
+            return result
         if result.status == ExecutionStatus.COMPLETED:
             self._emit(
                 OutboxEventType.EXECUTION_STARTED,
                 execution_id,
                 {"execution_id": execution_id, "workflow_id": result.workflow_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_STARTED
+                ),
             )
             self._emit(
                 OutboxEventType.EXECUTION_COMPLETED,
                 execution_id,
                 {"execution_id": execution_id, "workflow_id": result.workflow_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_COMPLETED
+                ),
             )
         elif result.status == ExecutionStatus.FAILED:
             self._emit(
                 OutboxEventType.EXECUTION_STARTED,
                 execution_id,
                 {"execution_id": execution_id, "workflow_id": result.workflow_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_STARTED
+                ),
             )
             self._emit(
                 OutboxEventType.EXECUTION_FAILED,
                 execution_id,
                 {"execution_id": execution_id, "error": result.error_message or ""},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_FAILED
+                ),
+            )
+        elif result.status == ExecutionStatus.CANCELLED:
+            self._emit(
+                OutboxEventType.EXECUTION_STARTED,
+                execution_id,
+                {"execution_id": execution_id, "workflow_id": result.workflow_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_STARTED
+                ),
+            )
+            self._emit(
+                OutboxEventType.EXECUTION_STOPPED,
+                execution_id,
+                {"execution_id": execution_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_STOPPED
+                ),
+            )
+        elif (result.metadata or {}).get("recovery_reason") == (
+            "runtime_outcome_unknown"
+        ):
+            self._emit(
+                OutboxEventType.EXECUTION_STARTED,
+                execution_id,
+                {"execution_id": execution_id, "workflow_id": result.workflow_id},
+            )
+            self._emit(
+                OutboxEventType.EXECUTION_RECOVERY_REQUIRED,
+                execution_id,
+                {
+                    "execution_id": execution_id,
+                    "reason": "runtime_outcome_unknown",
+                    "runtime_session_id": result.metadata.get(
+                        "runtime_session_id"
+                    ),
+                },
+            )
+        self._commit_outbox()
+        return result
+
+    def reconcile_runtime_outcome(
+        self,
+        execution_id: str,
+        *,
+        attempt_id: str | None = None,
+    ) -> Execution:
+        kwargs = {"attempt_id": attempt_id} if attempt_id is not None else {}
+        result = self._invoke_inner_mutation(
+            self._inner.reconcile_runtime_outcome,
+            execution_id,
+            **kwargs,
+        )
+        if not self._runtime_mutation_won():
+            return result
+        reconciliation = (result.metadata or {}).get(
+            "last_runtime_reconciliation",
+            {},
+        )
+        self._emit(
+            OutboxEventType.EXECUTION_RECONCILED,
+            execution_id,
+            {
+                "execution_id": execution_id,
+                "attempt_id": reconciliation.get("attempt_id"),
+                "input_sha256": reconciliation.get("input_sha256"),
+                "outcome": reconciliation.get("outcome"),
+                "runtime_session_id": reconciliation.get("session_id"),
+                "receipt_summary": self._runtime_receipt_summary(
+                    reconciliation.get("receipt", {})
+                ),
+                "runtime_binding": reconciliation.get("runtime_binding"),
+            },
+            idempotency_key=(
+                "runtime-reconcile:"
+                f"{reconciliation.get('attempt_id') or execution_id}"
+            ),
+        )
+        if result.status is ExecutionStatus.COMPLETED:
+            self._emit(
+                OutboxEventType.EXECUTION_COMPLETED,
+                execution_id,
+                {"execution_id": execution_id, "workflow_id": result.workflow_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_COMPLETED
+                ),
+            )
+        elif result.status is ExecutionStatus.FAILED:
+            self._emit(
+                OutboxEventType.EXECUTION_FAILED,
+                execution_id,
+                {"execution_id": execution_id, "error": result.error_message or ""},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_FAILED
+                ),
+            )
+        elif result.status is ExecutionStatus.CANCELLED:
+            self._emit(
+                OutboxEventType.EXECUTION_STOPPED,
+                execution_id,
+                {"execution_id": execution_id},
+                idempotency_key=self._lifecycle_idempotency_key(
+                    result, OutboxEventType.EXECUTION_STOPPED
+                ),
             )
         self._commit_outbox()
         return result
@@ -223,11 +427,20 @@ class OutboxExecutionControllerDecorator(IExecutionController):
         self,
         execution_id: str,
         modified_state: dict[str, Any] | None = None,
+        *,
+        graph: Any = None,
+        workflow: Any = None,
     ) -> Execution:
+        resume_kwargs: dict[str, Any] = {}
+        if graph is not None:
+            resume_kwargs["graph"] = graph
+        if workflow is not None:
+            resume_kwargs["workflow"] = workflow
         result = self._invoke_inner_mutation(
             self._inner.resume,
             execution_id,
             modified_state,
+            **resume_kwargs,
         )
         self._emit(
             OutboxEventType.EXECUTION_RESUMED,
@@ -242,10 +455,15 @@ class OutboxExecutionControllerDecorator(IExecutionController):
 
     def stop(self, execution_id: str) -> Execution:
         result = self._invoke_inner_mutation(self._inner.stop, execution_id)
+        if not self._runtime_mutation_won():
+            return result
         self._emit(
             OutboxEventType.EXECUTION_STOPPED,
             execution_id,
             {"execution_id": execution_id},
+            idempotency_key=self._lifecycle_idempotency_key(
+                result, OutboxEventType.EXECUTION_STOPPED
+            ),
         )
         self._commit_outbox()
         return result

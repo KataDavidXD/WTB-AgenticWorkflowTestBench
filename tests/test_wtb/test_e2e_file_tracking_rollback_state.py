@@ -33,6 +33,7 @@ def test_file_tracking_rollback_state_inspection(tmp_path):
         mode="development",
         data_dir=str(tmp_path),
         enable_file_tracking=True,
+        state_adapter_mode="langgraph",
     )
 
     # 2. Register project
@@ -44,6 +45,7 @@ def test_file_tracking_rollback_state_inspection(tmp_path):
     project = WorkflowProject(
         name="debug",
         graph_factory=lambda: builder,
+        runtime_backend="langgraph",
     )
     bench.register_project(project)
 

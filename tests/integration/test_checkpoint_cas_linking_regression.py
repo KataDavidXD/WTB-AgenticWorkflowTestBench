@@ -218,6 +218,10 @@ def test_rollback_resume_and_fork_resume_use_checkpoint_file_links(tmp_path):
         new_initial_state={"branch": "fork"},
     )
     assert forked.status == ExecutionStatus.PAUSED
+    fork_resume_checkpoint_id = forked.metadata.get("resume_checkpoint_id")
+    assert isinstance(fork_resume_checkpoint_id, str)
+    assert fork_resume_checkpoint_id
+    assert fork_resume_checkpoint_id != checkpoint_id
 
     advanced = controller.resume(forked.id)
     assert advanced.status == ExecutionStatus.COMPLETED
@@ -909,6 +913,10 @@ def test_fork_resume_restores_checkpoint_files_before_successor_reads(tmp_path):
     output_file.write_text("corrupted-after-prefix", encoding="utf-8")
     node_calls.clear()
     forked = controller.fork(execution.id, checkpoint_id)
+    fork_resume_checkpoint_id = forked.metadata.get("resume_checkpoint_id")
+    assert isinstance(fork_resume_checkpoint_id, str)
+    assert fork_resume_checkpoint_id
+    assert fork_resume_checkpoint_id != checkpoint_id
     resumed = controller.resume(
         forked.id,
         modified_state={"_output_files": {}},

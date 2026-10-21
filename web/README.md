@@ -2,6 +2,8 @@
 
 页面连接真实 WTB 服务，执行、检查点、文件版本、分叉、批量实验和审计都来自 SQLite 与 CAS。支持空数据库直接启动，执行图与状态来自注册项目。
 
+本页对应 WTB `0.4.0.dev0` 源码。控制台使用同一套 SDK、执行控制器和 runtime port；DeepSeek Harness、发布授权与外部投递需要各自显式配置，安装额外依赖不会自动改变控制台后端。
+
 ## 安装与启动
 
 仓库根目录创建 Python 3.11–3.13 环境并安装 API：
@@ -9,7 +11,7 @@
 ```sh
 python -m venv .venv
 # 激活环境后：
-python -m pip install -e ".[api,langgraph-sqlite]"
+python -m pip install -e ".[api]"
 python -m wtb.api.console --data-dir data/console --port 8000
 ```
 
@@ -86,4 +88,4 @@ npm run test:e2e
 
 可选环境变量：`WTB_E2E_PYTHON` 指定解释器，`WTB_E2E_CONFIG` 指定项目配置，`WTB_E2E_CHANNEL=chrome` 使用本机 Chrome，`WTB_E2E_PREVIEW=1` 验收已构建产物，`WTB_E2E_OUTPUT` 指定证据目录。解释器/配置相对路径从 `web` 目录解析。
 
-后端回归覆盖恢复/分叉、文件损坏不移动状态、状态编辑、手动检查点、循环、并行、失败隔离、任务并发限制和服务重启；前端回归覆盖空状态、变体归属、真实节点状态和历史尝试投影。本仓库 CI 分别运行默认项目及显式 LangGraph 项目。上表的原生模式由支持该协议的后端提供。
+后端回归覆盖恢复/分叉、文件损坏不移动状态、状态编辑、手动检查点、循环、并行、失败隔离、任务并发限制和服务重启；前端回归覆盖空状态、变体归属、真实节点状态和历史尝试投影。CI 分别运行无 LangGraph 原生模式及显式 LangGraph 模式。

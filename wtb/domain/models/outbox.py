@@ -63,6 +63,9 @@ class OutboxEventType(Enum):
     EXECUTION_STARTED = "execution_started"
     EXECUTION_COMPLETED = "execution_completed"
     EXECUTION_FAILED = "execution_failed"
+    EXECUTION_RECOVERY_REQUIRED = "execution_recovery_required"
+    EXECUTION_DISPATCH_PREPARED = "execution_dispatch_prepared"
+    EXECUTION_RECONCILED = "execution_reconciled"
     
     # Batch coordination events (v1.8 - 2026-02-05)
     EXECUTION_FORKED = "execution_forked"
@@ -224,7 +227,26 @@ class OutboxEvent:
             
         ISSUE-OB-002: Now supports idempotency keys for safe retries.
         """
+        event_id = (
+            str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    ":".join(
+                        (
+                            "wtb-outbox",
+                            event_type.value,
+                            aggregate_type,
+                            aggregate_id,
+                            idempotency_key,
+                        )
+                    ),
+                )
+            )
+            if idempotency_key is not None
+            else str(uuid.uuid4())
+        )
         return cls(
+            event_id=event_id,
             event_type=event_type,
             aggregate_type=aggregate_type,
             aggregate_id=aggregate_id,

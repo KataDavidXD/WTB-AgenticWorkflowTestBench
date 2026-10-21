@@ -45,6 +45,7 @@ from datetime import datetime
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
+from wtb.application.errors import PostCommitCleanupError
 from wtb.domain.interfaces.batch_runner import (
     BatchRunnerError,
     BatchRunnerExecutionError,
@@ -588,6 +589,17 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 workflow_graph, batch_workflow,
             )
                 
+        except PostCommitCleanupError as error:
+            outcome = error.committed_outcome
+            if isinstance(outcome, BatchTestResult):
+                outcome.cleanup_warning = str(error.cleanup_error)
+                logger.warning(
+                    "Variant %s committed successfully but cleanup failed: %s",
+                    combo.name,
+                    error.cleanup_error,
+                )
+                return outcome
+            raise
         except Exception as e:
             logger.error(f"Execution failed for {combo.name}: {e}")
             duration_ms = int((time.time() - start_time) * 1000)
@@ -657,7 +669,7 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
             success = execution.status == ExecutionStatus.COMPLETED
             error_msg = execution.error_message if not success else None
             
-            return BatchTestResult(
+            result = BatchTestResult(
                 combination_name=combo.name,
                 execution_id=execution.id,
                 success=success,
@@ -668,6 +680,8 @@ class ThreadPoolBatchTestRunner(IBatchTestRunner):
                 last_checkpoint_id=execution.checkpoint_id,
                 checkpoint_count=len(execution.state.execution_path) if execution.state else 0,
             )
+            managed.committed_outcome = result
+            return result
     
     def _execute_with_legacy_factories(
         self,

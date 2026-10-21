@@ -383,7 +383,7 @@ class TestSDKBatchTesting:
                 test_cases=[{"messages": [], "count": 0}],
             )
 
-    def test_threadpool_executes_registered_node_variant(self, wtb_sqlite):
+    def test_threadpool_executes_registered_node_variant(self, tmp_path):
         """ThreadPool must execute the selected registered implementation."""
         from tests.integration.test_real_file_control_flow_modes import (
             create_file_control_graph,
@@ -392,7 +392,13 @@ class TestSDKBatchTesting:
             import cloudpickle
         except ImportError:
             from ray import cloudpickle
-        from wtb.sdk import ExecutionConfig
+        from wtb.sdk import ExecutionConfig, WTBTestBench
+
+        wtb_sqlite = WTBTestBench.create(
+            mode="development",
+            data_dir=str(tmp_path),
+            state_adapter_mode="langgraph",
+        )
 
         def registered_failure(state):
             raise RuntimeError("registered variant executed")
@@ -400,6 +406,7 @@ class TestSDKBatchTesting:
         project = WorkflowProject(
             name=f"threadpool_registered_{uuid.uuid4().hex[:8]}",
             graph_factory=create_file_control_graph,
+            runtime_backend="langgraph",
             execution=ExecutionConfig(batch_executor="threadpool"),
         )
         project.register_variant(
@@ -438,6 +445,7 @@ class TestSDKBatchTesting:
         assert "registered variant executed" in (
             result.results[0].error_message or ""
         )
+        wtb_sqlite.close()
 
     def test_sequential_all_failed_marks_batch_failed(
         self,
@@ -453,6 +461,7 @@ class TestSDKBatchTesting:
         project = WorkflowProject(
             name=f"sequential_failure_{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
             execution=ExecutionConfig(batch_executor="sequential"),
         )
         project.register_variant("node_b", "fail", failing_variant)
@@ -995,6 +1004,7 @@ class TestSDKBatchTesting:
         project = WorkflowProject(
             name=f"interactive_{uuid.uuid4().hex[:8]}",
             graph_factory=interactive_graph_factory,
+            runtime_backend="langgraph",
             execution=ExecutionConfig(batch_executor="threadpool"),
         )
         wtb_inmemory.register_project(project)
@@ -1042,6 +1052,7 @@ class TestSDKBatchTesting:
         project = WorkflowProject(
             name=f"remote_fallback_{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
             execution=ExecutionConfig(batch_executor="threadpool"),
         )
         wtb_inmemory.register_project(project)
@@ -1081,6 +1092,7 @@ class TestSDKBatchTesting:
             project = WorkflowProject(
                 name=f"remote_by_value_{uuid.uuid4().hex[:8]}",
                 graph_factory=module.create_graph,
+                runtime_backend="langgraph",
                 execution=ExecutionConfig(batch_executor="threadpool"),
             )
             wtb_inmemory.register_project(project)

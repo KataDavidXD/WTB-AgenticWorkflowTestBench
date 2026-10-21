@@ -29,7 +29,7 @@ from wtb.domain.models import (
     WorkflowNode,
 )
 from wtb.domain.models.file_processing import CommitId, FileCommit
-from wtb.infrastructure.adapters import InMemoryStateAdapter
+from wtb.infrastructure.adapters import InMemoryStateAdapter, SqliteStateAdapter
 from wtb.infrastructure.database import (
     InMemoryUnitOfWork,
     SQLAlchemyUnitOfWork,
@@ -59,7 +59,9 @@ class TestWTBConfig:
         """Test development configuration preset."""
         config = WTBConfig.for_development()
         assert config.wtb_storage_mode == "sqlalchemy"
-        assert config.state_adapter_mode == "langgraph"
+        assert config.state_adapter_mode == "sqlite"
+        assert config.state_checkpoint_path.endswith("wtb_checkpoints.db")
+        assert config.langgraph_event_config is None
         assert "wtb.db" in config.wtb_db_url
         assert config.log_sql is True
     
@@ -69,14 +71,17 @@ class TestWTBConfig:
         config = WTBConfig.for_production(db_url)
         assert config.wtb_storage_mode == "sqlalchemy"
         assert config.wtb_db_url == db_url
-        assert config.state_adapter_mode == "langgraph"
+        assert config.state_adapter_mode == "sqlite"
+        assert config.state_checkpoint_path.endswith("wtb_checkpoints.db")
+        assert config.langgraph_event_config is None
         assert config.log_sql is False
     
     def test_for_standalone(self):
         """Test standalone configuration preset."""
         config = WTBConfig.for_standalone("data/test")
         assert config.wtb_storage_mode == "sqlalchemy"
-        assert config.state_adapter_mode == "langgraph"
+        assert config.state_adapter_mode == "sqlite"
+        assert config.state_checkpoint_path.endswith("wtb_checkpoints.db")
         assert "data/test/wtb.db" in config.wtb_db_url
 
     def test_for_ray_production_uses_supported_durable_backend(self):
@@ -86,7 +91,7 @@ class TestWTBConfig:
             ray_address="ray://cluster:10001",
         )
 
-        assert config.state_adapter_mode == "langgraph"
+        assert config.state_adapter_mode == "sqlite"
     
     def test_to_dict(self):
         """Test serialization to dictionary."""
@@ -304,6 +309,7 @@ class TestExecutionControllerFactory:
     def test_unavailable_langgraph_backend_fails_closed(self):
         """An explicitly durable backend must not degrade to memory."""
         config = WTBConfig.for_development()
+        config.state_adapter_mode = "langgraph"
 
         with (
             patch(
@@ -319,6 +325,7 @@ class TestExecutionControllerFactory:
         """Production checkpoint state must use its configured PostgreSQL URL."""
         db_url = "postgresql://user:pass@localhost/wtb"
         config = WTBConfig.for_production(db_url)
+        config.state_adapter_mode = "langgraph"
         postgres_config = object()
         adapter = object()
 
@@ -337,6 +344,11 @@ class TestExecutionControllerFactory:
                 "LangGraphStateAdapter",
                 return_value=adapter,
             ) as adapter_class,
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LANGGRAPH_AVAILABLE",
+                True,
+            ),
         ):
             result = ExecutionControllerFactory._create_state_adapter(config, None)
 
@@ -345,59 +357,26 @@ class TestExecutionControllerFactory:
         for_development.assert_not_called()
         adapter_class.assert_called_once_with(postgres_config)
 
-    def test_standalone_uses_sqlite_langgraph_config(self, tmp_path):
-        """Standalone checkpoint state must remain durable on local SQLite."""
+    def test_standalone_uses_wtb_native_sqlite(self, tmp_path):
+        """Standalone state remains durable without an optional runtime."""
         config = WTBConfig.for_standalone(str(tmp_path))
-        sqlite_config = object()
-        adapter = object()
-
-        with (
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LangGraphConfig.for_development",
-                return_value=sqlite_config,
-            ) as for_development,
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LangGraphConfig.for_production",
-            ) as for_production,
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LangGraphStateAdapter",
-                return_value=adapter,
-            ) as adapter_class,
-        ):
-            result = ExecutionControllerFactory._create_state_adapter(config, None)
-
-        assert result is adapter
-        expected_path = str(tmp_path / "wtb_checkpoints.db")
-        for_development.assert_called_once_with(expected_path)
-        for_production.assert_not_called()
-        adapter_class.assert_called_once_with(sqlite_config)
+        result = ExecutionControllerFactory._create_state_adapter(config, None)
+        try:
+            assert isinstance(result, SqliteStateAdapter)
+            assert result.storage_path == (tmp_path / "wtb_checkpoints.db").resolve()
+        finally:
+            result.close()
 
     def test_custom_sqlite_checkpoint_path_is_used_by_state_adapter(self, tmp_path):
         config = WTBConfig.for_development(str(tmp_path))
         custom_path = str(tmp_path / "custom-checkpoints.db")
-        config.langgraph_checkpoint_path = custom_path
-        sqlite_config = object()
-        adapter = object()
-
-        with (
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LangGraphConfig.for_development",
-                return_value=sqlite_config,
-            ) as for_development,
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LangGraphStateAdapter",
-                return_value=adapter,
-            ),
-        ):
-            result = ExecutionControllerFactory._create_state_adapter(config, None)
-
-        assert result is adapter
-        for_development.assert_called_once_with(custom_path)
+        config.state_checkpoint_path = custom_path
+        result = ExecutionControllerFactory._create_state_adapter(config, None)
+        try:
+            assert isinstance(result, SqliteStateAdapter)
+            assert result.storage_path == (tmp_path / "custom-checkpoints.db").resolve()
+        finally:
+            result.close()
     
     def test_create_with_dependencies(self):
         """Test creating controller with explicit dependencies."""
@@ -508,30 +487,20 @@ class TestDurableFactoryFailClosed:
         uow.__exit__.return_value = None
         return uow
 
-    def test_batch_coordinator_development_requires_langgraph(self, tmp_path):
-        with (
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LANGGRAPH_AVAILABLE",
-                False,
-            ),
-            pytest.raises(ImportError, match="LangGraph"),
-        ):
-            BatchCoordinatorFactory.create_for_development(str(tmp_path))
+    def test_batch_coordinator_development_uses_native_sqlite(self, tmp_path):
+        coordinator = BatchCoordinatorFactory.create_for_development(str(tmp_path))
+        try:
+            assert isinstance(coordinator._state_adapter, SqliteStateAdapter)
+        finally:
+            coordinator.close()
 
-    def test_bench_development_requires_langgraph(self, tmp_path):
-        uow = self._mock_uow()
-
-        with (
-            patch.object(UnitOfWorkFactory, "create", return_value=uow),
-            patch(
-                "wtb.infrastructure.adapters.langgraph_state_adapter."
-                "LANGGRAPH_AVAILABLE",
-                False,
-            ),
-            pytest.raises(ImportError, match="LangGraph"),
-        ):
-            WTBTestBenchFactory.create_for_development(str(tmp_path))
+    def test_bench_development_uses_native_sqlite(self, tmp_path):
+        bench = WTBTestBenchFactory.create_for_development(str(tmp_path))
+        try:
+            inner = getattr(bench._exec_ctrl, "_inner", bench._exec_ctrl)
+            assert isinstance(inner._state_adapter, SqliteStateAdapter)
+        finally:
+            bench.close()
 
     def test_named_langgraph_factory_rejects_unknown_checkpointer(self, tmp_path):
         uow = self._mock_uow()
@@ -543,6 +512,11 @@ class TestDurableFactoryFailClosed:
                 "wtb.infrastructure.adapters.langgraph_state_adapter."
                 "LangGraphStateAdapter",
                 return_value=adapter,
+            ),
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LANGGRAPH_AVAILABLE",
+                True,
             ),
             pytest.raises(ValueError, match="Unsupported checkpointer type"),
         ):
@@ -607,6 +581,11 @@ class TestDurableFactoryFailClosed:
                 "LangGraphStateAdapter",
                 return_value=adapter,
             ),
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LANGGRAPH_AVAILABLE",
+                True,
+            ),
             patch.object(
                 ExecutionControllerFactory,
                 "_create_controller",
@@ -636,6 +615,60 @@ class TestDurableFactoryFailClosed:
         for_development.assert_called_once_with(custom_path)
         batch_config = create_batch_runner.call_args.args[0]
         assert batch_config.langgraph_checkpoint_path == custom_path
+
+    def test_named_langgraph_factory_preserves_explicit_ray_and_grpc(self, tmp_path):
+        uow = self._mock_uow()
+        adapter = MagicMock()
+        ray_runner = MagicMock()
+
+        with (
+            patch.object(UnitOfWorkFactory, "create", return_value=uow),
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LangGraphStateAdapter",
+                return_value=adapter,
+            ),
+            patch(
+                "wtb.infrastructure.adapters.langgraph_state_adapter."
+                "LANGGRAPH_AVAILABLE",
+                True,
+            ),
+            patch.object(
+                ExecutionControllerFactory,
+                "_create_controller",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "wtb.application.factories.OutboxExecutionControllerDecorator",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "wtb.application.factories.BatchTestRunnerFactory.create_ray",
+                return_value=ray_runner,
+            ) as create_ray,
+            patch(
+                "wtb.application.factories.BatchTestRunnerFactory.create_threadpool",
+            ) as create_threadpool,
+            patch.object(
+                NodeReplacerFactory,
+                "create_with_dependencies",
+                return_value=MagicMock(),
+            ),
+        ):
+            bench = WTBTestBenchFactory.create_with_langgraph(
+                checkpointer_type="sqlite",
+                data_dir=str(tmp_path),
+                enable_ray=True,
+                grpc_env_url="localhost:50051",
+            )
+
+        assert bench is not None
+        create_threadpool.assert_not_called()
+        create_ray.assert_called_once()
+        batch_config = create_ray.call_args.args[0]
+        assert batch_config.ray_enabled is True
+        assert batch_config.environment_provider == "grpc"
+        assert batch_config.grpc_env_manager_url == "localhost:50051"
 
 class TestNodeReplacerFactory:
     """Tests for NodeReplacerFactory."""

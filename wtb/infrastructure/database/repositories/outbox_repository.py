@@ -9,6 +9,7 @@ Updated: 2026-01-28 - Refactored to use OutboxMapper for shared logic (ISSUE-FS-
 from datetime import datetime
 
 from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from wtb.domain.interfaces.repositories import IOutboxRepository
@@ -41,9 +42,32 @@ class SQLAlchemyOutboxRepository(IOutboxRepository):
     
     def add(self, event: OutboxEvent) -> OutboxEvent:
         """Add a new outbox event."""
+        if event.idempotency_key is not None:
+            existing = (
+                self._session.query(OutboxEventORM)
+                .filter(OutboxEventORM.event_id == event.event_id)
+                .first()
+            )
+            if existing is not None:
+                return self._to_domain(existing)
         orm = self._to_orm(event)
-        self._session.add(orm)
-        self._session.flush()
+        try:
+            if event.idempotency_key is None:
+                self._session.add(orm)
+                self._session.flush()
+            else:
+                with self._session.begin_nested():
+                    self._session.add(orm)
+                    self._session.flush()
+        except IntegrityError:
+            existing = (
+                self._session.query(OutboxEventORM)
+                .filter(OutboxEventORM.event_id == event.event_id)
+                .first()
+            )
+            if existing is None:
+                raise
+            return self._to_domain(existing)
         return self._to_domain(orm)
     
     def get_by_id(self, event_id: str) -> OutboxEvent | None:
