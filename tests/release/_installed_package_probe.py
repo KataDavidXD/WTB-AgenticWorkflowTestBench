@@ -13,6 +13,7 @@ from wtb.infrastructure.runtimes import (
     DeepSeekHarnessRuntime,
     DeepSeekHarnessWorkflow,
 )
+from wtb.infrastructure.database.async_unit_of_work import AsyncSQLAlchemyUnitOfWork
 from wtb.sdk import WTBTestBench
 
 
@@ -25,6 +26,7 @@ assert not any(
 )
 assert wtb is not None
 assert WTBTestBench is not None
+assert AsyncSQLAlchemyUnitOfWork is not None
 
 expect_source_extra = os.environ.get("WTB_EXPECT_DSH_SOURCE_EXTRA") == "1"
 assert (importlib.util.find_spec("pydantic") is not None) is expect_source_extra
