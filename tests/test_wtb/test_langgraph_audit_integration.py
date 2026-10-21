@@ -783,8 +783,8 @@ class TestFactoryFunctions:
         # Development config
         dev_config = WTBConfig.for_development()
         assert dev_config.wtb_storage_mode == "sqlalchemy"
-        assert dev_config.langgraph_event_config is not None
-        assert dev_config.langgraph_event_config.emit_audit_events is True
+        assert dev_config.langgraph_event_config is None
+        assert dev_config.state_adapter_mode == "sqlite"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

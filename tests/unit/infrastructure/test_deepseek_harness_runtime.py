@@ -4,6 +4,7 @@ import builtins
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import threading
 from dataclasses import dataclass
@@ -13,12 +14,14 @@ from typing import Any, Never, get_type_hints
 import pytest
 
 from wtb.domain.interfaces.workflow_runtime import (
+    RuntimeBindingEnvelope,
     RuntimeBindingMismatchError,
     RuntimeOutcomeUnknownError,
     RuntimePreDispatchError,
     RuntimeTerminalError,
     RuntimeTerminalOutcome,
 )
+from wtb.application.services.execution_controller import ExecutionController
 
 from wtb.infrastructure.runtimes.deepseek_harness import (
     DeepSeekHarnessRuntime,
@@ -61,6 +64,9 @@ class _RunResult:
     events: list[dict[str, Any]] | None = None
     session_root: str | None = "sessions"
     runtime_binding: object | None = None
+    reference_snapshot: object | None = None
+    reference_snapshots: object | None = None
+    memory_mode: str | None = None
 
 
 class _Harness:
@@ -82,6 +88,8 @@ class _Harness:
         self.binding_calls = 0
         self.process_generation = "generation-1"
         self.expected_process_generations: list[str | None] = []
+        self.reference_calls: list[list[dict[str, object]] | None] = []
+        self.memory_mode_calls: list[str | None] = []
 
     def get_runtime_binding(self) -> _RuntimeBinding:
         self.binding_calls += 1
@@ -101,9 +109,13 @@ class _Harness:
         session_id: str,
         attempt_id: str | None = None,
         input_sha256: str | None = None,
+        references: list[dict[str, object]] | None = None,
+        memory_mode: str | None = None,
         expected_process_generation: str | None = None,
     ) -> _RunResult:
         self.expected_process_generations.append(expected_process_generation)
+        self.reference_calls.append(references)
+        self.memory_mode_calls.append(memory_mode)
         if (
             expected_process_generation is not None
             and expected_process_generation != self.process_generation
@@ -286,8 +298,120 @@ def test_runtime_invokes_dsh_in_execution_scoped_session_and_returns_receipt() -
     assert runtime.history("exec-42") == (snapshot,)
 
 
+def test_durable_runtime_passes_structured_references_and_records_capture() -> None:
+    reference_snapshot = {
+        "schemaVersion": 1,
+        "contentSha256": "e" * 64,
+        "references": [
+            {
+                "sessionId": "source-session",
+                "label": "source",
+                "capturedThroughSeq": 17,
+                "compacted": True,
+                "originalMessages": 5,
+                "retainedMessages": 2,
+                "omittedMessages": 3,
+                "omittedBytes": 144,
+                "truncated": False,
+                "inputIndex": 0,
+            }
+        ],
+    }
+    harness = _Harness(
+        _RunResult(
+            session_id="wtb-test-exec-ref",
+            reference_snapshot=reference_snapshot,
+            events=[
+                {
+                    "type": "turn/end",
+                    "seq": 1,
+                    "data": {"reason": {"kind": "completed"}},
+                }
+            ],
+        )
+    )
+    runtime = DeepSeekHarnessRuntime(
+        harness=harness,
+        session_namespace=_TEST_NAMESPACE,
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    runtime.bind(
+        DeepSeekHarnessWorkflow(
+            reference_key="memory_references",
+            memory_mode="S0",
+        )
+    )
+    state = {
+        "prompt": "use the source",
+        "memory_references": [
+            {"sessionId": "source-session", "label": "source"}
+        ],
+    }
+    plan = _prepare(runtime, state, execution_id="exec-ref", attempt_id="attempt-ref")
+
+    output = runtime.invoke(
+        state,
+        execution_id="exec-ref",
+        attempt_id="attempt-ref",
+        binding=plan.binding,
+        attempt_metadata=plan.metadata,
+    )
+
+    assert harness.reference_calls == [state["memory_references"]]
+    assert output["_dsh"]["memory_mode"] == "S0"
+    assert output["_dsh"]["reference_snapshot"] == reference_snapshot
+    assert output["_dsh"]["reference_snapshot"]["references"][0][
+        "capturedThroughSeq"
+    ] == 17
 
 
+def test_durable_runtime_passes_m0_and_records_ordered_step_captures() -> None:
+    latest = {
+        "schemaVersion": 1,
+        "contentSha256": "f" * 64,
+        "references": [{
+            "sessionId": "source-session", "label": "source",
+            "capturedThroughSeq": 22, "compacted": False,
+            "originalMessages": 1, "retainedMessages": 1,
+            "omittedMessages": 0, "omittedBytes": 0,
+            "truncated": False, "inputIndex": 0,
+        }],
+    }
+    captures = [
+        {**latest, "contentSha256": "e" * 64, "turn": 1, "step": 1, "referenceEventSeq": 8},
+        {**latest, "turn": 1, "step": 2, "referenceEventSeq": 15},
+    ]
+    harness = _Harness(_RunResult(
+        session_id="wtb-test-exec-m0",
+        reference_snapshot=latest,
+        reference_snapshots=captures,
+        memory_mode="M0",
+        events=[{"type": "turn/end", "seq": 16, "data": {"reason": {"kind": "completed"}}}],
+    ))
+    runtime = DeepSeekHarnessRuntime(
+        harness=harness,
+        session_namespace=_TEST_NAMESPACE,
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    runtime.bind(DeepSeekHarnessWorkflow(reference_key="memory_references", memory_mode="M0"))
+    state = {
+        "prompt": "track source",
+        "memory_references": [{"sessionId": "source-session", "label": "source"}],
+    }
+    plan = _prepare(runtime, state, execution_id="exec-m0", attempt_id="attempt-m0")
+
+    output = runtime.invoke(
+        state,
+        execution_id="exec-m0",
+        attempt_id="attempt-m0",
+        binding=plan.binding,
+        attempt_metadata=plan.metadata,
+    )
+
+    assert harness.memory_mode_calls == ["M0"]
+    assert output["_dsh"]["memory_mode"] == "M0"
+    assert output["_dsh"]["reference_snapshot"] == latest
+    assert output["_dsh"]["reference_snapshots"] == captures
 
 
 def test_runtime_receipt_omits_event_payloads_by_default() -> None:
@@ -601,6 +725,41 @@ def test_runtime_satisfies_framework_neutral_protocol() -> None:
     assert isinstance(runtime, WorkflowRuntime)
 
 
+def test_keyless_sdk_factory_runs_project_and_closes_owned_harness() -> None:
+    from wtb.domain.models.workflow import ExecutionStatus
+    from wtb.sdk import WTBTestBench
+    from wtb.sdk.workflow_project import WorkflowProject
+
+    harness = _Harness()
+    runtime = DeepSeekHarnessRuntime(
+        harness_factory=lambda: harness,
+        session_namespace=_TEST_NAMESPACE,
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    bench = WTBTestBench.create_with_runtime(runtime)
+    project = WorkflowProject(
+        name="deepseek-runtime",
+        graph_factory=lambda: DeepSeekHarnessWorkflow(),
+    )
+
+    try:
+        bench.register_project(project)
+        result = bench.run(
+            project=project.name,
+            initial_state={"prompt": "keyless smoke"},
+        )
+
+        assert result.status is ExecutionStatus.COMPLETED
+        assert result.state.workflow_variables["answer"] == "done"
+        assert harness.calls == [
+            ("keyless smoke", f"wtb-test-{result.id}"),
+        ]
+        assert bench.supports_time_travel() is False
+        assert bench.supports_forking() is False
+    finally:
+        bench.close()
+
+    assert harness.closed is True
 
 
 def test_default_factory_reports_missing_optional_sdk(
@@ -1180,6 +1339,39 @@ def test_attempt_identity_is_forwarded_to_public_sdk_and_receipt() -> None:
     assert output["_dsh"]["attempt_status"] == "terminal"
 
 
+def test_controller_fence_and_adapter_use_one_order_independent_input_hash() -> None:
+    controller_state = {
+        "prompt": "same",
+        "nested": {"b": [2, {"z": None}], "a": 1},
+    }
+    adapter_state = {
+        "nested": {"a": 1, "b": [2, {"z": None}]},
+        "prompt": "same",
+    }
+    expected_hash = ExecutionController._runtime_input_sha256(controller_state)
+    harness = _Harness()
+    runtime = DeepSeekHarnessRuntime(
+        harness=harness,
+        session_namespace=_TEST_NAMESPACE,
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    runtime.bind(DeepSeekHarnessWorkflow())
+
+    plan = _prepare(
+        runtime,
+        adapter_state,
+        execution_id="exec-canonical-hash",
+        attempt_id="attempt-canonical-hash",
+    )
+    runtime.invoke(
+        adapter_state,
+        execution_id="exec-canonical-hash",
+        attempt_id="attempt-canonical-hash",
+        binding=plan.binding,
+        attempt_metadata=plan.metadata,
+    )
+
+    assert harness.identity_calls[0][3] == expected_hash
 
 
 def test_non_json_state_is_rejected_before_deepseek_dispatch() -> None:
@@ -1431,6 +1623,70 @@ def test_cancel_uses_exact_durable_attempt_identity() -> None:
     ]
 
 
+def test_cancel_reference_workflow_preserves_validated_reference_receipt() -> None:
+    reference_snapshot = {
+        "schemaVersion": 1,
+        "contentSha256": "e" * 64,
+        "references": [
+            {
+                "sessionId": "source-session",
+                "label": "source",
+                "capturedThroughSeq": 17,
+                "compacted": False,
+                "originalMessages": 1,
+                "retainedMessages": 1,
+                "omittedMessages": 0,
+                "omittedBytes": 0,
+                "truncated": False,
+                "inputIndex": 0,
+            }
+        ],
+    }
+
+    class ReferenceCancelHarness(_Harness):
+        def cancel_attempt(self, **kwargs) -> _RunResult:
+            result = super().cancel_attempt(**kwargs)
+            result.reference_snapshot = reference_snapshot
+            result.memory_mode = "S0"
+            return result
+
+    harness = ReferenceCancelHarness(attempts={})
+    runtime = DeepSeekHarnessRuntime(
+        harness=harness,
+        session_namespace=_TEST_NAMESPACE,
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    runtime.bind(
+        DeepSeekHarnessWorkflow(
+            reference_key="memory_references",
+            memory_mode="S0",
+        )
+    )
+    state = {
+        "prompt": "use the source",
+        "memory_references": [
+            {"sessionId": "source-session", "label": "source"}
+        ],
+    }
+    input_sha256 = runtime._state_sha256(state)
+    plan = runtime.prepare_attempt(
+        "exec-reference-cancel",
+        "attempt-reference-cancel",
+        input_sha256=input_sha256,
+    )
+
+    receipt = runtime.cancel(
+        "exec-reference-cancel",
+        "attempt-reference-cancel",
+        binding=plan.binding,
+        input_state=state,
+        input_sha256=input_sha256,
+        attempt_metadata=plan.metadata,
+    )
+
+    assert receipt.outcome is RuntimeTerminalOutcome.CANCELLED
+    assert receipt.receipt["memory_mode"] == "S0"
+    assert receipt.receipt["reference_snapshot"] == reference_snapshot
 
 
 def test_cancel_rejects_input_state_drift_before_cancel_io() -> None:
@@ -1569,10 +1825,280 @@ def test_cancel_does_not_acknowledge_crash_repaired_interrupted_attempt() -> Non
         )
 
 
+def test_sqlite_fence_restart_not_found_stays_recovery_required(
+    tmp_path: Path,
+) -> None:
+    from wtb.domain.models.workflow import ExecutionStatus
+    from wtb.sdk import WTBTestBench
+    from wtb.sdk.workflow_project import WorkflowProject
+
+    attempts: dict[tuple[str, str], _RunResult] = {}
+
+    class RequestNeverArrivedHarness(_Harness):
+        def run(
+            self,
+            prompt: object,
+            *,
+            session_id: str,
+            attempt_id: str | None = None,
+            input_sha256: str | None = None,
+            expected_process_generation: str | None = None,
+        ) -> _RunResult:
+            if expected_process_generation != self.process_generation:
+                raise RuntimeGenerationMismatchError
+            self.calls.append((prompt, session_id))
+            self.identity_calls.append(
+                (prompt, session_id, attempt_id, input_sha256)
+            )
+            raise ConnectionError("request never reached DSH")
+
+    first_harness = RequestNeverArrivedHarness(attempts=attempts)
+    first_runtime = DeepSeekHarnessRuntime(
+        harness=first_harness,
+        session_namespace="restart-redrive",
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    first_runtime.bind(DeepSeekHarnessWorkflow())
+    first_bench = WTBTestBench.create_with_runtime(
+        first_runtime,
+        data_dir=str(tmp_path / "wtb-redrive"),
+    )
+    project = WorkflowProject(
+        name="dsh-redrive",
+        graph_factory=DeepSeekHarnessWorkflow,
+    )
+    first_bench.register_project(project)
+    try:
+        fenced = first_bench.run(
+            project=project.name,
+            initial_state={"prompt": "redrive exactly once"},
+        )
+        assert fenced.status is ExecutionStatus.RUNNING
+        attempt_id = fenced.metadata["runtime_attempt"]["attempt_id"]
+        assert attempts == {}
+    finally:
+        first_bench.close()
+
+    restarted_harness = _Harness(attempts=attempts)
+    restarted_runtime = DeepSeekHarnessRuntime(
+        harness=restarted_harness,
+        session_namespace="restart-redrive",
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    restarted_runtime.bind(DeepSeekHarnessWorkflow())
+    restarted_bench = WTBTestBench.create_with_runtime(
+        restarted_runtime,
+        data_dir=str(tmp_path / "wtb-redrive"),
+    )
+    try:
+        with pytest.raises(RuntimeOutcomeUnknownError, match="not found"):
+            restarted_bench.reconcile_runtime_outcome(
+                fenced.id,
+                attempt_id=attempt_id,
+            )
+        unresolved = restarted_bench.get_execution(fenced.id)
+        assert unresolved.status is ExecutionStatus.RUNNING
+        assert unresolved.metadata["recovery_required"] is True
+        assert restarted_harness.identity_calls == []
+        assert attempts == {}
+    finally:
+        restarted_bench.close()
 
 
+def test_sqlite_restart_looks_up_terminal_after_wtb_final_commit_loss(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from wtb.domain.models.workflow import ExecutionStatus
+    from wtb.sdk import WTBTestBench
+    from wtb.sdk.workflow_project import WorkflowProject
+
+    attempts: dict[tuple[str, str], _RunResult] = {}
+    first_harness = _Harness(attempts=attempts)
+    first_runtime = DeepSeekHarnessRuntime(
+        harness=first_harness,
+        session_namespace="restart-terminal",
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    first_runtime.bind(DeepSeekHarnessWorkflow())
+    data_dir = tmp_path / "wtb-terminal"
+    first_bench = WTBTestBench.create_with_runtime(
+        first_runtime,
+        data_dir=str(data_dir),
+    )
+    project = WorkflowProject(
+        name="dsh-terminal",
+        graph_factory=DeepSeekHarnessWorkflow,
+    )
+    first_bench.register_project(project)
+    workflow = first_bench._project_service.get_workflow_by_name(project.name)
+    assert workflow is not None
+    created = first_bench._exec_ctrl.create_execution(
+        workflow,
+        initial_state={"prompt": "commit once"},
+    )
+    first_bench._exec_ctrl._commit_fn = MagicMock(
+        side_effect=RuntimeError("WTB final commit lost")
+    )
+    try:
+        with pytest.raises(RuntimeError, match="final commit lost"):
+            first_bench._exec_ctrl.run(
+                created.id,
+                workflow=DeepSeekHarnessWorkflow(),
+            )
+        assert len(attempts) == 1
+        attempt_id = next(iter(attempts))[1]
+    finally:
+        first_bench.close()
+
+    restarted_harness = _Harness(attempts=attempts)
+    restarted_runtime = DeepSeekHarnessRuntime(
+        harness=restarted_harness,
+        session_namespace="restart-terminal",
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    restarted_runtime.bind(DeepSeekHarnessWorkflow())
+    restarted_bench = WTBTestBench.create_with_runtime(
+        restarted_runtime,
+        data_dir=str(data_dir),
+    )
+    try:
+        recovered = restarted_bench.reconcile_runtime_outcome(
+            created.id,
+            attempt_id=attempt_id,
+        )
+        assert recovered.status is ExecutionStatus.COMPLETED
+        assert recovered.state.workflow_variables["answer"] == "done"
+        assert restarted_harness.calls == []
+        assert len(attempts) == 1
+    finally:
+        restarted_bench.close()
 
 
+def test_two_sqlite_reconcilers_commit_one_terminal_transition_and_outbox(
+    tmp_path: Path,
+) -> None:
+    from wtb.domain.models.outbox import OutboxEventType
+    from wtb.domain.models.workflow import ExecutionStatus
+    from wtb.sdk import WTBTestBench
+    from wtb.sdk.workflow_project import WorkflowProject
+
+    attempts: dict[tuple[str, str], _RunResult] = {}
+
+    class CommitThenDisconnectHarness(_Harness):
+        def run(
+            self,
+            prompt: object,
+            *,
+            session_id: str,
+            attempt_id: str | None = None,
+            input_sha256: str | None = None,
+            expected_process_generation: str | None = None,
+        ) -> _RunResult:
+            super().run(
+                prompt,
+                session_id=session_id,
+                attempt_id=attempt_id,
+                input_sha256=input_sha256,
+                expected_process_generation=expected_process_generation,
+            )
+            raise ConnectionError("terminal response lost")
+
+    data_dir = tmp_path / "wtb-double-reconcile"
+    initial_runtime = DeepSeekHarnessRuntime(
+        harness=CommitThenDisconnectHarness(attempts=attempts),
+        session_namespace="double-reconcile",
+        runtime_config_sha256=_TEST_CONFIG_SHA256,
+    )
+    initial_runtime.bind(DeepSeekHarnessWorkflow())
+    initial_bench = WTBTestBench.create_with_runtime(
+        initial_runtime,
+        data_dir=str(data_dir),
+    )
+    project = WorkflowProject(
+        name="double-reconcile",
+        graph_factory=DeepSeekHarnessWorkflow,
+    )
+    initial_bench.register_project(project)
+    try:
+        fenced = initial_bench.run(
+            project=project.name,
+            initial_state={"prompt": "one terminal transition"},
+        )
+        assert fenced.status is ExecutionStatus.RUNNING
+        attempt_id = fenced.metadata["runtime_attempt"]["attempt_id"]
+    finally:
+        initial_bench.close()
+
+    lookup_barrier = threading.Barrier(2)
+
+    class BarrierLookupHarness(_Harness):
+        def get_attempt(
+            self,
+            *,
+            session_id: str,
+            attempt_id: str,
+            input_sha256: str,
+        ) -> _RunResult | None:
+            lookup_barrier.wait(timeout=3)
+            return super().get_attempt(
+                session_id=session_id,
+                attempt_id=attempt_id,
+                input_sha256=input_sha256,
+            )
+
+    benches = []
+    for _ in range(2):
+        runtime = DeepSeekHarnessRuntime(
+            harness=BarrierLookupHarness(attempts=attempts),
+            session_namespace="double-reconcile",
+            runtime_config_sha256=_TEST_CONFIG_SHA256,
+        )
+        runtime.bind(DeepSeekHarnessWorkflow())
+        benches.append(
+            WTBTestBench.create_with_runtime(runtime, data_dir=str(data_dir))
+        )
+
+    results: list[Any] = []
+    errors: list[BaseException] = []
+
+    def reconcile(bench: Any) -> None:
+        try:
+            results.append(
+                bench.reconcile_runtime_outcome(
+                    fenced.id,
+                    attempt_id=attempt_id,
+                )
+            )
+        except BaseException as error:  # noqa: BLE001 - asserted below
+            errors.append(error)
+
+    workers = [
+        threading.Thread(target=reconcile, args=(bench,)) for bench in benches
+    ]
+    try:
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+        assert all(not worker.is_alive() for worker in workers)
+        assert errors == []
+        assert len(results) == 2
+        assert all(result.status is ExecutionStatus.COMPLETED for result in results)
+
+        outbox = benches[0]._exec_ctrl._inner._uow.outbox.list_all(limit=100)
+        assert sum(
+            event.event_type is OutboxEventType.EXECUTION_RECONCILED
+            for event in outbox
+        ) == 1
+        assert sum(
+            event.event_type is OutboxEventType.EXECUTION_COMPLETED
+            for event in outbox
+        ) == 1
+    finally:
+        for bench in benches:
+            bench.close()
 
 
 def test_receipt_event_count_limit_omits_evidence_without_changing_success() -> None:
@@ -1776,7 +2302,12 @@ def test_patch_checkpoint_has_never_return_annotation() -> None:
 def test_official_sdk_jsonrpc_wire_allows_post_terminal_event_without_seq(
     tmp_path: Path,
 ) -> None:
-    checkout = Path(__file__).resolve().parents[4] / "deepseek-harness"
+    explicit = os.environ.get("WTB_DSH_SOURCE_PATH")
+    checkout = (
+        Path(explicit).expanduser().resolve()
+        if explicit
+        else Path(__file__).resolve().parents[4] / "deepseek-harness"
+    )
     sdk_package = checkout / "python" / "sdk" / "src" / "deepseek_harness"
     installed_sdk_available = importlib.util.find_spec("deepseek_harness") is not None
     source_sdk_available = (sdk_package / "__init__.py").is_file()
@@ -1807,7 +2338,6 @@ for line in sys.stdin:
             "id": request["id"],
             "result": {
                 "serverInfo": {"name": "durable-wire-fake"},
-                "runtimeBinding": runtime_binding,
             },
         }), flush=True)
     elif method == "session/attempt.binding":

@@ -34,6 +34,7 @@ def test_file_tracking_basic(tmp_path):
         mode="development",
         data_dir=str(tmp_path),
         enable_file_tracking=True,
+        state_adapter_mode="langgraph",
     )
 
     # 2. Create and register project
@@ -45,6 +46,7 @@ def test_file_tracking_basic(tmp_path):
     project = WorkflowProject(
         name="test_file_tracking",
         graph_factory=lambda: builder,
+        runtime_backend="langgraph",
     )
     bench.register_project(project)
 

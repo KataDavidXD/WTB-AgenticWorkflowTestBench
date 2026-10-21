@@ -245,6 +245,7 @@ class TestFullIntegrationNodeReplacement:
         project = WorkflowProject(
             name=f"replace-env-variant-{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
             environment=EnvironmentConfig(
                 granularity="variant",
                 default_env=EnvSpec(dependencies=["base-package"]),
@@ -282,6 +283,7 @@ class TestFullIntegrationNodeReplacement:
         project = WorkflowProject(
             name=f"replace-file-track-{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
             file_tracking=SDKFileTrackingConfig(
                 enabled=True,
                 tracked_paths=[str(full_integration_workspace / "data")],
@@ -534,6 +536,7 @@ class TestFullIntegrationRollback:
         project = WorkflowProject(
             name=f"rollback-node-variant-{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
         )
         
         def variant_impl(state):
@@ -560,6 +563,7 @@ class TestFullIntegrationRollback:
         project = WorkflowProject(
             name=f"rollback-continue-{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
         )
         
         def fast_impl(state):
@@ -1287,6 +1291,7 @@ class TestFullIntegrationCombined:
         project = WorkflowProject(
             name=f"lifecycle-{uuid.uuid4().hex[:8]}",
             graph_factory=simple_graph_factory,
+            runtime_backend="langgraph",
             description="Complete lifecycle test",
             environment=EnvironmentConfig(
                 granularity="workflow",

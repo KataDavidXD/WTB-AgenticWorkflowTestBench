@@ -1,6 +1,7 @@
 """Execution repository implementation."""
 
 import json
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -76,6 +77,48 @@ class ExecutionRepository(BaseRepository[Execution, ExecutionORM], IExecutionRep
             breakpoints=json.dumps(domain.breakpoints),
             metadata_=json.dumps(domain.metadata),
         )
+
+    def compare_and_swap(
+        self,
+        entity: Execution,
+        *,
+        expected_status: ExecutionStatus,
+        expected_metadata: dict[str, Any],
+    ) -> bool:
+        """Atomically advance one execution from an exact durable version."""
+        candidate = self._to_orm(entity)
+        updated = (
+            self._session.query(ExecutionORM)
+            .filter(
+                ExecutionORM.id == entity.id,
+                ExecutionORM.status == expected_status.value,
+                ExecutionORM.metadata_ == json.dumps(expected_metadata),
+            )
+            .update(
+                {
+                    ExecutionORM.workflow_id: candidate.workflow_id,
+                    ExecutionORM.status: candidate.status,
+                    ExecutionORM.current_node_id: candidate.current_node_id,
+                    ExecutionORM.current_state: candidate.current_state,
+                    ExecutionORM.execution_path: candidate.execution_path,
+                    ExecutionORM.agentgit_session_id: candidate.agentgit_session_id,
+                    ExecutionORM.agentgit_checkpoint_id: (
+                        candidate.agentgit_checkpoint_id
+                    ),
+                    ExecutionORM.started_at: candidate.started_at,
+                    ExecutionORM.completed_at: candidate.completed_at,
+                    ExecutionORM.created_at: candidate.created_at,
+                    ExecutionORM.error_message: candidate.error_message,
+                    ExecutionORM.error_node_id: candidate.error_node_id,
+                    ExecutionORM.breakpoints: candidate.breakpoints,
+                    ExecutionORM.metadata_: candidate.metadata_,
+                },
+                synchronize_session=False,
+            )
+        )
+        self._session.flush()
+        self._session.expire_all()
+        return updated == 1
     
     def find_by_workflow(self, workflow_id: str) -> list[Execution]:
         """Find all executions for a workflow."""

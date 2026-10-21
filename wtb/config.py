@@ -367,7 +367,9 @@ class WTBConfig:
         wtb_storage_mode: Storage backend - "inmemory" or "sqlalchemy"
         wtb_db_url: Database URL for sqlalchemy mode
         agentgit_db_path: Path to AgentGit SQLite database
-        state_adapter_mode: State adapter - "inmemory" or "langgraph"
+        state_adapter_mode: State adapter - "inmemory", "sqlite", or the
+            explicitly optional "langgraph"
+        state_checkpoint_path: WTB-native SQLite checkpoint database
         data_dir: Base directory for data files
         ray_enabled: Enable Ray for batch testing
         ray_config: Ray cluster configuration
@@ -389,9 +391,11 @@ class WTBConfig:
     # AgentGit database path
     agentgit_db_path: str = "data/agentgit.db"
     
-    # State adapter mode: "inmemory" or "langgraph"
+    # State adapter mode: "inmemory", "sqlite", or explicit "langgraph"
     state_adapter_mode: str = "inmemory"
-    # Explicit SQLite path shared by main and batch LangGraph adapters
+    # Framework-neutral durable state used by the default WTB composition.
+    state_checkpoint_path: str | None = None
+    # Explicit SQLite path shared by optional main and batch LangGraph adapters.
     langgraph_checkpoint_path: str | None = None
 
     
@@ -448,7 +452,9 @@ class WTBConfig:
             WTB_STORAGE_MODE: "inmemory" or "sqlalchemy" (default: "inmemory")
             WTB_DATABASE_URL: Database URL for sqlalchemy mode
             AGENTGIT_DB_PATH: Path to AgentGit database
-            STATE_ADAPTER_MODE: "inmemory" or "langgraph" (default: "inmemory")
+            STATE_ADAPTER_MODE: "inmemory", "sqlite", or explicit
+                "langgraph" (default: "inmemory")
+            WTB_STATE_CHECKPOINT_PATH: WTB-native SQLite checkpoint path
             WTB_DATA_DIR: Base data directory (default: "data")
             FILETRACKER_ENABLED: Enable FileTracker integration (default: "false")
             FILETRACKER_STORAGE: FileTracker storage path
@@ -471,6 +477,7 @@ class WTBConfig:
             wtb_db_url=os.getenv("WTB_DATABASE_URL"),
             agentgit_db_path=os.getenv("AGENTGIT_DB_PATH", f"{data_dir}/agentgit.db"),
             state_adapter_mode=os.getenv("STATE_ADAPTER_MODE", "inmemory"),
+            state_checkpoint_path=os.getenv("WTB_STATE_CHECKPOINT_PATH"),
             langgraph_checkpoint_path=os.getenv("WTB_LANGGRAPH_CHECKPOINT_PATH"),
             data_dir=data_dir,
             filetracker_enabled=os.getenv("FILETRACKER_ENABLED", "false").lower() == "true",
@@ -518,11 +525,12 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=f"sqlite:///{data_dir}/wtb.db",
             agentgit_db_path=f"{data_dir}/agentgit.db",
-            state_adapter_mode="langgraph",
+            state_adapter_mode="sqlite",
+            state_checkpoint_path=str(Path(data_dir) / "wtb_checkpoints.db"),
             data_dir=data_dir,
             filetracker_enabled=False,
             ide_sync_enabled=False,
-            langgraph_event_config=LangGraphEventConfig.for_development(),
+            langgraph_event_config=None,
             log_sql=True,
         )
     
@@ -548,11 +556,12 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=db_url,
             agentgit_db_path=agentgit_db_path,
-            state_adapter_mode="langgraph",
+            state_adapter_mode="sqlite",
+            state_checkpoint_path=str(Path(data_dir) / "wtb_checkpoints.db"),
             data_dir=data_dir,
             filetracker_enabled=True,
             ide_sync_enabled=True,
-            langgraph_event_config=LangGraphEventConfig.for_production(),
+            langgraph_event_config=None,
             log_sql=False,
             log_level="WARNING",
         )
@@ -574,7 +583,8 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=f"sqlite:///{data_dir}/wtb.db",
             agentgit_db_path=f"{data_dir}/agentgit.db",
-            state_adapter_mode="langgraph",
+            state_adapter_mode="sqlite",
+            state_checkpoint_path=str(Path(data_dir) / "wtb_checkpoints.db"),
             data_dir=data_dir,
             filetracker_enabled=False,
             ide_sync_enabled=False,
@@ -619,7 +629,8 @@ class WTBConfig:
             wtb_storage_mode="sqlalchemy",
             wtb_db_url=db_url,
             agentgit_db_path=agentgit_db_path,
-            state_adapter_mode="langgraph",
+            state_adapter_mode="sqlite",
+            state_checkpoint_path=str(Path(data_dir) / "wtb_checkpoints.db"),
             data_dir=data_dir,
             filetracker_enabled=filetracker_postgres_url is not None,
             ide_sync_enabled=True,
@@ -649,6 +660,7 @@ class WTBConfig:
             "wtb_db_url": self.wtb_db_url,
             "agentgit_db_path": self.agentgit_db_path,
             "state_adapter_mode": self.state_adapter_mode,
+            "state_checkpoint_path": self.state_checkpoint_path,
             "langgraph_checkpoint_path": self.langgraph_checkpoint_path,
             "data_dir": self.data_dir,
             "filetracker_enabled": self.filetracker_enabled,

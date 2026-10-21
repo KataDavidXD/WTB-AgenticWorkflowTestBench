@@ -8,6 +8,9 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from wtb.domain.models import Execution, ExecutionState, ExecutionStatus
+from wtb.infrastructure.adapters.langgraph_workflow_runtime import (
+    LangGraphWorkflowRuntime,
+)
 from wtb.sdk import BatchTestResult, WorkflowProject, WTBTestBench
 
 
@@ -41,6 +44,9 @@ def _bench_with_single_project(*, execution_workflow_id: str):
         execution_controller=controller,
     )
     bench._project_cache = {project.name: project}
+    bench._workflow_cache = {
+        project.name: SimpleNamespace(id=project.id, name=project.name)
+    }
     return bench, controller, project, graph_factory, graph
 
 
@@ -179,12 +185,17 @@ def test_structured_state_identity_survives_sqlite_reload_and_control(tmp_path):
         id=project_id,
         name=project_name,
         graph_factory=lambda: _structured_graph("default"),
+        runtime_backend="langgraph",
     )
     first_project.register_workflow_variant(
         "alternate",
         lambda: _structured_graph("alternate"),
     )
-    first_bench = WTBTestBench.create(mode="development", data_dir=data_dir)
+    first_bench = WTBTestBench.create(
+        mode="development",
+        data_dir=data_dir,
+        state_adapter_mode="langgraph",
+    )
     try:
         first_bench.register_project(first_project)
         completed = first_bench.run(
@@ -211,9 +222,14 @@ def test_structured_state_identity_survives_sqlite_reload_and_control(tmp_path):
         id=project_id,
         name=project_name,
         graph_factory=default_factory,
+        runtime_backend="langgraph",
     )
     reloaded_project.register_workflow_variant("alternate", alternate_factory)
-    second_bench = WTBTestBench.create(mode="development", data_dir=data_dir)
+    second_bench = WTBTestBench.create(
+        mode="development",
+        data_dir=data_dir,
+        state_adapter_mode="langgraph",
+    )
     second_bench._project_cache = {project_name: reloaded_project}
     try:
         reloaded = second_bench.get_execution(execution_id)
@@ -557,6 +573,44 @@ def test_actor_local_adapter_is_restored_before_next_normal_execution():
 
     bench.close()
     base_adapter.close.assert_called_once_with()
+    temporary_adapter.close.assert_called_once_with()
+
+
+def test_actor_local_resume_rebinds_and_restores_langgraph_runtime_adapter():
+    bench, controller, project, _graph_factory, _graph = (
+        _bench_with_single_project(execution_workflow_id="project-id")
+    )
+    base_adapter = MagicMock(name="base_adapter")
+    temporary_adapter = MagicMock(name="reopened_sqlite_adapter")
+    base_runtime = LangGraphWorkflowRuntime(base_adapter)
+    controller._state_adapter = base_adapter
+    controller._workflow_runtime = base_runtime
+    actor_execution = _control_execution("actor-execution", actor_local=True)
+    controller.get_status.return_value = actor_execution
+    actor_graph = object()
+    project.build_graph = MagicMock(return_value=actor_graph)
+    adapters_at_resume = []
+
+    def resume(_execution_id, _modified_state):
+        active_runtime = controller._workflow_runtime
+        adapters_at_resume.append(
+            (controller._state_adapter, active_runtime._state_adapter)
+        )
+        return actor_execution
+
+    controller.resume.side_effect = resume
+
+    with _patched_actor_local_adapter(temporary_adapter):
+        assert bench.resume(actor_execution.id) is actor_execution
+
+    assert adapters_at_resume == [(temporary_adapter, temporary_adapter)]
+    assert controller._state_adapter is base_adapter
+    assert controller._workflow_runtime is base_runtime
+    temporary_adapter.set_workflow_graph.assert_called_once_with(
+        actor_graph,
+        force_recompile=True,
+    )
+    base_adapter.set_workflow_graph.assert_not_called()
     temporary_adapter.close.assert_called_once_with()
 
 

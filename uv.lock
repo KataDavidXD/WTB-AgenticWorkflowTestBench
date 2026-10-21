@@ -2,8 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
-    "python_full_version >= '3.13'",
-    "python_full_version < '3.13'",
+    "python_full_version >= '3.13' and sys_platform == 'win32'",
+    "(python_full_version >= '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version >= '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version >= '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "(python_full_version < '3.13' and platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine != 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')",
+    "(python_full_version < '3.13' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.13' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.13' and platform_machine == 'x86_64' and sys_platform == 'linux')",
 ]
 
 [[package]]
@@ -618,7 +622,7 @@ wheels = [
 
 [[package]]
 name = "langgraph-checkpoint-postgres"
-version = "3.0.3"
+version = "3.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langgraph-checkpoint" },
@@ -626,9 +630,9 @@ dependencies = [
     { name = "psycopg" },
     { name = "psycopg-pool" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/86/5f3c01346be4b7f455aeeff915f78c878fe9eee5cc8b3782df0886b409bf/langgraph_checkpoint_postgres-3.0.3.tar.gz", hash = "sha256:f77852340198b9e71f2d52da5b591cfc55a4a2e537001868a83b9ab1865f9146", size = 127198, upload-time = "2026-01-12T20:36:40.205Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/52/6e732f7bf702ef4918b64ea4107e7da21d4276b808f9a651fe34be9b0abe/langgraph_checkpoint_postgres-3.1.2.tar.gz", hash = "sha256:1cd404803ff895a2b79f3ac04ce92b775e6b999715f8333fce674c6d927bba95", size = 155091, upload-time = "2026-08-07T20:40:00.049Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/f8/5a6f9dbc3a93e3b9a567ba0a8b6df5e89882be64dc1c6586a33ec15e93b8/langgraph_checkpoint_postgres-3.0.3-py3-none-any.whl", hash = "sha256:f603f4f81961e2740bd70679affeb540452d467990d4692132c07c20870bdbb1", size = 42715, upload-time = "2026-01-12T20:36:38.636Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/62/8899c9f4d9b97d5b3eb0c07c13cdf5f63342f15f5ef93eaf3477958df602/langgraph_checkpoint_postgres-3.1.2-py3-none-any.whl", hash = "sha256:6a7e38ef16985b54e356cba7bdaf447943aae33d5aaf290026c593bb6b4a6264", size = 52084, upload-time = "2026-08-07T20:39:58.994Z" },
 ]
 
 [[package]]
@@ -1946,8 +1950,6 @@ dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
     { name = "cloudpickle" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint" },
     { name = "sqlalchemy" },
 ]
 
@@ -1958,6 +1960,8 @@ all = [
     { name = "grpcio" },
     { name = "grpcio-tools" },
     { name = "langchain-openai" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "openai" },
@@ -1968,6 +1972,7 @@ all = [
     { name = "prometheus-client" },
     { name = "protobuf" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "ray" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1984,6 +1989,9 @@ deepseek-harness-source = [
 ]
 dev = [
     { name = "httpx" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
+    { name = "langgraph-checkpoint-sqlite" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -1993,11 +2001,19 @@ grpc = [
     { name = "grpcio-tools" },
     { name = "protobuf" },
 ]
+langgraph = [
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
+]
 langgraph-postgres = [
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "psycopg", extra = ["binary"] },
 ]
 langgraph-sqlite = [
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
     { name = "langgraph-checkpoint-sqlite" },
 ]
 llm = [
@@ -2026,6 +2042,8 @@ test = [
     { name = "grpcio-tools" },
     { name = "httpx" },
     { name = "langchain-openai" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "openai" },
     { name = "pytest" },
@@ -2057,11 +2075,20 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.26.0" },
     { name = "langchain-openai", marker = "extra == 'llm'", specifier = ">=0.0.5" },
     { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=0.0.5" },
-    { name = "langgraph", specifier = ">=0.2.60" },
-    { name = "langgraph-checkpoint", specifier = ">=2.0.10" },
-    { name = "langgraph-checkpoint-postgres", marker = "extra == 'langgraph-postgres'", specifier = ">=2.0.15" },
-    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'langgraph-sqlite'", specifier = ">=3.1.0" },
-    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'test'", specifier = ">=3.1.0" },
+    { name = "langgraph", marker = "extra == 'dev'", specifier = ">=1.0,<1.1" },
+    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=0.2.60" },
+    { name = "langgraph", marker = "extra == 'langgraph-postgres'", specifier = ">=1.0,<1.1" },
+    { name = "langgraph", marker = "extra == 'langgraph-sqlite'", specifier = ">=1.0,<1.1" },
+    { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0,<1.1" },
+    { name = "langgraph-checkpoint", marker = "extra == 'dev'", specifier = ">=4.1,<5" },
+    { name = "langgraph-checkpoint", marker = "extra == 'langgraph'", specifier = ">=2.0.10" },
+    { name = "langgraph-checkpoint", marker = "extra == 'langgraph-postgres'", specifier = ">=4.1,<5" },
+    { name = "langgraph-checkpoint", marker = "extra == 'langgraph-sqlite'", specifier = ">=4.1,<5" },
+    { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=4.1,<5" },
+    { name = "langgraph-checkpoint-postgres", marker = "extra == 'langgraph-postgres'", specifier = ">=3.1,<4" },
+    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'dev'", specifier = ">=3.1,<4" },
+    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'langgraph-sqlite'", specifier = ">=3.1,<4" },
+    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'test'", specifier = ">=3.1,<4" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'test'", specifier = ">=1.0.0" },
     { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.22.0" },
@@ -2088,9 +2115,9 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.27.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'test'", specifier = ">=0.27.0" },
     { name = "websockets", marker = "extra == 'api'", specifier = ">=12.0" },
-    { name = "wtb", extras = ["ray", "langgraph-sqlite", "langgraph-postgres", "llm", "api", "grpc", "venv", "observability"], marker = "extra == 'all'" },
+    { name = "wtb", extras = ["ray", "langgraph-sqlite", "langgraph-postgres", "postgres-evidence", "llm", "api", "grpc", "venv", "observability"], marker = "extra == 'all'" },
 ]
-provides-extras = ["postgres-evidence", "deepseek-harness-source", "ray", "langgraph-sqlite", "langgraph-postgres", "llm", "api", "grpc", "venv", "observability", "dev", "test", "all"]
+provides-extras = ["postgres-evidence", "deepseek-harness-source", "langgraph", "ray", "langgraph-sqlite", "langgraph-postgres", "llm", "api", "grpc", "venv", "observability", "dev", "test", "all"]
 
 [[package]]
 name = "xxhash"

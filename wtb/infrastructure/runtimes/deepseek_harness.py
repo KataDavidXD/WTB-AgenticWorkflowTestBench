@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, Never, Protocol, cast
 
 from wtb.domain.interfaces.workflow_runtime import (
@@ -51,6 +51,9 @@ class _RunResult(Protocol):
     events: list[dict[str, Any]]
     session_root: str | None
     runtime_binding: object
+    reference_snapshot: object | None
+    reference_snapshots: object | None
+    memory_mode: str | None
 
 
 class _Harness(Protocol):
@@ -63,6 +66,8 @@ class _Harness(Protocol):
         session_id: str,
         attempt_id: str | None = None,
         input_sha256: str | None = None,
+        references: list[dict[str, object]] | None = None,
+        memory_mode: str | None = None,
         expected_process_generation: str | None = None,
     ) -> _RunResult:
         """Run one turn in an execution-scoped session."""
@@ -114,6 +119,8 @@ class DeepSeekHarnessWorkflow:
     include_session_root: bool = False
     max_event_count: int = 1_024
     max_event_bytes: int = 1_048_576
+    reference_key: str | None = None
+    memory_mode: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -123,6 +130,16 @@ class DeepSeekHarnessWorkflow:
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        if self.reference_key is not None and (
+            not isinstance(self.reference_key, str) or not self.reference_key
+        ):
+            raise ValueError("reference_key must be a non-empty string or None")
+        if self.reference_key == "_dsh":
+            raise ValueError("reference_key cannot use the reserved '_dsh' key")
+        if self.memory_mode not in {None, "S0", "M0"}:
+            raise ValueError("memory_mode must be 'S0', 'M0', or None")
+        if (self.reference_key is None) != (self.memory_mode is None):
+            raise ValueError("reference_key and memory_mode must be configured together")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", self.session_prefix):
             raise ValueError(
                 "session_prefix must contain only safe identifier characters"
@@ -405,6 +422,7 @@ class DeepSeekHarnessRuntime:
                 prompt_key=workflow.prompt_key,
             )
             base_state = deepcopy(dict(input_state))
+            references = self._validated_references(workflow, input_state)
             normalized_attempt_id = (
                 None
                 if attempt_id is None
@@ -462,6 +480,12 @@ class DeepSeekHarnessRuntime:
             )
             if normalized_attempt_id is not None:
                 self._require_identity_api(harness)
+                if references is not None:
+                    self._require_reference_api(harness)
+            elif references is not None:
+                raise ValueError(
+                    "DeepSeek Harness references require a durable attempt"
+                )
         except RuntimeBindingMismatchError:
             raise
         except RuntimeTerminalError:
@@ -496,6 +520,9 @@ class DeepSeekHarnessRuntime:
                     input_sha256=input_sha256,
                     expected_process_generation=expected_process_generation,
                 )
+                if references is not None:
+                    run_kwargs["references"] = references
+                    run_kwargs["memory_mode"] = workflow.memory_mode
             result = harness.run(prompt, **run_kwargs)
         except Exception as error:
             if self._is_process_generation_mismatch(error):
@@ -596,6 +623,21 @@ class DeepSeekHarnessRuntime:
                 "event_count": len(raw_events),
                 "last_event_seq": self._last_event_seq(raw_events),
             }
+            reference_snapshot = self._reference_snapshot_receipt(
+                result,
+                references,
+            )
+            if reference_snapshot is not None:
+                receipt["memory_mode"] = workflow.memory_mode
+                receipt["reference_snapshot"] = reference_snapshot
+                reference_snapshots = self._reference_step_snapshots_receipt(
+                    result,
+                    references,
+                    workflow.memory_mode,
+                    reference_snapshot,
+                )
+                if reference_snapshots is not None:
+                    receipt["reference_snapshots"] = reference_snapshots
             if message_id is not None:
                 receipt["message_id"] = message_id
             if normalized_attempt_id is not None:
@@ -1008,6 +1050,27 @@ class DeepSeekHarnessRuntime:
                 "DeepSeek Harness SDK run does not accept attempt identity"
             )
 
+    @staticmethod
+    def _require_reference_api(harness: _Harness) -> None:
+        """Fail before dispatch when the SDK cannot accept structured references."""
+        run = getattr(harness, "run", None)
+        if not callable(run):
+            raise RuntimeError("DeepSeek Harness SDK lacks a run API")
+        try:
+            parameters = inspect.signature(run).parameters.values()
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(
+                "DeepSeek Harness SDK run signature cannot be verified"
+            ) from error
+        names = {parameter.name for parameter in parameters}
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if not accepts_kwargs and not {"references", "memory_mode"}.issubset(names):
+            raise RuntimeError(
+                "DeepSeek Harness SDK run does not accept reference capture mode"
+            )
 
     def _runtime_configuration_sha256(self) -> str:
         """Hash semantic adapter configuration without persisting secrets/paths."""
@@ -1085,6 +1148,8 @@ class DeepSeekHarnessRuntime:
                 "include_session_root": workflow.include_session_root,
                 "max_event_count": workflow.max_event_count,
                 "max_event_bytes": workflow.max_event_bytes,
+                "reference_key": workflow.reference_key,
+                "memory_mode": workflow.memory_mode,
             },
         }
         return canonical_json_sha256(payload)
@@ -1703,6 +1768,19 @@ class DeepSeekHarnessRuntime:
             receipt["operator_config_sha256"] = operator_config_sha256
         if root_config_sha256 is not None:
             receipt["root_config_sha256"] = root_config_sha256
+        references = self._validated_references(workflow, input_state)
+        reference_snapshot = self._reference_snapshot_receipt(result, references)
+        if reference_snapshot is not None:
+            receipt["memory_mode"] = workflow.memory_mode
+            receipt["reference_snapshot"] = reference_snapshot
+            reference_snapshots = self._reference_step_snapshots_receipt(
+                result,
+                references,
+                workflow.memory_mode,
+                reference_snapshot,
+            )
+            if reference_snapshots is not None:
+                receipt["reference_snapshots"] = reference_snapshots
         session_root = getattr(result, "session_root", None)
         if session_root is not None:
             if not isinstance(session_root, str) or not session_root:
@@ -1910,8 +1988,239 @@ class DeepSeekHarnessRuntime:
         cls._validate_json_value(value, path=prompt_key, active=set())
         return deepcopy(value)
 
+    @classmethod
+    def _validated_references(
+        cls,
+        workflow: DeepSeekHarnessWorkflow,
+        input_state: Mapping[str, Any],
+    ) -> list[dict[str, object]] | None:
+        key = workflow.reference_key
+        if key is None:
+            return None
+        if key not in input_state:
+            raise ValueError(
+                f"DeepSeek Harness workflow requires reference key '{key}'"
+            )
+        value = input_state[key]
+        if not isinstance(value, list) or not 1 <= len(value) <= 3:
+            raise ValueError(
+                f"DeepSeek Harness input '{key}' must contain one to three references"
+            )
+        references: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise TypeError(f"{key}[{index}] must be an object")
+            if set(item).difference({"sessionId", "label"}):
+                raise ValueError(f"{key}[{index}] contains unknown fields")
+            session_id = item.get("sessionId")
+            label = item.get("label", session_id)
+            if not isinstance(session_id, str) or not session_id:
+                raise ValueError(f"{key}[{index}].sessionId must be non-empty")
+            if not isinstance(label, str):
+                raise TypeError(f"{key}[{index}].label must be a string")
+            if session_id in seen:
+                raise ValueError(f"{key} contains a duplicate source session")
+            seen.add(session_id)
+            references.append(
+                {
+                    "sessionId": session_id,
+                    **({} if "label" not in item else {"label": label}),
+                }
+            )
+        return references
 
+    @classmethod
+    def _reference_snapshot_receipt(
+        cls,
+        result: _RunResult,
+        requested: list[dict[str, object]] | None,
+    ) -> dict[str, object] | None:
+        raw = getattr(result, "reference_snapshot", None)
+        if raw is None:
+            if requested is not None:
+                raise RuntimeError(
+                    "DeepSeek Harness returned no reference snapshot receipt"
+                )
+            return None
+        if requested is None:
+            raise RuntimeError(
+                "DeepSeek Harness returned an unrequested reference snapshot"
+            )
+        model_dump = getattr(raw, "model_dump", None)
+        if callable(model_dump):
+            raw = model_dump(mode="json", by_alias=True)
+        if not isinstance(raw, Mapping):
+            raise RuntimeError("DeepSeek Harness returned an invalid reference snapshot")
+        if set(raw) != {"schemaVersion", "contentSha256", "references"}:
+            raise RuntimeError(
+                "DeepSeek Harness reference snapshot has invalid fields"
+            )
+        if raw.get("schemaVersion") != 1:
+            raise RuntimeError(
+                "DeepSeek Harness reference snapshot has an unsupported schema"
+            )
+        content_sha256 = raw.get("contentSha256")
+        if not isinstance(content_sha256, str) or re.fullmatch(
+            r"[0-9a-f]{64}", content_sha256
+        ) is None:
+            raise RuntimeError(
+                "DeepSeek Harness reference snapshot has an invalid content digest"
+            )
+        captures = raw.get("references")
+        if not isinstance(captures, list) or len(captures) != len(requested):
+            raise RuntimeError(
+                "DeepSeek Harness reference snapshot disagrees with the request"
+            )
+        normalized: list[dict[str, object]] = []
+        capture_fields = {
+            "sessionId",
+            "label",
+            "capturedThroughSeq",
+            "compacted",
+            "originalMessages",
+            "retainedMessages",
+            "omittedMessages",
+            "omittedBytes",
+            "truncated",
+            "inputIndex",
+        }
+        integer_fields = (
+            "originalMessages",
+            "retainedMessages",
+            "omittedMessages",
+            "omittedBytes",
+            "inputIndex",
+        )
+        for index, (capture, request) in enumerate(zip(captures, requested)):
+            if not isinstance(capture, Mapping) or set(capture) != capture_fields:
+                raise RuntimeError(
+                    "DeepSeek Harness reference capture has invalid fields"
+                )
+            expected_label = request.get("label", request["sessionId"])
+            if (
+                capture.get("sessionId") != request["sessionId"]
+                or capture.get("label") != expected_label
+                or capture.get("inputIndex") != index
+            ):
+                raise RuntimeError(
+                    "DeepSeek Harness reference capture disagrees with the request"
+                )
+            captured_seq = capture.get("capturedThroughSeq")
+            if captured_seq is not None and (
+                isinstance(captured_seq, bool)
+                or not isinstance(captured_seq, int)
+                or captured_seq < 0
+            ):
+                raise RuntimeError(
+                    "DeepSeek Harness reference capture has an invalid sequence"
+                )
+            if not isinstance(capture.get("compacted"), bool) or not isinstance(
+                capture.get("truncated"), bool
+            ):
+                raise RuntimeError(
+                    "DeepSeek Harness reference capture has invalid flags"
+                )
+            for field in integer_fields:
+                value = capture.get(field)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 0
+                ):
+                    raise RuntimeError(
+                        f"DeepSeek Harness reference capture has invalid {field}"
+                    )
+            normalized.append(dict(capture))
+        return {
+            "schemaVersion": 1,
+            "contentSha256": content_sha256,
+            "references": normalized,
+        }
 
+    @classmethod
+    def _reference_step_snapshots_receipt(
+        cls,
+        result: _RunResult,
+        requested: list[dict[str, object]] | None,
+        memory_mode: str | None,
+        latest: dict[str, object],
+    ) -> list[dict[str, object]] | None:
+        """Validate ordered M0 step captures and bind their latest proof."""
+        raw = getattr(result, "reference_snapshots", None)
+        if memory_mode != "M0":
+            if raw is not None:
+                raise RuntimeError(
+                    "DeepSeek Harness returned M0 captures for a non-M0 workflow"
+                )
+            return None
+        if getattr(result, "memory_mode", None) != "M0":
+            raise RuntimeError("DeepSeek Harness did not confirm M0 capture mode")
+        if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)) or not raw:
+            raise RuntimeError("DeepSeek Harness returned no M0 step capture receipts")
+        normalized: list[dict[str, object]] = []
+        previous_turn: int | None = None
+        previous_step = 0
+        for item in raw:
+            model_dump = getattr(item, "model_dump", None)
+            if callable(model_dump):
+                item = model_dump(mode="json", by_alias=True)
+            if not isinstance(item, Mapping) or set(item) != {
+                "schemaVersion",
+                "contentSha256",
+                "references",
+                "turn",
+                "step",
+                "referenceEventSeq",
+            }:
+                raise RuntimeError("DeepSeek Harness M0 capture has invalid fields")
+            turn = item.get("turn")
+            step = item.get("step")
+            event_seq = item.get("referenceEventSeq")
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < minimum
+                for value, minimum in ((turn, 1), (step, 1), (event_seq, 0))
+            ):
+                raise RuntimeError("DeepSeek Harness M0 capture has invalid coordinates")
+            assert isinstance(turn, int) and isinstance(step, int)
+            if previous_turn is not None and (
+                turn < previous_turn or (turn == previous_turn and step <= previous_step)
+            ):
+                raise RuntimeError("DeepSeek Harness M0 captures are out of order")
+            base = cls._reference_snapshot_receipt(
+                cast(_RunResult, SimpleNamespace(
+                    reference_snapshot={
+                        "schemaVersion": item["schemaVersion"],
+                        "contentSha256": item["contentSha256"],
+                        "references": item["references"],
+                    }
+                )),
+                requested,
+            )
+            if base is None:
+                raise RuntimeError("DeepSeek Harness M0 capture has no snapshot")
+            normalized.append(
+                {
+                    **base,
+                    "turn": turn,
+                    "step": step,
+                    "referenceEventSeq": event_seq,
+                }
+            )
+            previous_turn = turn
+            previous_step = step
+        last = normalized[-1]
+        if {
+            "schemaVersion": last["schemaVersion"],
+            "contentSha256": last["contentSha256"],
+            "references": last["references"],
+        } != latest:
+            raise RuntimeError(
+                "DeepSeek Harness latest M0 capture disagrees with reference snapshot"
+            )
+        return normalized
 
     @classmethod
     def _validate_json_value(

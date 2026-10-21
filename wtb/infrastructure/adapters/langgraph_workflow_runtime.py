@@ -14,6 +14,7 @@ from wtb.domain.interfaces.workflow_runtime import (
     RuntimeOutcomeReceipt,
     RuntimePreDispatchError,
     RuntimeSnapshot,
+    RuntimeTerminalError,
     RuntimeTerminalOutcome,
 )
 from wtb.domain.runtime_identity import canonical_json_sha256
@@ -138,9 +139,24 @@ class LangGraphWorkflowRuntime:
                     "LangGraph state adapter cannot pin a resume checkpoint"
                 )
             set_resume_checkpoint(checkpoint_id)
-        result = self._state_adapter.execute(
-            None if input_state is None else dict(input_state)
-        )
+        try:
+            result = self._state_adapter.execute(
+                None if input_state is None else dict(input_state)
+            )
+        except Exception as error:
+            # Only an observed terminal task result from the synchronous local
+            # console is sufficient to classify this as a known node failure.
+            # Unproven errors keep the controller's reconciliation fence.
+            if getattr(self._state_adapter, "local_node_failure", None) is error:
+                snapshot = self.snapshot(execution_id)
+                if snapshot is not None and snapshot.checkpoint_id:
+                    raise RuntimeTerminalError(
+                        str(error), finish_reason="failed",
+                        session_id=f"wtb-{execution_id}", result_state=snapshot.values,
+                        receipt={"execution_id": execution_id, "attempt_id": attempt_id,
+                                 "checkpoint_id": snapshot.checkpoint_id, "source": "local_task_result"},
+                    ) from error
+            raise
         if not isinstance(result, Mapping):
             raise TypeError("Workflow runtime result must be a mapping")
         if attempt_id is not None:
@@ -149,7 +165,11 @@ class LangGraphWorkflowRuntime:
                 execution_id=execution_id,
                 attempt_id=attempt_id,
                 input_sha256=attempt_binding.input_sha256,
-                outcome=RuntimeTerminalOutcome.COMPLETED,
+                outcome=(
+                    RuntimeTerminalOutcome.CANCELLED
+                    if getattr(self._state_adapter, "runtime_outcome", None) == "cancelled"
+                    else RuntimeTerminalOutcome.COMPLETED
+                ),
                 binding=attempt_binding,
                 values=dict(result),
                 receipt=(

@@ -329,6 +329,12 @@ def llm_client():
     """Create a real LLM client when its external prerequisites exist."""
     if not HAS_OPENAI:
         pytest.skip("openai package is required for real LLM rollback tests")
+    if os.getenv("WTB_RUN_LIVE_LLM_TESTS", "").lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        pytest.skip("set WTB_RUN_LIVE_LLM_TESTS=1 to opt into provider calls")
     if not (os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")):
         pytest.skip("LLM_API_KEY or OPENAI_API_KEY is required for real LLM tests")
     return LLMClientHelper()

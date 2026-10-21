@@ -113,6 +113,18 @@ from .state_adapter import (
     NodeBoundaryInfo,  # Still valid - node boundary tracking
 )
 from .unit_of_work import IUnitOfWork
+from .workflow_runtime import (
+    RuntimeAttemptPlan,
+    RuntimeBindingEnvelope,
+    RuntimeBindingMismatchError,
+    RuntimeOutcomeReceipt,
+    RuntimeOutcomeUnknownError,
+    RuntimePreDispatchError,
+    RuntimeSnapshot,
+    RuntimeTerminalError,
+    RuntimeTerminalOutcome,
+    WorkflowRuntime,
+)
 
 __all__ = [
     # ═══════════════════════════════════════════════════════════════════
@@ -125,6 +137,16 @@ __all__ = [
     
     # Execution Controller
     "IExecutionController",
+    "WorkflowRuntime",
+    "RuntimeAttemptPlan",
+    "RuntimeBindingEnvelope",
+    "RuntimeBindingMismatchError",
+    "RuntimeOutcomeReceipt",
+    "RuntimeSnapshot",
+    "RuntimeOutcomeUnknownError",
+    "RuntimePreDispatchError",
+    "RuntimeTerminalError",
+    "RuntimeTerminalOutcome",
     
     # Node Replacer / Variant Registry
     "INodeReplacer",

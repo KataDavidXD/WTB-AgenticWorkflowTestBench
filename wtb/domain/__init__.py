@@ -9,9 +9,11 @@ This layer contains:
 """
 
 from . import events, interfaces, models
+from .runtime_identity import canonical_json_sha256
 
 __all__ = [
     "models",
     "interfaces", 
     "events",
+    "canonical_json_sha256",
 ]

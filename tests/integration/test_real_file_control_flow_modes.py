@@ -58,6 +58,7 @@ def _project(name: str, executor: str = "threadpool") -> WorkflowProject:
     return WorkflowProject(
         name=name,
         graph_factory=create_file_control_graph,
+        runtime_backend="langgraph",
         execution=ExecutionConfig(
             batch_executor=executor,
             ray_config=RayConfig(address="auto", max_retries=1),
@@ -198,6 +199,7 @@ def test_single_mode_real_file_rollback_resume_fork(tmp_path):
         mode="development",
         data_dir=str(tmp_path),
         enable_file_tracking=True,
+        state_adapter_mode="langgraph",
     )
     try:
         project = _project("single_files")
@@ -217,6 +219,7 @@ def test_batch_mode_real_file_rollback_resume_fork(tmp_path):
         mode="development",
         data_dir=str(tmp_path),
         enable_file_tracking=True,
+        state_adapter_mode="langgraph",
     )
     try:
         project = _project("batch_files", executor="threadpool")
@@ -268,6 +271,7 @@ def test_ray_modes_real_file_rollback_resume_fork(tmp_path, grpc_url: str | None
         enable_file_tracking=True,
         enable_ray=True,
         grpc_env_url=grpc_url,
+        state_adapter_mode="langgraph",
     )
     try:
         project = _project("venv_files" if grpc_url else "ray_files", executor="ray")

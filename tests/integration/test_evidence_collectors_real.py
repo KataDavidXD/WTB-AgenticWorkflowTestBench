@@ -1,4 +1,7 @@
-"""Real LangGraph receipt collection with deterministic workflow output.
+"""Real LangGraph and DSH SDK runtimes, deterministic local model transport.
+
+No alternate subprocess launcher is counted as a second runtime. DSH helper
+composition and prerequisite gates are shared with the existing operator E2E.
 """
 
 from typing import TypedDict
@@ -7,6 +10,7 @@ import pytest
 
 from wtb.application.services.evidence_collector import (
     EvidenceCollector,
+    deepseek_native_reference,
     langgraph_native_reference,
 )
 from wtb.domain.execution_evidence import AttemptIdentity
@@ -87,3 +91,36 @@ def test_real_langgraph_collector(tmp_path, evidence_store_factory):
         assert result["answer"] == "real-langgraph-completed"
     finally:
         adapter.close()
+
+
+def test_real_deepseek_sdk_collector(tmp_path, evidence_store_factory):
+    from tests.integration.test_deepseek_operator_real_e2e import (
+        _completion_server,
+        _dsh_checkout,
+        _runtime,
+    )
+    from wtb.infrastructure.runtimes.deepseek_harness import DeepSeekHarnessWorkflow
+
+    checkout = _dsh_checkout()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with _completion_server() as (base_url, requests):
+        runtime = _runtime(
+            checkout=checkout,
+            base_url=base_url,
+            session_root=tmp_path / "sessions",
+            workspace=workspace,
+        )
+        runtime.bind(DeepSeekHarnessWorkflow())
+        try:
+            result = exercise(
+                runtime,
+                evidence_store_factory(),
+                deepseek_native_reference,
+                {"prompt": "Return a deterministic completion."},
+                evidence_store_factory,
+            )
+            assert result["_dsh"]["message_id"]
+            assert len(requests) == 1
+        finally:
+            runtime.close()

@@ -361,6 +361,7 @@ def _create_variant_execution_actor_class():
             # v1.8: Extract graph factory reference for LangGraph execution with checkpoints
             graph_factory_module = combination.get("graph_factory_module")
             graph_factory_name = combination.get("graph_factory_name")
+            runtime_backend = combination.get("runtime_backend")
             graph_pickled = (combination.get("metadata") or {}).get(
                 "_graph_pickled"
             )
@@ -403,6 +404,7 @@ def _create_variant_execution_actor_class():
                     graph_factory_name=graph_factory_name,
                     graph_factory_pickled=graph_factory_pickled,
                     graph_pickled=graph_pickled,
+                    runtime_backend=runtime_backend,
                 )
                 
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -557,9 +559,24 @@ def _create_variant_execution_actor_class():
         def _create_execution_state_adapter(
             self,
             langgraph_graph: Any | None,
+            runtime_backend: str | None = None,
         ) -> IStateAdapter:
-            """Return an execution-local adapter for graph or domain-node mode."""
-            if langgraph_graph is None:
+            """Return the adapter selected by the explicit runtime contract.
+
+            Payloads created before ``runtime_backend`` was introduced retain
+            their historical graph/non-graph inference. New payloads must mark
+            native graphs explicitly so a non-empty graph never selects
+            LangGraph by accident.
+            """
+            selected_backend = runtime_backend or (
+                "langgraph" if langgraph_graph is not None else "native"
+            )
+            if selected_backend not in {"native", "langgraph"}:
+                raise RuntimeError(
+                    f"Unsupported runtime backend: {selected_backend!r}"
+                )
+
+            if selected_backend == "native":
                 from wtb.infrastructure.adapters.sqlite_state_adapter import (
                     SqliteStateAdapter,
                 )
@@ -589,6 +606,7 @@ def _create_variant_execution_actor_class():
             graph_factory_name: str | None = None,
             graph_factory_pickled: Any | None = None,
             graph_pickled: Any | None = None,
+            runtime_backend: str | None = None,
         ) -> dict[str, Any]:
             """
             Run workflow execution with variants applied.
@@ -631,7 +649,11 @@ def _create_variant_execution_actor_class():
                 graph_pickled=graph_pickled,
             )
             state_adapter = self._create_execution_state_adapter(
-                langgraph_graph
+                langgraph_graph,
+                runtime_backend=runtime_backend,
+            )
+            selected_backend = runtime_backend or (
+                "langgraph" if langgraph_graph is not None else "native"
             )
             try:
                 return self._run_workflow_execution_with_adapter(
@@ -643,6 +665,7 @@ def _create_variant_execution_actor_class():
                     workspace=workspace,
                     langgraph_graph=langgraph_graph,
                     state_adapter=state_adapter,
+                    runtime_backend=selected_backend,
                 )
             finally:
                 close_adapter = getattr(state_adapter, "close", None)
@@ -660,6 +683,7 @@ def _create_variant_execution_actor_class():
             workspace: Workspace | None,
             langgraph_graph: Any | None,
             state_adapter: IStateAdapter,
+            runtime_backend: str,
         ) -> dict[str, Any]:
             from pathlib import Path
 
@@ -711,7 +735,7 @@ def _create_variant_execution_actor_class():
                     "requested_execution_id": execution_id,
                     "state_adapter_backend": (
                         "langgraph_sqlite"
-                        if langgraph_graph is not None else "node_sqlite"
+                        if runtime_backend == "langgraph" else "node_sqlite"
                     ),
                     "checkpoint_db_path": str(self._storage_paths.checkpoint_db_path),
                     "llm_cache_path": str(self._storage_paths.llm_cache_path),
@@ -1165,6 +1189,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         enable_audit: bool = True,
         environment_provider: Optional["IEnvironmentProvider"] = None,
         owns_environment_provider: bool = False,
+        state_checkpoint_path: str | None = None,
     ):
         """
         Initialize Ray runner with optional FileTracker, Workspace, and event bridge integration.
@@ -1194,6 +1219,7 @@ class RayBatchTestRunner(IBatchTestRunner):
         self._workflow_loader = workflow_loader
         self._filetracker_config = filetracker_config
         self._workspace_config = workspace_config
+        self._state_checkpoint_path = state_checkpoint_path
         
         # Actor pool management
         self._actors: list[Any] = []  # Ray actor handles
@@ -3321,28 +3347,23 @@ class RayBatchTestRunner(IBatchTestRunner):
         Returns:
             IStateAdapter instance or None
         """
-        try:
-            from wtb.infrastructure.adapters.langgraph_state_adapter import (
-                LANGGRAPH_AVAILABLE,
-                LangGraphConfig,
-                LangGraphStateAdapter,
+        checkpoint_db = self._state_checkpoint_path
+        if checkpoint_db is None and self._wtb_db_url.startswith("sqlite:///"):
+            import os as _os
+
+            base_path = self._wtb_db_url.replace("sqlite:///", "", 1)
+            data_dir = _os.path.dirname(base_path) or "."
+            checkpoint_db = _os.path.join(data_dir, "wtb_checkpoints.db")
+
+        if checkpoint_db is not None:
+            from wtb.infrastructure.adapters.sqlite_state_adapter import (
+                SqliteStateAdapter,
             )
-            
-            if LANGGRAPH_AVAILABLE:
-                import os as _os
-                base_path = (
-                    self._wtb_db_url.replace("sqlite:///", "")
-                    if self._wtb_db_url.startswith("sqlite:///")
-                    else self._wtb_db_url
-                )
-                data_dir = _os.path.dirname(base_path) or "."
-                checkpoint_db = _os.path.join(data_dir, "wtb_checkpoints.db")
-                return LangGraphStateAdapter(LangGraphConfig.for_development(checkpoint_db))
-            
-        except ImportError:
-            pass
-        
+
+            return SqliteStateAdapter(checkpoint_db)
+
         from wtb.infrastructure.adapters import InMemoryStateAdapter
+
         return InMemoryStateAdapter()
     
     def _create_file_tracking_service(self) -> Optional["IFileTrackingService"]:

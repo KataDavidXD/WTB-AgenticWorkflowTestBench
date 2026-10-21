@@ -4012,10 +4012,24 @@ class TestBatchTestRunnerFactoryRay:
     
     def test_create_ray_runner(self):
         """Factory can create Ray runner when available."""
+        from wtb.application.factories import BatchTestRunnerFactory
         from wtb.application.services.ray_batch_runner import RAY_AVAILABLE
+        from wtb.config import RayConfig, WTBConfig
         
         if not RAY_AVAILABLE:
             pytest.skip("Ray not installed")
+
+        config = WTBConfig(
+            wtb_storage_mode="inmemory",
+            state_adapter_mode="inmemory",
+            ray_enabled=True,
+            ray_config=RayConfig.for_testing(),
+        )
+
+        runner = BatchTestRunnerFactory.create_ray(config)
+
+        assert isinstance(runner, IBatchTestRunner)
+        runner.shutdown()
 
     def test_factory_owns_the_grpc_provider_it_creates(self):
         """Factory-created providers must be closed with their Ray runner."""
@@ -4046,20 +4060,6 @@ class TestBatchTestRunnerFactoryRay:
             provider_type.return_value
         )
         assert runner_type.call_args.kwargs["owns_environment_provider"] is True
-        
-        config = WTBConfig(
-            wtb_storage_mode="inmemory",
-            state_adapter_mode="inmemory",
-            ray_enabled=True,
-            ray_config=RayConfig.for_testing(),
-        )
-        
-        runner = BatchTestRunnerFactory.create_ray(config)
-        
-        assert runner is not None
-        assert isinstance(runner, IBatchTestRunner)
-        
-        runner.shutdown()
     
     def test_factory_selects_ray_when_enabled(self):
         """Factory selects Ray runner when ray_enabled=True."""

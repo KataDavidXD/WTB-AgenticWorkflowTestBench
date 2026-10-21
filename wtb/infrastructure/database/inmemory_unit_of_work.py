@@ -111,10 +111,12 @@ class InMemoryExecutionRepository(IExecutionRepository):
     
     def __init__(self):
         self._store: dict[str, Execution] = {}
+        self._cas_lock = RLock()
     
     def get(self, id: str) -> Execution | None:
-        execution = self._store.get(id)
-        return deepcopy(execution) if execution else None
+        with self._cas_lock:
+            execution = self._store.get(id)
+            return deepcopy(execution) if execution else None
     
     def list(self, limit: int = 100, offset: int = 0) -> list[Execution]:
         executions = list(self._store.values())[offset:offset + limit]
@@ -124,14 +126,35 @@ class InMemoryExecutionRepository(IExecutionRepository):
         return id in self._store
     
     def add(self, entity: Execution) -> Execution:
-        self._store[entity.id] = deepcopy(entity)
+        with self._cas_lock:
+            self._store[entity.id] = deepcopy(entity)
         return entity
     
     def update(self, entity: Execution) -> Execution:
-        if entity.id not in self._store:
-            raise ValueError(f"Execution {entity.id} not found")
-        self._store[entity.id] = deepcopy(entity)
+        with self._cas_lock:
+            if entity.id not in self._store:
+                raise ValueError(f"Execution {entity.id} not found")
+            self._store[entity.id] = deepcopy(entity)
         return entity
+
+    def compare_and_swap(
+        self,
+        entity: Execution,
+        *,
+        expected_status: ExecutionStatus,
+        expected_metadata: dict[str, Any],
+    ) -> bool:
+        """Atomically advance one in-memory execution version."""
+        with self._cas_lock:
+            current = self._store.get(entity.id)
+            if (
+                current is None
+                or current.status is not expected_status
+                or current.metadata != expected_metadata
+            ):
+                return False
+            self._store[entity.id] = deepcopy(entity)
+            return True
     
     def delete(self, id: str) -> bool:
         if id in self._store:
@@ -404,6 +427,9 @@ class InMemoryOutboxRepository(IOutboxRepository):
         self._next_id: int = 1
     
     def add(self, event: OutboxEvent) -> OutboxEvent:
+        for existing in self._store.values():
+            if existing.event_id == event.event_id:
+                return deepcopy(existing)
         event.id = self._next_id
         self._next_id += 1
         self._store[event.id] = deepcopy(event)

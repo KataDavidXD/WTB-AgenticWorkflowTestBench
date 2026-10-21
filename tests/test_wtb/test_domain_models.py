@@ -536,11 +536,13 @@ class TestBatchTest:
         first = VariantCombination(
             name="Config A",
             variants={"node1": "v1"},
+            runtime_backend="native",
             _runtime_graph=object(),
         )
         second = VariantCombination(
             name="Config A",
             variants={"node1": "v1"},
+            runtime_backend="native",
             _runtime_graph=object(),
         )
 
@@ -548,9 +550,9 @@ class TestBatchTest:
 
         assert first == second
         assert "_runtime_graph" not in serialized
-        assert VariantCombination.from_dict(
-            serialized
-        )._runtime_graph is None
+        restored = VariantCombination.from_dict(serialized)
+        assert restored.runtime_backend == "native"
+        assert restored._runtime_graph is None
 
     def test_batch_test_lifecycle(self):
         """Test batch test lifecycle."""

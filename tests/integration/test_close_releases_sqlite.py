@@ -37,9 +37,17 @@ def _close_graph():
 
 
 def test_close_releases_sqlite_after_run_fork_resume(tmp_path):
-    bench = WTBTestBench.create(mode="development", data_dir=str(tmp_path))
+    bench = WTBTestBench.create(
+        mode="development",
+        data_dir=str(tmp_path),
+        state_adapter_mode="langgraph",
+    )
     try:
-        project = WorkflowProject(name="close-sqlite", graph_factory=_close_graph)
+        project = WorkflowProject(
+            name="close-sqlite",
+            graph_factory=_close_graph,
+            runtime_backend="langgraph",
+        )
         bench.register_project(project)
         source = bench.run(project.name, {"route": [], "branch": "source"})
         checkpoint = next(
@@ -72,16 +80,26 @@ def test_close_releases_sqlite_after_run_fork_resume(tmp_path):
 
 
 def test_closing_one_bench_keeps_a_shared_database_bench_usable(tmp_path):
-    first = WTBTestBench.create(mode="development", data_dir=str(tmp_path))
-    second = WTBTestBench.create(mode="development", data_dir=str(tmp_path))
+    first = WTBTestBench.create(
+        mode="development",
+        data_dir=str(tmp_path),
+        state_adapter_mode="langgraph",
+    )
+    second = WTBTestBench.create(
+        mode="development",
+        data_dir=str(tmp_path),
+        state_adapter_mode="langgraph",
+    )
     try:
         first_project = WorkflowProject(
             name="shared-database-first",
             graph_factory=_close_graph,
+            runtime_backend="langgraph",
         )
         second_project = WorkflowProject(
             name="shared-database-second",
             graph_factory=_close_graph,
+            runtime_backend="langgraph",
         )
         first.register_project(first_project)
         second.register_project(second_project)

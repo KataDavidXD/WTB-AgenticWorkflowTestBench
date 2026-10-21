@@ -31,6 +31,7 @@ ARCHITECTURE NOTE (2026-01-17):
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -299,6 +300,7 @@ class WorkflowConversionService:
                     id=node_id,
                     name=node_info.get("name", node_id),
                     type=node_type,
+                    config=dict(node_info.get("config", {})),
                 ))
             
             # Track terminal nodes
@@ -343,14 +345,22 @@ class WorkflowConversionService:
                 pass
         
         if hasattr(node_graph, 'nodes'):
+            raw_nodes = node_graph.nodes
             node_list = (
-                list(node_graph.nodes)
-                if not isinstance(node_graph.nodes, dict)
-                else list(node_graph.nodes.keys())
+                [(node_id, None) for node_id in list(raw_nodes)]
+                if not isinstance(raw_nodes, Mapping)
+                else list(raw_nodes.items())
             )
-            for node_id in node_list:
+            for node_id, implementation in node_list:
                 if node_id not in ("__start__", "__end__"):
-                    nodes[node_id] = {"name": node_id, "type": "action"}
+                    config = {}
+                    if callable(implementation):
+                        config["_wtb_native_callable_required"] = True
+                    nodes[node_id] = {
+                        "name": node_id,
+                        "type": "action",
+                        "config": config,
+                    }
         
         return nodes or {"start": {"name": "Start", "type": "start"}}
     

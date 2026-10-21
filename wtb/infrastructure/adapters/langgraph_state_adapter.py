@@ -393,6 +393,12 @@ class LangGraphStateAdapter(IStateAdapter):
         """Get the checkpointer instance."""
         return self._checkpointer
 
+    def set_resume_checkpoint(self, checkpoint_id: str) -> None:
+        """Pin the checkpoint consumed by the next resume invocation."""
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            raise ValueError("checkpoint_id must be a non-empty string")
+        self._resume_checkpoint_id = checkpoint_id
+
     def close(self) -> None:
         """Release this adapter's checkpointer lease."""
         if getattr(self, "_closed", False):
@@ -820,17 +826,32 @@ class LangGraphStateAdapter(IStateAdapter):
         runtime = getattr(self, "_runtime_hooks", None)
         if runtime is not None:
             self.runtime_outcome = "completed"
+            self.local_node_failure = None
             first = True
             for _ in range(1000):
                 before = runtime["breakpoints"]()
                 if first and initial_state is None:
                     # Resume crosses the boundary at which it was paused once.
                     before = [n for n in before if n not in self._compiled_graph.get_state(config).next]
-                for event in self._compiled_graph.stream(
-                    initial_state, config, stream_mode="debug",
-                    interrupt_after="*", interrupt_before=before,
-                ):
-                    runtime["event"](event)
+                failed_task = False
+                try:
+                    for event in self._compiled_graph.stream(
+                        initial_state, config, stream_mode="debug",
+                        interrupt_after="*", interrupt_before=before,
+                    ):
+                        runtime["event"](event)
+                        failed_task = failed_task or (
+                            event.get("type") == "task_result"
+                            and bool(event.get("payload", {}).get("error"))
+                        )
+                except Exception as error:
+                    # A completed local task error is terminal evidence. A
+                    # callback, persistence or transport error is not.
+                    failure_snapshot = self._compiled_graph.get_state(self.get_config())
+                    persisted_task_error = any(getattr(task, "error", None) for task in failure_snapshot.tasks)
+                    if failed_task or persisted_task_error:
+                        self.local_node_failure = error
+                    raise
                 # Invocation may start from a historical checkpoint, but its
                 # new boundary is the latest checkpoint of the active thread.
                 snapshot = self._compiled_graph.get_state(self.get_config())
@@ -911,6 +932,29 @@ class LangGraphStateAdapter(IStateAdapter):
         except Exception as e:
             logger.warning(f"Failed to update state: {e}")
             return False
+
+    def update_checkpoint_state(
+        self,
+        checkpoint_id: str,
+        values: dict[str, Any],
+        *,
+        as_node: str | None = None,
+    ) -> str:
+        """Patch an exact checkpoint and return LangGraph's continuation ID."""
+        if not self._compiled_graph:
+            raise RuntimeError("No compiled LangGraph workflow")
+        config = self.get_config(checkpoint_id)
+        next_config = self._compiled_graph.update_state(
+            config,
+            values,
+            as_node=as_node,
+        )
+        if not isinstance(next_config, dict):
+            raise RuntimeError("LangGraph update_state returned no checkpoint config")
+        next_id = next_config.get("configurable", {}).get("checkpoint_id")
+        if not isinstance(next_id, str) or not next_id:
+            raise RuntimeError("LangGraph update_state returned no checkpoint ID")
+        return next_id
     
     def get_checkpoint_history(self) -> list[dict[str, Any]]:
         """Get full checkpoint history for time travel.

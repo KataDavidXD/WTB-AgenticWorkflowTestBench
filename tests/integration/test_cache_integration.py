@@ -23,10 +23,18 @@ from wtb.infrastructure.llm.openai_langchain import (
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
 LLM_TEXT_MODEL = os.getenv("WTB_LLM_TEXT_MODEL") or os.getenv("DEFAULT_LLM") or "gpt-4o-mini"
+RUN_LIVE_LLM_TESTS = os.getenv("WTB_RUN_LIVE_LLM_TESTS", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 pytestmark = pytest.mark.skipif(
-    not RAY_AVAILABLE or not LLM_API_KEY,
-    reason="Ray or live LLM credentials not available",
+    not RUN_LIVE_LLM_TESTS or not RAY_AVAILABLE or not LLM_API_KEY,
+    reason=(
+        "live Ray/LLM tests require WTB_RUN_LIVE_LLM_TESTS=1, Ray, "
+        "and explicit credentials"
+    ),
 )
 
 

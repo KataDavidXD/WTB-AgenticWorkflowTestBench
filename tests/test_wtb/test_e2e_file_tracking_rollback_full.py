@@ -38,6 +38,7 @@ def test_file_tracking_rollback_full_scenario(tmp_path):
         mode="development",
         data_dir=str(tmp_path),
         enable_file_tracking=True,
+        state_adapter_mode="langgraph",
     )
 
     # 2. Setup graph with stateful node
@@ -50,6 +51,7 @@ def test_file_tracking_rollback_full_scenario(tmp_path):
     project = WorkflowProject(
         name="test_rollback",
         graph_factory=lambda: builder,
+        runtime_backend="langgraph",
     )
     bench.register_project(project)
 

@@ -12,6 +12,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from wtb.domain.interfaces.workflow_runtime import RuntimeBindingEnvelope
 from wtb.domain.models.workflow import Execution, ExecutionStatus

@@ -7,7 +7,7 @@ Follows Interface Segregation Principle with separate read/write interfaces.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import TYPE_CHECKING, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Optional, TypeVar
 
 if TYPE_CHECKING:
     from wtb.domain.models.audit import AuditEntry
@@ -175,6 +175,23 @@ class IWorkflowRepository(IRepository["TestWorkflow"]):
 
 class IExecutionRepository(IRepository["Execution"]):
     """Repository for Execution aggregates."""
+
+    def compare_and_swap(
+        self,
+        entity: "Execution",
+        *,
+        expected_status: "ExecutionStatus",
+        expected_metadata: dict[str, Any],
+    ) -> bool:
+        """Atomically replace an execution from one status/metadata version.
+
+        External-runtime dispatch and terminal reconciliation must not use the
+        ordinary last-writer-wins ``update`` path. Implementations return
+        ``False`` when another worker already advanced the aggregate.
+        """
+        raise NotImplementedError(
+            "execution repository does not support atomic compare-and-swap"
+        )
     
     @abstractmethod
     def find_by_workflow(self, workflow_id: str) -> list["Execution"]:

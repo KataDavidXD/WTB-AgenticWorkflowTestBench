@@ -14,6 +14,7 @@ from wtb.domain.interfaces.workflow_runtime import (
     RuntimeBindingMismatchError,
     RuntimeOutcomeUnknownError,
     RuntimePreDispatchError,
+    RuntimeTerminalOutcome,
 )
 from wtb.infrastructure.runtimes.deepseek_harness import (
     DeepSeekHarnessRuntime,

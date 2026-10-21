@@ -32,6 +32,7 @@ import copy
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -48,7 +49,12 @@ from wtb.domain.models.batch_test import (
 from wtb.domain.models.checkpoint import Checkpoint, CheckpointId
 
 # REUSE domain models - don't duplicate!
-from wtb.domain.models.workflow import Execution, ExecutionState, ExecutionStatus
+from wtb.domain.models.workflow import (
+    Execution,
+    ExecutionState,
+    ExecutionStatus,
+    TestWorkflow,
+)
 
 from .workflow_project import WorkflowProject
 
@@ -58,9 +64,81 @@ def _serialized_adapter_access(method):
     @wraps(method)
     def locked(self, *args, **kwargs):
         with self._lifecycle_lock:
+            self._require_open()
             return method(self, *args, **kwargs)
 
     return locked
+
+
+def _open_lifecycle_gate(method):
+    """Reject closed benches without holding the adapter lock for long work."""
+    @wraps(method)
+    def gated(self, *args, **kwargs):
+        with self._lifecycle_lock:
+            self._require_open()
+        return method(self, *args, **kwargs)
+
+    return gated
+
+
+def _runtime_run_access(method):
+    """Serialize legacy adapters but only register explicit runtime runs.
+
+    External runtimes may block in transport code.  Holding the lifecycle
+    lock for that entire call would prevent ``stop`` and ``close`` from
+    interrupting it.  Active runtime operations are drained before close
+    releases the UoW and other execution-owned resources.
+    """
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+        if getattr(inner, "_workflow_runtime_explicit", False) is not True:
+            with self._lifecycle_lock:
+                self._require_open()
+                return method(self, *args, **kwargs)
+
+        with self._runtime_run_lock:
+            with self._lifecycle_lock:
+                self._require_open()
+                self._active_runtime_runs += 1
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                with self._lifecycle_lock:
+                    self._active_runtime_runs -= 1
+                    self._runtime_runs_drained.notify_all()
+
+    return guarded
+
+
+def _runtime_reconcile_access(method):
+    """Admit blocking explicit-runtime reconciliation without pinning close.
+
+    Durable reconciliation may redrive an accepted attempt and wait on the
+    runtime transport just like ``run``.  Register it as an active operation so
+    ``close`` can interrupt the owned runtime, wait for the call to drain, and
+    only then release the UoW.  Legacy adapters retain serialized access to
+    their shared mutable state.
+    """
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+        if getattr(inner, "_workflow_runtime_explicit", False) is not True:
+            with self._lifecycle_lock:
+                self._require_open()
+                return method(self, *args, **kwargs)
+
+        with self._lifecycle_lock:
+            self._require_open()
+            self._active_runtime_runs += 1
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            with self._lifecycle_lock:
+                self._active_runtime_runs -= 1
+                self._runtime_runs_drained.notify_all()
+
+    return guarded
 
 
 if TYPE_CHECKING:
@@ -71,7 +149,10 @@ if TYPE_CHECKING:
     from wtb.domain.interfaces import (
         IBatchTestRunner,
         IExecutionController,
+        IStateAdapter,
     )
+    from wtb.domain.interfaces.workflow_runtime import WorkflowRuntime
+    from wtb.domain.models.outbox import OutboxEvent
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +234,9 @@ class WTBTestBenchBuilder:
     Usage:
         wtb = WTBTestBenchBuilder().for_testing().build()
         wtb = WTBTestBenchBuilder().for_development("data").build()
-        wtb = WTBTestBenchBuilder().for_production(checkpointer="postgres").build()
+        wtb = WTBTestBenchBuilder().for_production(
+            connection_string="postgresql://...",
+        ).build()
     """
     
     def __init__(self):
@@ -178,13 +261,22 @@ class WTBTestBenchBuilder:
     
     def for_production(
         self,
-        checkpointer: str = "postgres",
         connection_string: str | None = None,
+        *,
+        state_adapter_mode: str = "sqlite",
+        checkpointer: str = "postgres",
+        data_dir: str = "data",
     ) -> "WTBTestBenchBuilder":
-        """Configure for production (LangGraph checkpointers)."""
+        """Configure production with WTB-native state by default.
+
+        Set ``state_adapter_mode="langgraph"`` to select the optional
+        LangGraph adapter and its ``checkpointer`` explicitly.
+        """
         self._mode = "production"
+        self._config["state_adapter_mode"] = state_adapter_mode
         self._config["checkpointer"] = checkpointer
         self._config["connection_string"] = connection_string
+        self._config["data_dir"] = data_dir
         return self
     
     def with_ray(
@@ -255,10 +347,38 @@ class WTBTestBenchBuilder:
                 grpc_env_url=self._config.get("grpc_env_url"),
             )
         elif self._mode == "production":
-            bench = WTBTestBenchFactory.create_with_langgraph(
-                checkpointer_type=self._config.get("checkpointer", "postgres"),
-                connection_string=self._config.get("connection_string"),
+            state_adapter_mode = self._config.get(
+                "state_adapter_mode",
+                "sqlite",
             )
+            if state_adapter_mode == "langgraph":
+                bench = WTBTestBenchFactory.create_with_langgraph(
+                    checkpointer_type=self._config.get(
+                        "checkpointer",
+                        "postgres",
+                    ),
+                    connection_string=self._config.get("connection_string"),
+                    data_dir=self._config.get("data_dir", "data"),
+                )
+            else:
+                if state_adapter_mode not in {"sqlite", "node_sqlite"}:
+                    raise ValueError(
+                        "Unsupported production state_adapter_mode: "
+                        f"{state_adapter_mode!r}"
+                    )
+                connection_string = self._config.get("connection_string")
+                if not connection_string:
+                    raise ValueError(
+                        "connection_string is required for production WTB storage"
+                    )
+                from wtb.config import WTBConfig
+
+                bench = WTBTestBenchFactory.create(
+                    WTBConfig.for_production(
+                        connection_string,
+                        data_dir=self._config.get("data_dir", "data"),
+                    )
+                )
         else:
             bench = WTBTestBenchFactory.create_for_testing()
         
@@ -315,6 +435,7 @@ class WTBTestBench:
         *,
         owns_batch_runner: bool = False,
         owns_execution_resources: bool = False,
+        operation_controller_factory: Callable[[], Any] | None = None,
     ):
         """
         Initialize WTBTestBench with Application Services.
@@ -334,11 +455,21 @@ class WTBTestBench:
         self._batch_runner = batch_runner
         self._owns_batch_runner = bool(owns_batch_runner)
         self._owns_execution_resources = bool(owns_execution_resources)
+        self._operation_controller_factory = operation_controller_factory
         self._lifecycle_lock = threading.RLock()
+        self._runtime_runs_drained = threading.Condition(self._lifecycle_lock)
+        self._close_lock = threading.Lock()
+        self._runtime_run_lock = threading.Lock()
+        self._active_runtime_runs = 0
+        self._active_runtime_stops = 0
+        self._runtime_drain_timeout_seconds = 5.0
         self._closed = False
+        self._closing = False
+        self._cleanup_failed = False
         
         # SDK-level caches
         self._project_cache: dict[str, WorkflowProject] = {}
+        self._workflow_cache: dict[str, TestWorkflow] = {}
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Resource Lifecycle
@@ -348,78 +479,160 @@ class WTBTestBench:
         """Release all resources held by this bench.
 
         Closes (in order): batch runner thread pool / Ray actors,
-        execution controller's state adapter (checkpointer),
+        execution controller's workflow runtime and state adapter (checkpointer),
         and the underlying UoW session.  Safe to call multiple times.
 
         Every owned close is attempted. Failures are propagated and leave the
         bench open so cleanup can be retried; multiple failures are grouped.
         """
-        with self._lifecycle_lock:
-            if self._closed:
-                return
-
+        with self._close_lock:
             close_errors = []
+            preclosed_resource_ids: set[int] = set()
+            runtime_to_interrupt = None
 
-            if self._owns_batch_runner and self._batch_runner is not None:
-                shutdown = getattr(self._batch_runner, "shutdown", None)
-                if callable(shutdown):
-                    try:
-                        shutdown()
-                    except Exception as error:
-                        close_errors.append(error)
+            with self._lifecycle_lock:
+                if self._closed:
+                    return
+                self._closing = True
+                inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+                if (
+                    self._owns_execution_resources
+                    and (
+                        self._active_runtime_runs > 0
+                        or self._active_runtime_stops > 0
+                    )
+                    and getattr(inner, "_workflow_runtime_explicit", False) is True
+                ):
+                    candidate = getattr(inner, "_workflow_runtime", None)
+                    if callable(getattr(candidate, "close", None)):
+                        runtime_to_interrupt = candidate
 
-            coordinator = getattr(self, "_batch_coordinator", None)
-            if coordinator is not None:
-                close_coordinator = getattr(coordinator, "close", None)
-                if callable(close_coordinator):
-                    try:
-                        close_coordinator()
-                    except Exception as error:
-                        close_errors.append(error)
+            # Do not hold the lifecycle lock while asking the external runtime
+            # to break a transport wait: a runtime close implementation may
+            # itself wait briefly for the invoking thread to unwind.
+            if runtime_to_interrupt is not None:
+                preclosed_resource_ids.add(id(runtime_to_interrupt))
+                try:
+                    runtime_to_interrupt.close()
+                except Exception as error:
+                    close_errors.append(error)
+
+            with self._lifecycle_lock:
+                deadline = time.monotonic() + self._runtime_drain_timeout_seconds
+                while (
+                    self._active_runtime_runs > 0
+                    or self._active_runtime_stops > 0
+                ):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        close_errors.append(
+                            TimeoutError(
+                                "Timed out waiting for explicit workflow runtime "
+                                "operations to stop"
+                            )
+                        )
+                        break
+                    self._runtime_runs_drained.wait(timeout=remaining)
+
+                if (
+                    self._active_runtime_runs > 0
+                    or self._active_runtime_stops > 0
+                ):
+                    self._closing = False
+                    self._cleanup_failed = True
+                    if len(close_errors) == 1:
+                        raise close_errors[0]
+                    raise ExceptionGroup(
+                        "Failed to close WTBTestBench resources",
+                        close_errors,
+                    )
+
+                if self._owns_batch_runner and self._batch_runner is not None:
+                    shutdown = getattr(self._batch_runner, "shutdown", None)
+                    if callable(shutdown):
+                        try:
+                            shutdown()
+                        except Exception as error:
+                            close_errors.append(error)
+
+                coordinator = getattr(self, "_batch_coordinator", None)
+                if coordinator is not None:
+                    close_coordinator = getattr(coordinator, "close", None)
+                    if callable(close_coordinator):
+                        try:
+                            close_coordinator()
+                        except Exception as error:
+                            close_errors.append(error)
+                        else:
+                            self._batch_coordinator = None
                     else:
                         self._batch_coordinator = None
-                else:
-                    self._batch_coordinator = None
 
-            if self._owns_execution_resources:
-                inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
-                adapter = getattr(inner, "_state_adapter", None)
-                file_tracking = getattr(inner, "_file_tracking", None)
-                uow = getattr(inner, "_uow", None)
-                seen_resources = set()
+                if self._owns_execution_resources:
+                    inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+                    adapter = getattr(inner, "_state_adapter", None)
+                    file_tracking = getattr(inner, "_file_tracking", None)
+                    workflow_runtime = getattr(inner, "_workflow_runtime", None)
+                    uow = getattr(inner, "_uow", None)
+                    seen_resources = set(preclosed_resource_ids)
 
-                for resource in (adapter, file_tracking):
-                    if resource is None or id(resource) in seen_resources:
-                        continue
-                    seen_resources.add(id(resource))
-                    close_resource = getattr(resource, "close", None)
-                    if callable(close_resource):
+                    for resource in (workflow_runtime, adapter, file_tracking):
+                        if resource is None or id(resource) in seen_resources:
+                            continue
+                        seen_resources.add(id(resource))
+                        close_resource = getattr(resource, "close", None)
+                        if callable(close_resource):
+                            try:
+                                close_resource()
+                            except Exception as error:
+                                close_errors.append(error)
+
+                    if uow is not None and id(uow) not in seen_resources:
                         try:
-                            close_resource()
+                            uow.__exit__(None, None, None)
                         except Exception as error:
                             close_errors.append(error)
+                        dispose_uow = getattr(uow, "dispose", None)
+                        if callable(dispose_uow):
+                            try:
+                                dispose_uow()
+                            except Exception as error:
+                                close_errors.append(error)
 
-                if uow is not None and id(uow) not in seen_resources:
-                    try:
-                        uow.__exit__(None, None, None)
-                    except Exception as error:
-                        close_errors.append(error)
-                    dispose_uow = getattr(uow, "dispose", None)
-                    if callable(dispose_uow):
-                        try:
-                            dispose_uow()
-                        except Exception as error:
-                            close_errors.append(error)
+                if close_errors:
+                    self._closing = False
+                    self._cleanup_failed = True
+                    if len(close_errors) == 1:
+                        raise close_errors[0]
+                    raise ExceptionGroup(
+                        "Failed to close WTBTestBench resources",
+                        close_errors,
+                    )
 
-            if close_errors:
-                if len(close_errors) == 1:
-                    raise close_errors[0]
-                raise ExceptionGroup(
-                    "Failed to close WTBTestBench resources",
-                    close_errors,
-                )
+                self._closed = True
+                self._closing = False
+                self._cleanup_failed = False
 
-            self._closed = True
+    def _require_open(self) -> None:
+        """Reject public serialized access after or during resource cleanup."""
+        if self._closed:
+            raise RuntimeError("WTBTestBench is closed")
+        if self._closing:
+            raise RuntimeError("WTBTestBench is closing")
+        if self._cleanup_failed:
+            raise RuntimeError(
+                "WTBTestBench cleanup failed; retry close before reuse"
+            )
+
+    @contextmanager
+    def _operation_controller(self) -> Iterator[Any]:
+        """Yield an isolated controller/session for one durable operation."""
+        factory = self._operation_controller_factory
+        if factory is None:
+            yield self._exec_ctrl
+            return
+        with factory() as controller:
+            yield controller
 
     def _replace_batch_runner(
         self,
@@ -462,9 +675,10 @@ class WTBTestBench:
                 inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
                 adapter = getattr(inner, "_state_adapter", None)
                 file_tracking = getattr(inner, "_file_tracking", None)
+                workflow_runtime = getattr(inner, "_workflow_runtime", None)
                 uow = getattr(inner, "_uow", None)
                 seen_resources = set()
-                for resource in (adapter, file_tracking):
+                for resource in (workflow_runtime, adapter, file_tracking):
                     if resource is None or id(resource) in seen_resources:
                         continue
                     seen_resources.add(id(resource))
@@ -509,7 +723,7 @@ class WTBTestBench:
         Delegates to WTBTestBenchFactory in the Application layer.
         
         Args:
-            mode: "testing", "development", or "production"
+            mode: "testing", "development", "standalone", or "production"
             **kwargs:
                 - data_dir: Directory for database files (default: "data")
                 - enable_file_tracking: Enable file tracking for rollback
@@ -518,7 +732,10 @@ class WTBTestBench:
                 - grpc_env_url: Optional gRPC URL for UV venv manager Docker
                   service (e.g. ``localhost:50051``). When set alongside
                   ``enable_ray=True``, each Ray actor gets an isolated venv.
-                - checkpointer: "sqlite" or "postgres" (for production)
+                - state_adapter_mode: "sqlite" (default) or explicit
+                  "langgraph" (for production)
+                - checkpointer: "memory", "sqlite", or "postgres" when the
+                  explicit LangGraph adapter is selected
                 - connection_string: Database connection string (for production)
         """
         from wtb.application.factories import WTBTestBenchFactory
@@ -526,53 +743,150 @@ class WTBTestBench:
         if mode == "testing":
             return WTBTestBenchFactory.create_for_testing()
         elif mode == "development":
+            state_adapter_mode = kwargs.get("state_adapter_mode", "sqlite")
+            if state_adapter_mode == "langgraph":
+                return WTBTestBenchFactory.create_with_langgraph(
+                    checkpointer_type=kwargs.get("checkpointer", "sqlite"),
+                    connection_string=kwargs.get("connection_string"),
+                    data_dir=kwargs.get("data_dir", "data"),
+                    enable_file_tracking=kwargs.get(
+                        "enable_file_tracking",
+                        False,
+                    ),
+                    enable_ray=kwargs.get("enable_ray", False),
+                    grpc_env_url=kwargs.get("grpc_env_url"),
+                )
+            if state_adapter_mode not in {"sqlite", "node_sqlite"}:
+                raise ValueError(
+                    "Unsupported development state_adapter_mode: "
+                    f"{state_adapter_mode!r}"
+                )
             return WTBTestBenchFactory.create_for_development(
                 data_dir=kwargs.get("data_dir", "data"),
                 enable_file_tracking=kwargs.get("enable_file_tracking", False),
                 enable_ray=kwargs.get("enable_ray", False),
                 grpc_env_url=kwargs.get("grpc_env_url"),
             )
-        elif mode == "production":
-            return WTBTestBenchFactory.create_with_langgraph(
-                checkpointer_type=kwargs.get("checkpointer", "postgres"),
-                connection_string=kwargs.get("connection_string"),
-                enable_file_tracking=kwargs.get("enable_file_tracking", False),
+        elif mode == "standalone":
+            from wtb.config import WTBConfig
+
+            config = WTBConfig.for_standalone(
+                data_dir=kwargs.get("data_dir", "data"),
             )
+            return WTBTestBenchFactory.create(config)
+        elif mode == "production":
+            state_adapter_mode = kwargs.get("state_adapter_mode", "sqlite")
+            if state_adapter_mode == "langgraph":
+                return WTBTestBenchFactory.create_with_langgraph(
+                    checkpointer_type=kwargs.get("checkpointer", "postgres"),
+                    connection_string=kwargs.get("connection_string"),
+                    data_dir=kwargs.get("data_dir", "data"),
+                    enable_file_tracking=kwargs.get(
+                        "enable_file_tracking",
+                        False,
+                    ),
+                    enable_ray=kwargs.get("enable_ray", False),
+                    grpc_env_url=kwargs.get("grpc_env_url"),
+                )
+            if state_adapter_mode not in {"sqlite", "node_sqlite"}:
+                raise ValueError(
+                    "Unsupported production state_adapter_mode: "
+                    f"{state_adapter_mode!r}"
+                )
+            connection_string = kwargs.get("connection_string")
+            if not connection_string:
+                raise ValueError(
+                    "connection_string is required for production WTB storage"
+                )
+            from wtb.config import WTBConfig
+
+            config = WTBConfig.for_production(
+                db_url=connection_string,
+                data_dir=kwargs.get("data_dir", "data"),
+            )
+            return WTBTestBenchFactory.create(config)
         else:
             return WTBTestBenchFactory.create_for_testing()
+
+    @classmethod
+    def create_with_runtime(
+        cls,
+        runtime: "WorkflowRuntime",
+        *,
+        state_adapter: "IStateAdapter | None" = None,
+        data_dir: str | None = None,
+        workflow: object | None = None,
+        operation_uow_factory: Callable[[], Any] | None = None,
+    ) -> "WTBTestBench":
+        """Create a bench around a framework-neutral workflow runtime.
+
+        The returned bench owns and closes ``runtime``. A runtime that exposes
+        evidence but no restorable checkpoint can execute new runs, while
+        resume, rollback, fork, and checkpoint-linked file tracking fail closed.
+        Pass ``data_dir`` to persist WTB execution and dispatch fences in
+        SQLite; the default remains an in-memory test bench.
+        """
+        from wtb.application.factories import WTBTestBenchFactory
+
+        return WTBTestBenchFactory.create_with_runtime(
+            runtime,
+            state_adapter=state_adapter,
+            data_dir=data_dir,
+            workflow=workflow,
+            operation_uow_factory=operation_uow_factory,
+        )
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Project Management - Delegates to ProjectService
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def register_project(self, project: WorkflowProject) -> None:
         """Register a workflow project."""
         workflow = self._project_to_workflow(project)
         self._project_service.register_workflow(workflow)
         self._project_cache[project.name] = project
+        self._workflow_cache[project.name] = copy.deepcopy(workflow)
+
+    @_serialized_adapter_access
+    def attach_project(self, project: WorkflowProject) -> WorkflowProject:
+        """Attach an executable graph factory to a persisted workflow name."""
+        if not isinstance(project, WorkflowProject):
+            raise TypeError("project must be a WorkflowProject")
+        workflow = self._project_service.get_workflow_by_name(project.name)
+        if workflow is None:
+            workflow = self._project_to_workflow(project)
+            self._project_service.register_workflow(workflow)
+        self._project_cache[project.name] = project
+        self._workflow_cache[project.name] = copy.deepcopy(workflow)
+        return project
     
+    @_serialized_adapter_access
     def get_project(self, name: str) -> WorkflowProject:
         """Get a registered project by name."""
         if name in self._project_cache:
             return self._project_cache[name]
         raise KeyError(f"Project '{name}' not found in cache")
     
+    @_serialized_adapter_access
     def list_projects(self) -> list[str]:
         """List all registered project names."""
         return list(self._project_cache.keys())
     
+    @_serialized_adapter_access
     def unregister_project(self, name: str) -> bool:
         """Unregister a project."""
         result = self._project_service.unregister_workflow(name)
         if result:
             self._project_cache.pop(name, None)
+            self._workflow_cache.pop(name, None)
         return result
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Execution - Returns domain Execution directly
     # ═══════════════════════════════════════════════════════════════════════════
     
-    @_serialized_adapter_access
+    @_runtime_run_access
     def run(
         self,
         project: str,
@@ -592,10 +906,14 @@ class WTBTestBench:
         
         proj = self._project_cache[project]
         
-        # Get workflow via ProjectService
-        workflow = self._project_service.get_workflow_by_name(project)
+        # Project attachment materializes a detached immutable-by-convention
+        # domain workflow. Runtime worker threads must never touch the
+        # bench-lifetime SQLAlchemy session held by ProjectService.
+        workflow = copy.deepcopy(self._workflow_cache.get(project))
         if not workflow:
-            raise ValueError(f"Workflow for project '{project}' not found")
+            raise ValueError(
+                f"Workflow for project '{project}' is not attached"
+            )
         
         run_initial_state = dict(initial_state)
         execution_metadata: dict[str, Any] = {}
@@ -623,16 +941,17 @@ class WTBTestBench:
         }
         if execution_metadata:
             create_kwargs["metadata"] = execution_metadata
-        execution = self._exec_ctrl.create_execution(**create_kwargs)
+        with self._operation_controller() as execution_controller:
+            execution = execution_controller.create_execution(**create_kwargs)
 
-        try:
-            return self._exec_ctrl.run(execution.id, graph=graph)
-        except BaseException as error:
-            # The execution is already durable at this point.  Surface its ID
-            # so callers can account for an orphaned physical attempt even if
-            # the controller fails while running or persisting the result.
-            error.wtb_execution_id = str(execution.id)
-            raise
+            try:
+                return execution_controller.run(execution.id, graph=graph)
+            except BaseException as error:
+                # The execution is already durable at this point.  Surface its ID
+                # so callers can account for an orphaned physical attempt even if
+                # the controller fails while running or persisting the result.
+                error.wtb_execution_id = str(execution.id)
+                raise
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Execution Control - Delegates to IExecutionController
@@ -657,13 +976,59 @@ class WTBTestBench:
         """Resume execution. Returns domain Execution."""
         execution = self.get_execution(execution_id)
         graph = self._require_graph_for_execution(execution_id, execution=execution)
-        with self._prepare_controller_graph(graph, execution=execution):
-            return self._exec_ctrl.resume(execution_id, modified_state)
+        with self._prepare_controller_graph(
+            graph,
+            execution=execution,
+        ) as graph_bound:
+            resume_kwargs = (
+                {"workflow": graph}
+                if graph is not None and not graph_bound
+                else {}
+            )
+            return self._exec_ctrl.resume(
+                execution_id,
+                modified_state,
+                **resume_kwargs,
+            )
     
-    @_serialized_adapter_access
     def stop(self, execution_id: str) -> Execution:
-        """Stop execution. Returns domain Execution."""
-        return self._exec_ctrl.stop(execution_id)
+        """Stop execution, allowing an explicit runtime cancel to break in.
+
+        Explicit external runtimes must be able to acknowledge cancellation
+        while ``run`` is blocked. Compatibility adapters retain the serialized
+        access path because they share mutable adapter state.
+        """
+        inner = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
+        if getattr(inner, "_workflow_runtime_explicit", False) is True:
+            with self._lifecycle_lock:
+                self._require_open()
+                self._active_runtime_stops += 1
+            try:
+                with self._operation_controller() as execution_controller:
+                    return execution_controller.stop(execution_id)
+            finally:
+                with self._lifecycle_lock:
+                    self._active_runtime_stops -= 1
+                    self._runtime_runs_drained.notify_all()
+        with self._lifecycle_lock:
+            self._require_open()
+            with self._operation_controller() as execution_controller:
+                return execution_controller.stop(execution_id)
+
+    @_runtime_reconcile_access
+    def reconcile_runtime_outcome(
+        self,
+        execution_id: str,
+        *,
+        attempt_id: str | None = None,
+    ) -> Execution:
+        """Reconcile a fenced dispatch from runtime-owned terminal evidence."""
+        kwargs = {"attempt_id": attempt_id} if attempt_id is not None else {}
+        with self._operation_controller() as execution_controller:
+            return execution_controller.reconcile_runtime_outcome(
+                execution_id,
+                **kwargs,
+            )
     
     @_serialized_adapter_access
     def rollback(self, execution_id: str, checkpoint_id: str) -> RollbackResult:
@@ -754,6 +1119,7 @@ class WTBTestBench:
     # Batch Rollback/Fork - NEW (v1.8)
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def get_batch_coordinator(self) -> "BatchExecutionCoordinator":
         """
         Get or create BatchExecutionCoordinator for rollback/fork operations.
@@ -773,12 +1139,9 @@ class WTBTestBench:
         Returns:
             BatchExecutionCoordinator instance
         """
-        with self._lifecycle_lock:
-            if self._closed:
-                raise RuntimeError("WTBTestBench is closed")
-            if not hasattr(self, '_batch_coordinator') or self._batch_coordinator is None:
-                self._batch_coordinator = self._create_batch_coordinator()
-            return self._batch_coordinator
+        if not hasattr(self, '_batch_coordinator') or self._batch_coordinator is None:
+            self._batch_coordinator = self._create_batch_coordinator()
+        return self._batch_coordinator
 
     def _resolve_graph_for_execution(
         self,
@@ -809,12 +1172,22 @@ class WTBTestBench:
             state_vars.get("_workflow_variant"),
         )
 
-        matching_projects = {
-            id(proj): proj
-            for cache_name, proj in self._project_cache.items()
-            if execution.workflow_id
-            in (proj.id, getattr(proj, "name", cache_name), cache_name)
-        }
+        matching_projects: dict[int, WorkflowProject] = {}
+        for cache_name, proj in self._project_cache.items():
+            project_name = getattr(proj, "name", cache_name)
+            workflow_ids = {proj.id, project_name, cache_name}
+            for workflow_cache_key in {cache_name, project_name}:
+                cached_workflow = self._workflow_cache.get(workflow_cache_key)
+                if cached_workflow is None:
+                    continue
+                cached_id = getattr(cached_workflow, "id", None)
+                cached_name = getattr(cached_workflow, "name", None)
+                if cached_id:
+                    workflow_ids.add(cached_id)
+                if cached_name:
+                    workflow_ids.add(cached_name)
+            if execution.workflow_id in workflow_ids:
+                matching_projects[id(proj)] = proj
         if len(matching_projects) == 1:
             proj = next(iter(matching_projects.values()))
             build_kwargs = {"variant_config": variant_config}
@@ -855,7 +1228,7 @@ class WTBTestBench:
         self,
         graph: Any | None,
         execution: Execution | None = None,
-    ) -> Iterator[None]:
+    ) -> Iterator[bool]:
         """Temporarily bind an execution-specific graph and state adapter."""
         with self._lifecycle_lock:
             if self._closed:
@@ -863,6 +1236,7 @@ class WTBTestBench:
 
             controller = getattr(self._exec_ctrl, "_inner", self._exec_ctrl)
             original_adapter = getattr(controller, "_state_adapter", None)
+            original_runtime = vars(controller).get("_workflow_runtime")
             state_adapter = self._state_adapter_for_execution(
                 execution,
                 fallback=original_adapter,
@@ -870,19 +1244,40 @@ class WTBTestBench:
             temporary_adapter = (
                 state_adapter is not None and state_adapter is not original_adapter
             )
+            active_runtime = original_runtime
+            temporary_runtime = False
             if temporary_adapter:
                 setattr(controller, "_state_adapter", state_adapter)
+                runtime_for_adapter = getattr(
+                    original_runtime,
+                    "for_state_adapter",
+                    None,
+                )
+                if callable(runtime_for_adapter):
+                    active_runtime = runtime_for_adapter(state_adapter)
+                    setattr(controller, "_workflow_runtime", active_runtime)
+                    temporary_runtime = True
 
             try:
-                set_graph = (
-                    getattr(state_adapter, "set_workflow_graph", None)
-                    if graph is not None
-                    else None
-                )
-                if callable(set_graph):
-                    set_graph(graph, force_recompile=True)
-                yield
+                graph_bound = False
+                if graph is not None:
+                    bind_runtime = getattr(active_runtime, "bind", None)
+                    if callable(bind_runtime):
+                        bind_runtime(graph, force_rebind=True)
+                        graph_bound = True
+                    else:
+                        set_graph = getattr(
+                            state_adapter,
+                            "set_workflow_graph",
+                            None,
+                        )
+                        if callable(set_graph):
+                            set_graph(graph, force_recompile=True)
+                            graph_bound = True
+                yield graph_bound
             finally:
+                if temporary_runtime:
+                    setattr(controller, "_workflow_runtime", original_runtime)
                 if temporary_adapter:
                     setattr(controller, "_state_adapter", original_adapter)
                     close_adapter = getattr(state_adapter, "close", None)
@@ -1027,6 +1422,7 @@ class WTBTestBench:
                 f"'{checkpoint_db_path}': {error}"
             ) from error
     
+    @_serialized_adapter_access
     def rollback_batch_result(
         self,
         result: BatchTestResult,
@@ -1096,6 +1492,7 @@ class WTBTestBench:
                 error=str(e),
             )
     
+    @_serialized_adapter_access
     def fork_batch_result(
         self,
         result: BatchTestResult,
@@ -1195,6 +1592,7 @@ class WTBTestBench:
             ))
         return checkpoints
 
+    @_serialized_adapter_access
     def get_batch_result_checkpoints(
         self,
         result: BatchTestResult,
@@ -1254,6 +1652,7 @@ class WTBTestBench:
     # Variant Management - Delegates to VariantService
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def register_variant(
         self,
         project: str,
@@ -1279,6 +1678,7 @@ class WTBTestBench:
     # Batch Testing - Returns domain BatchTest directly
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_open_lifecycle_gate
     def run_batch_test(
         self,
         project: str,
@@ -1348,14 +1748,25 @@ class WTBTestBench:
         if not workflow:
             raise ValueError(f"Project '{project}' not found")
         
-        # Extract graph_factory reference so Ray actors can recreate the graph.
+        # Only an explicitly selected external graph runtime receives an
+        # importable graph-factory reference. Native WTB batch execution still
+        # needs its callable graph code, but carries it as a private in-process
+        # graph (threads) or a serialized graph (Ray), never as LangGraph.
         # When the script is the entry point, __module__ is "__main__" which
         # is not importable in a Ray actor process.  Resolve to the real
         # module name via __spec__ when possible.
         gf_module: str | None = None
         gf_name: str | None = None
         gf_pickled: str | None = None
-        if proj and callable(getattr(proj, "graph_factory", None)):
+        runtime_backend = (
+            getattr(proj, "runtime_backend", "native") if proj else "native"
+        )
+        external_graph_runtime = runtime_backend == "langgraph"
+        if (
+            external_graph_runtime
+            and proj
+            and callable(getattr(proj, "graph_factory", None))
+        ):
             gf = proj.graph_factory
             gf_module = getattr(gf, "__module__", None)
             gf_name = getattr(gf, "__qualname__", None) or getattr(gf, "__name__", None)
@@ -1408,34 +1819,49 @@ class WTBTestBench:
                     for node_id, variant_name in isolated_variant_config.items()
                 )
             )
-            if registered_variant_selected:
+            graph_required = bool(
+                proj
+                and (
+                    runtime_backend == "native"
+                    or registered_variant_selected
+                )
+            )
+            if graph_required:
                 try:
                     graph = proj.build_graph(
                         variant_config=copy.deepcopy(isolated_variant_config)
                     )
-                    try:
-                        import cloudpickle
-                    except ImportError:
-                        from ray import cloudpickle
-                    serialized_graph = cloudpickle.dumps(graph)
-                    # A few proxy/test graph types serialize but cannot be
-                    # restored. Never publish a transport payload that the
-                    # worker cannot consume.
-                    cloudpickle.loads(serialized_graph)
-                    combo_metadata["_graph_pickled"] = base64.b64encode(
-                        serialized_graph
-                    ).decode("ascii")
+                    if runner_executor == "ray" or external_graph_runtime:
+                        try:
+                            import cloudpickle
+                        except ImportError:
+                            from ray import cloudpickle
+                        serialized_graph = cloudpickle.dumps(graph)
+                        # A few proxy/test graph types serialize but cannot be
+                        # restored. Never publish a transport payload that the
+                        # worker cannot consume.
+                        cloudpickle.loads(serialized_graph)
+                        combo_metadata["_graph_pickled"] = base64.b64encode(
+                            serialized_graph
+                        ).decode("ascii")
+                    else:
+                        # Threads and custom in-process runners share memory.
+                        # Keep executable code out of the public payload.
+                        runtime_graph = graph
                 except Exception as graph_error:
-                    if runner_executor == "threadpool" and graph is not None:
-                        # Threads share this process, so retain the real graph
-                        # outside public metadata instead of forcing a broken
-                        # serialization round-trip.
+                    if runner_executor != "ray" and graph is not None:
+                        # Preserve the historical in-process compatibility
+                        # fallback for external graph proxies that cannot make
+                        # a cloudpickle round trip.
                         runtime_graph = graph
                     else:
                         from wtb.domain.interfaces.batch_runner import BatchRunnerError
+                        transport = (
+                            "serializable " if runner_executor == "ray" else ""
+                        )
                         raise BatchRunnerError(
-                            "Registered node variants require a serializable graph "
-                            f"for batch execution: {graph_error}"
+                            f"{runtime_backend.capitalize()} batch execution requires "
+                            f"a {transport}runtime graph: {graph_error}"
                         ) from graph_error
 
             batch_test.variant_combinations.append(VariantCombination(
@@ -1444,6 +1870,7 @@ class WTBTestBench:
                 metadata=combo_metadata,
                 graph_factory_module=gf_module,
                 graph_factory_name=gf_name,
+                runtime_backend=runtime_backend,
                 _runtime_graph=runtime_graph,
             ))
         
@@ -1545,7 +1972,7 @@ class WTBTestBench:
             )
         return normalize_finite_metrics(metrics)
 
-    @_serialized_adapter_access
+    @_runtime_run_access
     def _run_batch_sequential(
         self,
         project: str,
@@ -1662,13 +2089,51 @@ class WTBTestBench:
     # State Inspection - Returns domain models
     # ═══════════════════════════════════════════════════════════════════════════
     
+    @_serialized_adapter_access
     def get_state(self, execution_id: str) -> ExecutionState:
         """Get current state. Returns domain ExecutionState."""
         return self._exec_ctrl.get_state(execution_id)
     
+    @_serialized_adapter_access
     def get_execution(self, execution_id: str) -> Execution:
         """Get execution. Returns domain Execution."""
-        return self._exec_ctrl.get_status(execution_id)
+        with self._operation_controller() as execution_controller:
+            return execution_controller.get_status(execution_id)
+
+    @_serialized_adapter_access
+    def list_outbox_events(
+        self,
+        *,
+        execution_id: str | None = None,
+        limit: int = 100,
+    ) -> list["OutboxEvent"]:
+        """Return durable audit events without exposing controller internals.
+
+        The query uses the same operation-scoped UoW seam as execution reads,
+        so a reopened SQLite bench observes committed fence and terminal facts
+        from a fresh SQLAlchemy session.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        if execution_id is not None and (
+            not isinstance(execution_id, str) or not execution_id
+        ):
+            raise ValueError("execution_id must be a non-empty string")
+        with self._operation_controller() as execution_controller:
+            inner = getattr(execution_controller, "_inner", execution_controller)
+            uow = getattr(inner, "_uow", None)
+            outbox = getattr(uow, "outbox", None)
+            list_all = getattr(outbox, "list_all", None)
+            if not callable(list_all):
+                return []
+            events = list_all(limit=limit)
+            if execution_id is not None:
+                events = [
+                    event
+                    for event in events
+                    if getattr(event, "aggregate_id", None) == execution_id
+                ]
+            return copy.deepcopy(list(events))
     
     @_serialized_adapter_access
     def get_checkpoints(self, execution_id: str) -> list[Checkpoint]:
@@ -1701,9 +2166,11 @@ class WTBTestBench:
     def supports_streaming(self) -> bool:
         return self._exec_ctrl.supports_streaming()
     
+    @_serialized_adapter_access
     def supports_forking(self) -> bool:
-        """Check if forking is supported (always True in v1.6)."""
-        return hasattr(self._exec_ctrl, 'fork')
+        """Forking requires a recoverable runtime and checkpoint store."""
+        capability = getattr(self._exec_ctrl, "supports_runtime_forking", None)
+        return bool(capability()) if callable(capability) else False
     
     # ═══════════════════════════════════════════════════════════════════════════
     # Internal Conversion Methods (v1.7: Delegates to Application Service)

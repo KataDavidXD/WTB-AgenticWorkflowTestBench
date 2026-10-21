@@ -169,6 +169,7 @@ class TestForkSeeding:
         )
         adapter.initialize_session.return_value = "wtb-fork-1"
         adapter.set_current_session = MagicMock()
+        adapter.update_state.return_value = "target-cp-1"
 
         source_exec = _make_execution(
             status=ExecutionStatus.COMPLETED, session_id="wtb-exec-src"
@@ -396,7 +397,7 @@ class TestBatchThreadSafety:
         )
         batch_test._workflow = workflow
 
-        result = runner.run_batch_test(batch_test)
+        runner.run_batch_test(batch_test)
         runner.shutdown()
 
         controller_factory.assert_called()
@@ -404,6 +405,64 @@ class TestBatchThreadSafety:
         create_kwargs = mock_controller.create_execution.call_args
         assert create_kwargs[1]["workflow"] is workflow or \
             create_kwargs[0][0] is workflow
+
+    def test_post_commit_cleanup_failure_preserves_successful_batch_result(self):
+        from wtb.application.errors import PostCommitCleanupError
+        from wtb.application.services.batch_test_runner import (
+            ThreadPoolBatchTestRunner,
+        )
+        from wtb.domain.models.batch_test import BatchTest, VariantCombination
+
+        workflow = _make_workflow()
+        execution = _make_execution(status=ExecutionStatus.COMPLETED)
+        execution.id = "exec-committed"
+        result_holder = {}
+
+        class Managed:
+            controller = MagicMock()
+            uow = MagicMock()
+            committed_outcome = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    result_holder["outcome"] = self.committed_outcome
+                    raise PostCommitCleanupError(
+                        RuntimeError("runtime close failed"),
+                        committed_outcome=self.committed_outcome,
+                    )
+                return False
+
+        managed = Managed()
+        managed.controller.create_execution.return_value = execution
+        managed.controller.run.return_value = execution
+        managed.uow.workflows.exists.return_value = True
+        runner = ThreadPoolBatchTestRunner(
+            controller_factory=lambda: managed,
+            max_workers=1,
+            execution_timeout_seconds=30,
+        )
+        batch = BatchTest(
+            id="batch-cleanup",
+            workflow_id=workflow.id,
+            variant_combinations=[
+                VariantCombination(name="variant-cleanup", variants={})
+            ],
+        )
+        batch._workflow = workflow
+
+        try:
+            completed = runner.run_batch_test(batch)
+        finally:
+            runner.shutdown()
+
+        assert completed.results[0] is result_holder["outcome"]
+        assert completed.results[0].success is True
+        assert completed.results[0].execution_id == "exec-committed"
+        assert completed.results[0].error_message is None
+        assert completed.results[0].cleanup_warning == "runtime close failed"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

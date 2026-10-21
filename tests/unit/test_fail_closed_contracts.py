@@ -152,6 +152,7 @@ def test_bench_run_error_identifies_the_created_execution() -> None:
     bench._project_cache["paper-rag"] = SimpleNamespace(
         build_graph=MagicMock(return_value=object())
     )
+    bench._workflow_cache["paper-rag"] = object()
 
     with pytest.raises(RuntimeError, match="persistence failed") as raised:
         bench.run(project="paper-rag", initial_state={"item_id": "q0"})

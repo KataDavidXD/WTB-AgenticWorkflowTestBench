@@ -1,8 +1,8 @@
 """
 WorkflowProject - Configuration object for workflow submission to WTB.
 
-This module defines the core configuration objects for submitting LangGraph
-workflows to the Workflow Test Bench (WTB) system.
+This module defines framework-neutral workflow submission configuration.
+Runtime-specific engines such as LangGraph are explicit optional backends.
 
 Architecture (2026-01-16):
     - WorkflowProject: Main configuration container
@@ -21,6 +21,7 @@ Date: 2026-01-16
 
 from __future__ import annotations
 
+import copy
 import re
 import uuid
 from collections.abc import Callable
@@ -451,12 +452,15 @@ class WorkflowProject:
     """
     Workflow Project configuration for WTB submission.
     
-    Container for all configuration needed to submit a LangGraph workflow
-    to the Workflow Test Bench for testing, debugging, and batch execution.
+    Container for a framework-neutral workflow topology and its WTB testing,
+    debugging, and batch-execution configuration. LangGraph execution is an
+    explicit optional backend, not the project model itself.
     
     Attributes:
         name: Unique project name
-        graph_factory: Factory function that creates the LangGraph
+        graph_factory: Factory that exposes graph-like nodes and edges
+        runtime_backend: ``"native"`` for WTB node execution (default), or
+            explicit ``"langgraph"`` for the optional graph runtime
         description: Human-readable description
         state_schema: Pydantic model for state validation
         id: Unique project ID (auto-generated)
@@ -483,6 +487,7 @@ class WorkflowProject:
     graph_factory: Callable
     description: str = ""
     state_schema: type["BaseModel"] | None = None
+    runtime_backend: str = "native"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     version: int = 1
     file_tracking: FileTrackingConfig = field(default_factory=FileTrackingConfig)
@@ -497,6 +502,13 @@ class WorkflowProject:
     _node_variants: dict[str, dict[str, NodeVariant]] = field(default_factory=dict, repr=False)
     _workflow_variants: dict[str, WorkflowVariant] = field(default_factory=dict, repr=False)
     _graph_cache: dict[tuple[Any, ...], Any] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.runtime_backend not in {"native", "langgraph"}:
+            raise ValueError(
+                "runtime_backend must be 'native' or 'langgraph', got "
+                f"{self.runtime_backend!r}"
+            )
 
     def _graph_cache_key(
         self,
@@ -785,8 +797,8 @@ class WorkflowProject:
             workflow_variant: Workflow variant to use (overrides main graph)
             
         Returns:
-            LangGraph - may be compiled or uncompiled depending on factory.
-            If compiled without checkpointer, LangGraphStateAdapter will recompile.
+            A native graph-like object, or an explicitly selected optional
+            runtime graph such as LangGraph.
         """
         cache_key = self._graph_cache_key(
             variant_config=variant_config,
@@ -833,8 +845,35 @@ class WorkflowProject:
         if not isinstance(nodes, dict):
             return graph
 
-        coerce_to_runnable = getattr(type(graph), "add_node").__globals__.get(
-            "coerce_to_runnable"
+        if self.runtime_backend == "native":
+            # Factories frequently expose ``nodes`` as a class-level mapping.
+            # Mutating that mapping would make one variant contaminate every
+            # graph built for the same batch. Give each variant graph its own
+            # object and node table before replacing callables.
+            graph = copy.copy(graph)
+            try:
+                graph.nodes = dict(nodes)
+            except (AttributeError, TypeError) as error:
+                raise TypeError(
+                    "Native graph variants require a writable nodes mapping"
+                ) from error
+            nodes = graph.nodes
+            for node_id, variant_name in variant_config.items():
+                variant = self._node_variants.get(node_id, {}).get(variant_name)
+                if variant is None:
+                    continue
+                if node_id not in nodes:
+                    raise ValueError(
+                        f"Cannot apply variant for unknown node: {node_id}"
+                    )
+                nodes[node_id] = variant.implementation
+            return graph
+
+        add_node = getattr(type(graph), "add_node", None)
+        coerce_to_runnable = (
+            getattr(add_node, "__globals__", {}).get("coerce_to_runnable")
+            if add_node is not None
+            else None
         )
         if coerce_to_runnable is None:
             return graph
@@ -874,6 +913,7 @@ class WorkflowProject:
             "id": self.id,
             "version": self.version,
             "description": self.description,
+            "runtime_backend": self.runtime_backend,
             "file_tracking": self.file_tracking.to_dict(),
             "environment": self.environment.to_dict(),
             "execution": self.execution.to_dict(),
@@ -918,6 +958,7 @@ class WorkflowProject:
             name=data["name"],
             graph_factory=graph_factory,
             description=data.get("description", ""),
+            runtime_backend=data.get("runtime_backend", "native"),
         )
         
         return project
